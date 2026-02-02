@@ -16,7 +16,8 @@ class LoginAPIView(APIView):
         email = serializer.validated_data['email'].lower()
 
         user = authenticate(
-            username=email,
+            request=request,
+            email=email,
             password=serializer.validated_data['password']
         )
 
