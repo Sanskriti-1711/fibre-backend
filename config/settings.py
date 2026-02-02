@@ -130,11 +130,13 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
     "https://fe.dippuzen.com",
     "https://qadmin.dippuzen.com",
+    "https://fiberbackend.zeabur.app",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     "https://fe.dippuzen.com",
     "https://qadmin.dippuzen.com",
+    "https://fiberbackend.zeabur.app",
 ]
 
 # REST Framework + JWT Config
