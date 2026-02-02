@@ -26,7 +26,7 @@ SECRET_KEY = 'django-insecure-%p=ow#x9d^a8!#t%5p-m0#@(29wyu1f258$ae$a77_jz1rppf0
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["fiberbackend.zeabur.app"]
 
 
 # Application definition
