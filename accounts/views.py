@@ -3,19 +3,20 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
-from .models import User
-from .serializers import LoginSerializer
+from .serializers import LoginSerializer, UserCreateSerializer
 from rest_framework.permissions import IsAuthenticated
 from .permissions import IsAdmin, IsEngineer
+
 class LoginAPIView(APIView):
     permission_classes = []
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email'].lower()
 
         user = authenticate(
-            username=serializer.validated_data['username'],
+            username=email,
             password=serializer.validated_data['password']
         )
 
@@ -31,8 +32,24 @@ class LoginAPIView(APIView):
             "access": str(refresh.access_token),
             "refresh": str(refresh),
             "role": user.role,
-            "username": user.username,
+            "email": user.email,
         })
+
+class UserCreateAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request):
+        serializer = UserCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        response_data = {
+            "id": user.id,
+            "email": user.email,
+            "phone": user.phone,
+            "role": user.role,
+        }
+
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
 class AdminOnlyAPIView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
