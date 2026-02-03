@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 from datetime import timedelta
 
@@ -26,7 +27,7 @@ SECRET_KEY = 'django-insecure-%p=ow#x9d^a8!#t%5p-m0#@(29wyu1f258$ae$a77_jz1rppf0
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["fiberbackend.zeabur.app"]
+ALLOWED_HOSTS = ["*"]
 
 
 # Application definition
@@ -41,8 +42,7 @@ INSTALLED_APPS = [
     
     'rest_framework',
     'corsheaders',
-
-    'accounts',
+    'users',
 ]
 
 MIDDLEWARE = [
@@ -81,8 +81,13 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'HOST': os.getenv('POSTGRES_HOST', 'fiber.crwqq2g60zoe.eu-west-2.rds.amazonaws.com'),
+        'PORT': os.getenv('POSTGRES_PORT', '5432'),
+        'NAME': os.getenv('POSTGRES_DB', 'postgres'),
+        'USER': os.getenv('POSTGRES_USER', 'postgres'),
+        'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'postgres'),
+        'CONN_MAX_AGE': 60,
     }
 }
 
@@ -105,7 +110,7 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-AUTH_USER_MODEL = 'accounts.User'
+AUTH_USER_MODEL = 'users.User'
 
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
@@ -130,13 +135,13 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
     "https://fe.dippuzen.com",
     "https://qadmin.dippuzen.com",
-    "https://fiberbackend.zeabur.app",
+    "https://*",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     "https://fe.dippuzen.com",
     "https://qadmin.dippuzen.com",
-    "https://fiberbackend.zeabur.app",
+    "https://*",
 ]
 
 # REST Framework + JWT Config
