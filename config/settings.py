@@ -132,16 +132,21 @@ STATIC_URL = 'static/'
 # CORS Configuration
 CORS_ALLOW_CREDENTIALS = True
 
+# Set CORS_ALLOW_ALL_ORIGINS=true in the environment if you want to allow any origin (dev only).
+CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "false").lower() == "true"
+
 CORS_ALLOWED_ORIGINS = [
     "https://fe.dippuzen.com",
     "https://qadmin.dippuzen.com",
-    "https://*",
+    "http://127.0.0.1:5500",
+    "http://localhost:5500",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     "https://fe.dippuzen.com",
     "https://qadmin.dippuzen.com",
-    "https://*",
+    "http://127.0.0.1:5500",
+    "http://localhost:5500",
 ]
 
 # REST Framework + JWT Config
