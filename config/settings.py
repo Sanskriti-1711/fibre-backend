@@ -27,7 +27,7 @@ SECRET_KEY = 'django-insecure-%p=ow#x9d^a8!#t%5p-m0#@(29wyu1f258$ae$a77_jz1rppf0
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["fiberbackend.zeabur.app"]
+ALLOWED_HOSTS = ["*"]
 
 
 # Application definition
@@ -42,8 +42,6 @@ INSTALLED_APPS = [
     
     'rest_framework',
     'corsheaders',
-
-    'accounts',
 ]
 
 MIDDLEWARE = [
@@ -111,8 +109,6 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-AUTH_USER_MODEL = 'accounts.User'
-
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
 
@@ -136,13 +132,13 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
     "https://fe.dippuzen.com",
     "https://qadmin.dippuzen.com",
-    "https://fiberbackend.zeabur.app",
+    "https://*",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     "https://fe.dippuzen.com",
     "https://qadmin.dippuzen.com",
-    "https://fiberbackend.zeabur.app",
+    "https://*",
 ]
 
 # REST Framework + JWT Config
