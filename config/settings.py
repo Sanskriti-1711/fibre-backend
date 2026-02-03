@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 from datetime import timedelta
 
@@ -81,8 +82,13 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'HOST': os.getenv('POSTGRES_HOST', 'fiber.crwqq2g60zoe.eu-west-2.rds.amazonaws.com'),
+        'PORT': os.getenv('POSTGRES_PORT', '5432'),
+        'NAME': os.getenv('POSTGRES_DB', 'postgres'),
+        'USER': os.getenv('POSTGRES_USER', 'postgres'),
+        'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'postgres'),
+        'CONN_MAX_AGE': 60,
     }
 }
 

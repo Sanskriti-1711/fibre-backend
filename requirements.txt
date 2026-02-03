@@ -3,3 +3,5 @@ djangorestframework
 djangorestframework-simplejwt
 django-cors-headers
 gunicorn
+
+psycopg2-binary==2.9.9
