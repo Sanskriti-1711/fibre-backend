@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'users',
+    'projects',
 ]
 
 MIDDLEWARE = [
@@ -88,7 +89,16 @@ DATABASES = {
         'USER': os.getenv('POSTGRES_USER', 'postgres'),
         'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'postgres'),
         'CONN_MAX_AGE': 60,
+    },
+    'gis': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'postgres',
+        'USER': 'postgres',
+        'PASSWORD': 'postgres',
+        'HOST': 'postgis.crwqq2g60zoe.eu-west-2.rds.amazonaws.com',
+        'PORT': '5432',
     }
+
 }
 
 
