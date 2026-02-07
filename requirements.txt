@@ -3,5 +3,8 @@ djangorestframework
 djangorestframework-simplejwt
 django-cors-headers
 gunicorn
-
 psycopg2-binary>=2.9.10
+fiona==1.9.6
+shapely
+pyproj
+geopandas
