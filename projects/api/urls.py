@@ -4,6 +4,7 @@ from .projects import (
     ProjectDetailAPIView,
     LatestProjectUpdatesAPIView,
 )
+from ..services.imports import ImportGeoPackageAPIView
 
 urlpatterns = [
     path("projects/", ProjectListCreateAPIView.as_view()),
