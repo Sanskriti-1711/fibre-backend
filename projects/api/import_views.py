@@ -178,7 +178,7 @@ class GpkgImportView(APIView):
                     f"{MICROSERVICE_BASE_URL}/import/gpkg",
                     files={"file": (f"{project_id}.gpkg", f)},
                     data={
-                        "project_id": project_id,
+                        "project_id": str(project_id),
                         "selected_layers": ",".join(selected_layers)
                     },
                     timeout=120
