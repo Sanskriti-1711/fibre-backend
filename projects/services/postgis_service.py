@@ -9,7 +9,7 @@ def execute_gis_sql(sql, params=None):
 
 def create_layer_table(project_id, layer_name, geometry_type, srid):
 
-    table_name = f"{project_id.hex[:8]}__{layer_name}"
+    table_name = f"project_{project_id}_{layer_name}"
 
     geom_map = {
         "POINT": "Point",
