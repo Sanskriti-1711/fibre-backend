@@ -111,7 +111,7 @@ class GpkgDiscoverView(APIView):
         try:
             with open(file_path, "rb") as f:
                 response = requests.post(
-                    f"{MICROSERVICE_BASE_URL}/gpkg/discover",
+                    f"{MICROSERVICE_BASE_URL}/import/gpkg/discover",
                     files={"file": (f"{project_id}.gpkg", f)},
                     timeout=60
                 )
