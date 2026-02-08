@@ -11,7 +11,6 @@ from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
 
 from projects.models import Project, ImportSession, ProjectLayer
-from projects.services.postgis_service import create_layer_table
 
 
 MICROSERVICE_BASE_URL = "https://fiber-import.zeabur.app"
@@ -187,8 +186,15 @@ class GpkgImportView(APIView):
                 response.raise_for_status()
                 import_result = response.json()
         except requests.RequestException as e:
+            error_detail = f"Error importing layers: {str(e)}"
+            if e.response is not None:
+                error_detail += f" | Status: {e.response.status_code}"
+                try:
+                    error_detail += f" | Response: {e.response.text}"
+                except:
+                    pass
             return Response(
-                {"detail": f"Error importing layers: {str(e)}"},
+                {"detail": error_detail},
                 status=status.HTTP_502_BAD_GATEWAY
             )
 
@@ -198,7 +204,9 @@ class GpkgImportView(APIView):
 
         # Create ProjectLayer records for imported layers
         # Get layer info from validation_summary
-        layers_info = import_session.validation_summary.get("layers", [])
+        layers_info = (import_session.validation_summary or {}).get("layers", [])
+        if not isinstance(layers_info, list):
+            layers_info = []  # Fallback if discover returned error/string
         for layer_name in selected_layers:
             layer_info = next(
                 (l for l in layers_info if l.get("name") == layer_name),
@@ -208,8 +216,8 @@ class GpkgImportView(APIView):
             geometry_type = layer_info.get("geometry_type", "POINT")
             srid = layer_info.get("srid", 27700)
             
-            # Create the table (or ensure it exists)
-            table_name = create_layer_table(project_id, layer_name, geometry_type, srid)
+            # Table name format (microservice creates the actual table)
+            table_name = f"project_{project_id}_{layer_name}"
             
             # Create ProjectLayer record
             ProjectLayer.objects.update_or_create(
