@@ -1,5 +1,6 @@
 import os
 import requests
+import json
 from uuid import UUID
 
 from django.conf import settings
@@ -179,7 +180,7 @@ class GpkgImportView(APIView):
                     files={"file": (f"{project_id}.gpkg", f)},
                     data={
                         "project_id": str(project_id),
-                        "selected_layers": ",".join(selected_layers)
+                        "layers": json.dumps(selected_layers)
                     },
                     timeout=120
                 )
