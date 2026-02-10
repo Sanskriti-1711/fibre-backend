@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
 
-from projects.models import Project, ImportSession, ProjectLayer
+from projects.models import Project, ImportSession, Feature
 
 
 MICROSERVICE_BASE_URL = "https://fiber-import.zeabur.app"
@@ -202,36 +202,45 @@ class GpkgImportView(APIView):
         import_session.status = "imported"
         import_session.save()
 
-        # Create ProjectLayer records for imported layers
-        # Get layer info from validation_summary
-        layers_info = (import_session.validation_summary or {}).get("layers", [])
-        if not isinstance(layers_info, list):
-            layers_info = []  # Fallback if discover returned error/string
-        for layer_name in selected_layers:
-            layer_info = next(
-                (l for l in layers_info if l.get("name") == layer_name),
-                {}
-            )
-            
-            geometry_type = layer_info.get("geometry_type", "POINT")
-            srid = layer_info.get("srid", 27700)
-            
-            # Table name format (microservice creates the actual table)
-            table_name = f"project_{project_id}_{layer_name}"
-            
-            # Create ProjectLayer record
-            ProjectLayer.objects.update_or_create(
-                project=project,
-                layer_name=layer_name,
-                defaults={
-                    "import_session": import_session,
-                    "table_name": table_name,
-                    "geometry_type": geometry_type,
-                    "srid": srid,
-                    "feature_count": layer_info.get("feature_count", 0),
-                    "status": "active"
-                }
-            )
+        # Persist feature data from microservice response
+        features_created = False
+        layers_result = import_result.get("layers", [])
+        if not isinstance(layers_result, list):
+            layers_result = []
+
+        for layer_payload in layers_result:
+            layer_name = layer_payload.get("layer_name") or layer_payload.get("name")
+            layer_id = layer_payload.get("table_name") or layer_payload.get("layer_id")
+
+            if not layer_name or not layer_id:
+                continue
+
+            features_payload = layer_payload.get("features", [])
+            if not isinstance(features_payload, list):
+                continue
+
+            for feature_payload in features_payload:
+                feature_id = feature_payload.get("id")
+                if not feature_id:
+                    continue
+
+                properties = feature_payload.get("properties", {})
+
+                Feature.objects.update_or_create(
+                    id=feature_id,
+                    defaults={
+                        "project": project,
+                        "layer_name": layer_name,
+                        "layer_id": layer_id,
+                        "properties": properties,
+                        "status": Feature.STATUS_PENDING,
+                    }
+                )
+                features_created = True
+
+        if features_created and project.status != "active":
+            project.status = "active"
+            project.save(update_fields=["status", "updated_at", "last_activity_at"])
 
         return Response({
             "project_id": str(project_id),

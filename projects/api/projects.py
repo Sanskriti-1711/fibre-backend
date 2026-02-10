@@ -1,9 +1,14 @@
+import requests
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
 from projects.models.project import Project
 from .serializers import ProjectSerializer
+
+
+MICROSERVICE_BASE_URL = "https://fiber-import.zeabur.app"
 
 
 class ProjectListCreateAPIView(APIView):
@@ -55,6 +60,29 @@ class ProjectDetailAPIView(APIView):
 
         serializer = ProjectSerializer(project)
         return Response(serializer.data)
+
+    def delete(self, request, project_id):
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            return Response(
+                {"detail": "Project not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        microservice_url = f"{MICROSERVICE_BASE_URL}/geo/projects/{project_id}/layers"
+        try:
+            response = requests.delete(microservice_url, timeout=60)
+            if response.status_code not in (200, 202, 204, 404):
+                response.raise_for_status()
+        except requests.RequestException as exc:
+            return Response(
+                {"detail": f"Failed to delete project layers in microservice: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        project.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 from django.utils.timezone import now
 from datetime import timedelta
