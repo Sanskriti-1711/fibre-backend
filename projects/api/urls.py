@@ -10,11 +10,20 @@ from .import_views import (
     GpkgImportView,
     ImportStatusView,
 )
+from .layers import (
+    ProjectLayerListAPIView,
+    ProjectLayerDetailAPIView,
+)
 
 urlpatterns = [
     path("projects/", ProjectListCreateAPIView.as_view()),
     path("projects/latest/", LatestProjectUpdatesAPIView.as_view()),
     path("projects/<uuid:project_id>/", ProjectDetailAPIView.as_view()),
+    path("projects/<uuid:project_id>/layers/", ProjectLayerListAPIView.as_view()),
+    path(
+        "projects/<uuid:project_id>/layers/<str:layer_id>/",
+        ProjectLayerDetailAPIView.as_view(),
+    ),
     # Import endpoints
     path("projects/<uuid:project_id>/import/upload/", GpkgUploadView.as_view()),
     path("projects/<uuid:project_id>/import/discover/", GpkgDiscoverView.as_view()),
