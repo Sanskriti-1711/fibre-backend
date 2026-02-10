@@ -13,6 +13,7 @@ class Project(models.Model):
         choices=[
             ("draft", "Draft"),
             ("in_progress", "In Progress"),
+            ("active", "Active"),
             ("completed", "Completed"),
             ("archived", "Archived"),
         ],

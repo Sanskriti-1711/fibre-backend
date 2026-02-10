@@ -203,6 +203,7 @@ class GpkgImportView(APIView):
         import_session.save()
 
         # Persist feature data from microservice response
+        features_created = False
         layers_result = import_result.get("layers", [])
         if not isinstance(layers_result, list):
             layers_result = []
@@ -235,6 +236,11 @@ class GpkgImportView(APIView):
                         "status": Feature.STATUS_PENDING,
                     }
                 )
+                features_created = True
+
+        if features_created and project.status != "active":
+            project.status = "active"
+            project.save(update_fields=["status", "updated_at", "last_activity_at"])
 
         return Response({
             "project_id": str(project_id),
