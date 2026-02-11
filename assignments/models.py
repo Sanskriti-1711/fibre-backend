@@ -20,7 +20,6 @@ class AssignmentJob(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="assignment_jobs")
     layer_id = models.CharField(max_length=255, blank=True, null=True)
-    layer_name = models.CharField(max_length=255, blank=True)
     feature = models.ForeignKey(Feature, on_delete=models.CASCADE, null=True, blank=True, related_name="assignment_jobs")
     assignee = models.ForeignKey(User, on_delete=models.CASCADE, related_name="assignment_jobs")
     scope = models.CharField(max_length=20, choices=SCOPE_CHOICES)
@@ -60,20 +59,18 @@ class AssignmentJob(models.Model):
         scope = getattr(instance, "scope", None) if instance else self.scope
         if scope == self.SCOPE_PROJECT:
             self.layer_id = None
-            self.layer_name = ""
             self.feature = None
         if scope == self.SCOPE_LAYER:
             self.feature = None
         if scope == self.SCOPE_FEATURE and self.feature:
             self.project = self.feature.project
             self.layer_id = self.feature.layer_id
-            self.layer_name = self.feature.layer_name
         super().save(*args, **kwargs)
 
     def __str__(self):
         target = self.project.name
         if self.scope == self.SCOPE_LAYER:
-            target = f"{target} / {self.layer_name or self.layer_id}"
+            target = f"{target} / {self.layer_id or 'layer'}"
         elif self.scope == self.SCOPE_FEATURE and self.feature:
             target = f"{target} / Feature {self.feature.id}"
         return f"{target} -> {self.assignee.email}"

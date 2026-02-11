@@ -18,7 +18,6 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
             "id",
             "project",
             "layer_id",
-            "layer_name",
             "feature",
             "assignee",
             "scope",
@@ -28,11 +27,14 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
         read_only_fields = ["created_at", "updated_at"]
 
     def validate(self, attrs):
-        scope = attrs.get("scope") or self.instance.scope
-        project = attrs.get("project") or self.instance.project
-        layer_id = attrs.get("layer_id") or self.instance.layer_id
-        layer_name = attrs.get("layer_name") or self.instance.layer_name
-        feature = attrs.get("feature") or self.instance.feature
+        instance = getattr(self, "instance", None)
+        scope = attrs.get("scope") or getattr(instance, "scope", None)
+        project = attrs.get("project") or getattr(instance, "project", None)
+        layer_id = attrs.get("layer_id") or getattr(instance, "layer_id", None)
+        feature = attrs.get("feature") or getattr(instance, "feature", None)
+
+        if not scope:
+            raise serializers.ValidationError("Scope is required")
 
         if scope == AssignmentJob.SCOPE_PROJECT:
             attrs["layer_id"] = None
@@ -40,15 +42,12 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
         elif scope == AssignmentJob.SCOPE_LAYER:
             if not layer_id:
                 raise serializers.ValidationError("Layer ID is required for layer scope")
-            if not layer_name:
-                raise serializers.ValidationError("Layer name is required for layer scope")
             attrs["feature"] = None
         elif scope == AssignmentJob.SCOPE_FEATURE:
             if not feature:
                 raise serializers.ValidationError("Feature is required for feature scope")
             attrs["project"] = feature.project
             attrs["layer_id"] = feature.layer_id
-            attrs["layer_name"] = feature.layer_name
         else:
             raise serializers.ValidationError("Invalid scope")
 
@@ -74,7 +73,6 @@ class AssignmentJobDetailSerializer(AssignmentJobSerializer):
         if instance.layer_id:
             data["layer"] = {
                 "id": instance.layer_id,
-                "name": instance.layer_name,
             }
         if instance.feature_id:
             data["feature"] = {
