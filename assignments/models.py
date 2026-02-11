@@ -66,6 +66,20 @@ class AssignmentJob(models.Model):
             self.project = self.feature.project
             self.layer_id = self.feature.layer_id
         super().save(*args, **kwargs)
+        self._mark_features_assigned(scope)
+
+    def _mark_features_assigned(self, scope: str) -> None:
+        if scope == self.SCOPE_FEATURE and self.feature_id:
+            Feature.objects.filter(pk=self.feature_id).exclude(
+                status=Feature.STATUS_ASSIGNED
+            ).update(status=Feature.STATUS_ASSIGNED)
+        elif scope == self.SCOPE_LAYER and self.layer_id:
+            Feature.objects.filter(
+                project=self.project,
+                layer_id=self.layer_id,
+            ).exclude(status=Feature.STATUS_ASSIGNED).update(
+                status=Feature.STATUS_ASSIGNED
+            )
 
     def __str__(self):
         target = self.project.name
