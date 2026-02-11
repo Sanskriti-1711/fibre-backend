@@ -13,6 +13,7 @@ from .import_views import (
 from .layers import (
     ProjectLayerListAPIView,
     ProjectLayerDetailAPIView,
+    ProjectFeatureDetailAPIView,
 )
 
 urlpatterns = [
@@ -23,6 +24,10 @@ urlpatterns = [
     path(
         "projects/<uuid:project_id>/layers/<str:layer_id>/",
         ProjectLayerDetailAPIView.as_view(),
+    ),
+    path(
+        "projects/<uuid:project_id>/features/<uuid:feature_id>/",
+        ProjectFeatureDetailAPIView.as_view(),
     ),
     # Import endpoints
     path("projects/<uuid:project_id>/import/upload/", GpkgUploadView.as_view()),
