@@ -1,3 +1,5 @@
+import requests
+
 from django.db.models import Count, Q, Max
 from rest_framework import status
 from rest_framework.response import Response
@@ -5,6 +7,9 @@ from rest_framework.views import APIView
 
 from projects.models import Project, Feature
 from .serializers import FeatureSerializer
+
+
+MICROSERVICE_BASE_URL = "https://fiber-import.zeabur.app"
 
 
 class ProjectLayerListAPIView(APIView):
@@ -122,5 +127,55 @@ class ProjectLayerDetailAPIView(APIView):
                     },
                 },
                 "features": serialized_features,
+            }
+        )
+
+
+class ProjectFeatureDetailAPIView(APIView):
+    """GET /api/projects/<project_id>/features/<feature_id>/"""
+
+    def get(self, request, project_id, feature_id):
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            return Response(
+                {"detail": "Project not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            feature = Feature.objects.get(id=feature_id, project=project)
+        except Feature.DoesNotExist:
+            return Response(
+                {"detail": "Feature not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        microservice_url = (
+            f"{MICROSERVICE_BASE_URL}/geo/projects/{project_id}/features/{feature_id}"
+        )
+
+        try:
+            response = requests.get(microservice_url, timeout=30)
+            response.raise_for_status()
+            geojson_payload = response.json()
+        except requests.RequestException as exc:
+            return Response(
+                {
+                    "detail": "Failed to fetch feature geometry from microservice",
+                    "error": str(exc),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        feature_data = FeatureSerializer(feature).data
+
+        return Response(
+            {
+                "project_id": str(project.id),
+                "layer_name": feature.layer_name,
+                "feature": feature_data,
+                "geojson": geojson_payload.get("feature"),
+                "layer_source": geojson_payload.get("layer", feature.layer_name),
             }
         )
