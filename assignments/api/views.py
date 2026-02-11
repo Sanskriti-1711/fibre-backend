@@ -27,7 +27,7 @@ class AssignmentJobListCreateAPIView(generics.ListCreateAPIView):
         if layer_id:
             qs = qs.filter(layer_id=layer_id)
 
-        return qs.order_by("scope", "layer_name", "created_at")
+        return qs.order_by("scope", "layer_id", "created_at")
 
 
 class AssignmentJobDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
@@ -51,7 +51,7 @@ class AssignmentJobSummaryAPIView(APIView):
         assignments = (
             AssignmentJob.objects.select_related("project", "feature", "assignee")
             .filter(project_id=project_id)
-            .order_by("scope", "layer_name", "created_at")
+            .order_by("scope", "layer_id", "created_at")
         )
 
         serializer = AssignmentJobDetailSerializer(assignments, many=True)
