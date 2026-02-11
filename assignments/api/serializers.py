@@ -56,6 +56,30 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
 
         return attrs
 
+    def create(self, validated_data):
+        scope = validated_data.get("scope")
+        project = validated_data.get("project")
+        layer_id = validated_data.get("layer_id")
+        feature = validated_data.get("feature")
+
+        if scope == AssignmentJob.SCOPE_PROJECT and project:
+            AssignmentJob.objects.filter(
+                project=project, scope=AssignmentJob.SCOPE_PROJECT
+            ).delete()
+        elif scope == AssignmentJob.SCOPE_LAYER and project and layer_id:
+            AssignmentJob.objects.filter(
+                project=project,
+                scope=AssignmentJob.SCOPE_LAYER,
+                layer_id=layer_id,
+            ).delete()
+        elif scope == AssignmentJob.SCOPE_FEATURE and feature:
+            AssignmentJob.objects.filter(
+                scope=AssignmentJob.SCOPE_FEATURE,
+                feature=feature,
+            ).delete()
+
+        return super().create(validated_data)
+
 
 class AssignmentJobDetailSerializer(AssignmentJobSerializer):
     assignee = serializers.SerializerMethodField()
