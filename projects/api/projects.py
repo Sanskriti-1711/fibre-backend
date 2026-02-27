@@ -5,6 +5,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
+from django.db import connection
+
 from projects.models.project import Project
 from projects.models.import_session import ImportSession
 from .serializers import ProjectSerializer
@@ -94,6 +96,13 @@ class ProjectDetailAPIView(APIView):
                         os.remove(file_path)
                 except (OSError, IOError):
                     pass  # Continue even if file deletion fails
+
+        # Delete orphaned activity events (table exists but model removed from codebase)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM projects_activityevent WHERE project_id = %s",
+                [str(project_id)]
+            )
 
         # All related models (Features, AssignmentJobs, ImportSessions) have
         # on_delete=CASCADE, so deleting the project will cascade delete everything
