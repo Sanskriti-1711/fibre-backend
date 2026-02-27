@@ -330,6 +330,7 @@ This is the new assignment job system with scope.
 |-----------|------|-------------|
 | `search` | string | Filter by job ID, project name, or engineer email |
 | `project` | uuid | Filter by project ID |
+| `layer` | string | Filter by layer ID |
 | `status` | string | Filter by status: `pending`, `assigned`, `under_review`, `approved`, `redo` |
 | `engineer` | uuid | Filter by assignee ID |
 | `scope` | string | Filter by scope: `project`, `layer`, `feature` |
@@ -359,7 +360,9 @@ This is the new assignment job system with scope.
       },
       "feature": {
         "id": "feature_uuid",
-        "status": "under_review"
+        "status": "under_review",
+        "layer_id": "layer_123",
+        "layer_name": "Duct"
       },
       "feature_count": 1,
       "status": "under_review",

@@ -78,6 +78,7 @@ class JobAssignmentsListAPIView(APIView):
         status_filter = request.query_params.get("status")
         engineer_id = request.query_params.get("engineer")
         scope_filter = request.query_params.get("scope")
+        layer_id = request.query_params.get("layer")
 
         # Base queryset: features that have assignments
         queryset = Feature.objects.select_related("project").prefetch_related(
@@ -87,6 +88,9 @@ class JobAssignmentsListAPIView(APIView):
         # Apply filters
         if project_id:
             queryset = queryset.filter(project_id=project_id)
+
+        if layer_id:
+            queryset = queryset.filter(layer_id=layer_id)
 
         if status_filter:
             queryset = queryset.filter(status=status_filter)
@@ -178,6 +182,8 @@ class JobAssignmentsListAPIView(APIView):
                         "feature": {
                             "id": str(feature.id),
                             "status": feature.status,
+                            "layer_id": feature.layer_id,
+                            "layer_name": feature.layer_name,
                         },
                         "feature_count": 1,
                         "status": feature.status,
