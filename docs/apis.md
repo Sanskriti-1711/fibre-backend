@@ -315,3 +315,73 @@ This is the new assignment job system with scope.
 - `?project={proj_id}`
 
 **Description:** Returns aggregated stats.
+
+---
+
+## 7. Job Assignments List API
+
+**GET** `/api/assignments/jobs/`
+
+**Description:** Returns job assignments with filtering, pagination, and aggregated statistics. Jobs track assigned features with status aggregation for project/layer scope.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `search` | string | Filter by job ID, project name, or engineer email |
+| `project` | uuid | Filter by project ID |
+| `status` | string | Filter by status: `pending`, `assigned`, `under_review`, `approved`, `redo` |
+| `engineer` | uuid | Filter by assignee ID |
+| `scope` | string | Filter by scope: `project`, `layer`, `feature` |
+| `page` | integer | Page number (default: 1) |
+| `page_size` | integer | Items per page (default: 20) |
+
+**Response:**
+
+```json
+{
+  "count": 25,
+  "page": 1,
+  "page_size": 20,
+  "results": [
+    {
+      "id": "46d3b046-53a...",
+      "project": {
+        "id": "proj_uuid",
+        "name": "Vodafone Fiber Rollout - London"
+      },
+      "scope": "feature",
+      "scope_display": "Feature",
+      "assignee": {
+        "id": "user_uuid",
+        "email": "fe4@admin.com",
+        "initials": "F"
+      },
+      "feature": {
+        "id": "feature_uuid",
+        "status": "under_review"
+      },
+      "feature_count": 1,
+      "status": "under_review",
+      "status_display": "Under Review",
+      "created_at": "2026-02-26T12:00:00Z"
+    }
+  ],
+  "stats": {
+    "total": 100,
+    "under_review": 20,
+    "approved": 70,
+    "redo": 5,
+    "pending": 3,
+    "assigned": 2
+  }
+}
+```
+
+**Notes:**
+- `stats.total` represents the total number of features, not jobs
+- For project/layer scope jobs, status is aggregated from all child features
+- Status aggregation priority: `redo` > `under_review` > `approved` > `pending` > `assigned`
+- Results sorted by `created_at` descending (newest first)
+
+---
