@@ -50,6 +50,7 @@ class AssignmentJobDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
 class AssignmentJobSummaryAPIView(APIView):
     def get(self, request):
         project_id = request.query_params.get("project")
+        assignee_id = request.query_params.get("assignee")
         if not project_id:
             return Response(
                 {"detail": "project query parameter is required"},
@@ -61,6 +62,9 @@ class AssignmentJobSummaryAPIView(APIView):
             .filter(project_id=project_id)
             .order_by("scope", "layer_id", "created_at")
         )
+
+        if assignee_id:
+            assignments = assignments.filter(assignee_id=assignee_id)
 
         serializer = AssignmentJobDetailSerializer(assignments, many=True)
         grouped = {"project": [], "layer": [], "feature": []}
