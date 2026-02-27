@@ -114,6 +114,19 @@ Authorization: Bearer <access_token>
 
 ---
 
+### Delete Project
+**DELETE** `/api/projects/{proj_id}/`
+
+**Description:** Permanently deletes a project and all associated data including features, assignment jobs, import sessions, and uploaded files. Also cleans up project layers in the microservice.
+
+**Response:** `204 No Content`
+
+**Error Responses:**
+- `404 Not Found` - Project does not exist
+- `502 Bad Gateway` - Failed to delete project layers in microservice
+
+---
+
 ## 3. Import API
 
 Handles GPKG file upload and import pipeline.

@@ -1,3 +1,4 @@
+import os
 import requests
 
 from rest_framework.views import APIView
@@ -5,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from projects.models.project import Project
+from projects.models.import_session import ImportSession
 from .serializers import ProjectSerializer
 
 
@@ -70,6 +72,7 @@ class ProjectDetailAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+        # Delete microservice layers first
         microservice_url = f"{MICROSERVICE_BASE_URL}/geo/projects/{project_id}/layers"
         try:
             response = requests.delete(microservice_url, timeout=60)
@@ -81,6 +84,19 @@ class ProjectDetailAPIView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
+        # Clean up uploaded files from import sessions before cascade delete
+        import_sessions = ImportSession.objects.filter(project=project)
+        for session in import_sessions:
+            if session.stored_file_path:
+                try:
+                    file_path = session.stored_file_path
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                except (OSError, IOError):
+                    pass  # Continue even if file deletion fails
+
+        # All related models (Features, AssignmentJobs, ImportSessions) have
+        # on_delete=CASCADE, so deleting the project will cascade delete everything
         project.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
