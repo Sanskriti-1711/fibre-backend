@@ -388,3 +388,210 @@ This is the new assignment job system with scope.
 - Results sorted by `created_at` descending (newest first)
 
 ---
+
+## 8. Engineer Activity API
+
+### Get Activity Timeline
+
+**GET** `/api/engineer/activity/`
+
+**Description:** Returns a timeline of engineer activity including recent assignments and feature status changes.
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `engineer` | uuid | Yes | Engineer user ID |
+| `days` | integer | No | Number of days to look back (default: 30) |
+
+**Response:**
+
+```json
+{
+  "engineer_id": "uuid",
+  "period_days": 30,
+  "activities": [
+    {
+      "type": "assignment",
+      "timestamp": "2026-02-27T10:00:00Z",
+      "project": {
+        "id": "proj_uuid",
+        "name": "Fiber Rollout - Zone A"
+      },
+      "scope": "layer",
+      "scope_display": "Layer",
+      "target": {
+        "type": "layer",
+        "layer_id": "layer_123"
+      }
+    },
+    {
+      "type": "feature_update",
+      "timestamp": "2026-02-26T15:30:00Z",
+      "feature": {
+        "id": "feature_uuid",
+        "layer_name": "Duct",
+        "status": "under_review",
+        "status_display": "Under Review"
+      },
+      "project": {
+        "id": "proj_uuid",
+        "name": "Fiber Rollout - Zone A"
+      }
+    }
+  ],
+  "total_count": 2
+}
+```
+
+---
+
+## 9. Engineer Stats API
+
+### Get Performance Statistics
+
+**GET** `/api/engineer/stats/`
+
+**Description:** Returns performance metrics for an engineer including overall stats, daily breakdown, and project breakdown.
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `engineer` | uuid | Yes | Engineer user ID |
+| `days` | integer | No | Period for daily breakdown and recent stats (default: 30) |
+
+**Response:**
+
+```json
+{
+  "engineer_id": "uuid",
+  "period_days": 30,
+  "overall": {
+    "total": 150,
+    "approved": 120,
+    "under_review": 20,
+    "redo": 5,
+    "assigned": 3,
+    "pending": 2,
+    "approval_rate": 80.0
+  },
+  "recent_period": {
+    "total": 45,
+    "approved": 30
+  },
+  "daily_breakdown": [
+    {
+      "date": "2026-01-28",
+      "updated": 2,
+      "approved": 1
+    }
+  ],
+  "project_breakdown": [
+    {
+      "project": {
+        "id": "proj_uuid",
+        "name": "Fiber Rollout - Zone A"
+      },
+      "total": 100,
+      "approved": 80,
+      "under_review": 15,
+      "redo": 5
+    }
+  ]
+}
+```
+
+---
+
+## 10. Feature Field Measurements API
+
+### Update Field Measurements
+
+**PATCH** `/api/features/{feature_id}/field-measurements/`
+
+**Description:** Updates field measurements and comparison notes for a feature.
+
+**Body:**
+
+```json
+{
+  "field_measurements": {
+    "length": 120.5,
+    "width": 50.2,
+    "depth": 1.5
+  },
+  "comparison_notes": "Verified measurements on site. Actual depth differs from plan by 0.3m."
+}
+```
+
+**Response:**
+
+```json
+{
+  "id": "feature_uuid",
+  "field_measurements": {
+    "length": 120.5,
+    "width": 50.2,
+    "depth": 1.5
+  },
+  "comparison_notes": "Verified measurements on site. Actual depth differs from plan by 0.3m.",
+  "updated_at": "2026-02-27T10:30:00Z"
+}
+```
+
+**Notes:**
+- Either `field_measurements` or `comparison_notes` can be provided independently
+- `field_measurements` must be a JSON object
+
+---
+
+## 11. Feature Submit API
+
+### Submit Features for Review
+
+**POST** `/api/features/submit/`
+
+**Description:** Bulk submit assigned features for review. Changes status from `assigned` or `redo` to `under_review`.
+
+**Body:**
+
+```json
+{
+  "feature_ids": ["feature_uuid_1", "feature_uuid_2"],
+  "engineer": "engineer_uuid"
+}
+```
+
+**Response:**
+
+```json
+{
+  "submitted_count": 2,
+  "feature_ids": ["feature_uuid_1", "feature_uuid_2"],
+  "new_status": "under_review",
+  "status_display": "Under Review"
+}
+```
+
+**Error Responses:**
+
+```json
+{
+  "detail": "Features not found or not assigned: ['feature_uuid_3']"
+}
+```
+
+```json
+{
+  "detail": "Some features cannot be submitted",
+  "invalid_features": [
+    {"id": "feature_uuid_1", "status": "approved"}
+  ]
+}
+```
+
+**Notes:**
+- Features must be assigned to the specified engineer
+- Only features with status `assigned` or `redo` can be submitted
+- Features with status `approved`, `under_review`, or `pending` cannot be submitted

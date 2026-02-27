@@ -2,10 +2,13 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db.models import Q, Count, Case, When, Value, CharField, IntegerField, OuterRef, Subquery
+from django.utils import timezone
+from datetime import timedelta
 
 from assignments.models import AssignmentJob
-from projects.models import Feature
+from projects.models import Feature, Project
 from assignments.api.serializers import AssignmentJobSerializer, AssignmentJobDetailSerializer
+from users.models import User
 
 
 class AssignmentJobListCreateAPIView(generics.ListCreateAPIView):
@@ -258,3 +261,305 @@ class JobAssignmentsListAPIView(APIView):
             Feature.STATUS_REDO: "Redo",
         }
         return display_map.get(status, status)
+
+
+class EngineerActivityAPIView(APIView):
+    """Returns timeline of engineer activity including assignments and status changes."""
+
+    def get(self, request):
+        engineer_id = request.query_params.get("engineer")
+        days = int(request.query_params.get("days", 30))
+
+        if not engineer_id:
+            return Response(
+                {"detail": "engineer query parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        since = timezone.now() - timedelta(days=days)
+
+        # Get recent assignments for this engineer
+        assignments = AssignmentJob.objects.select_related(
+            "project", "feature"
+        ).filter(
+            assignee_id=engineer_id,
+            created_at__gte=since
+        ).order_by("-created_at")
+
+        # Get features assigned to this engineer with recent updates
+        features = Feature.objects.select_related("project").prefetch_related(
+            "assignment_jobs"
+        ).filter(
+            assignment_jobs__assignee_id=engineer_id,
+            updated_at__gte=since
+        ).order_by("-updated_at")
+
+        # Build activity timeline
+        activities = []
+
+        # Assignment events
+        for job in assignments[:50]:
+            activities.append({
+                "type": "assignment",
+                "timestamp": job.created_at.isoformat(),
+                "project": {
+                    "id": str(job.project.id),
+                    "name": job.project.name,
+                },
+                "scope": job.scope,
+                "scope_display": job.get_scope_display(),
+                "target": self._get_assignment_target(job),
+            })
+
+        # Feature update events (status changes)
+        seen_features = set()
+        for feature in features[:50]:
+            if feature.id in seen_features:
+                continue
+            seen_features.add(feature.id)
+
+            activities.append({
+                "type": "feature_update",
+                "timestamp": feature.updated_at.isoformat(),
+                "feature": {
+                    "id": str(feature.id),
+                    "layer_name": feature.layer_name,
+                    "status": feature.status,
+                    "status_display": self._get_status_display(feature.status),
+                },
+                "project": {
+                    "id": str(feature.project.id),
+                    "name": feature.project.name,
+                },
+            })
+
+        # Sort by timestamp desc
+        activities.sort(key=lambda x: x["timestamp"], reverse=True)
+
+        return Response({
+            "engineer_id": engineer_id,
+            "period_days": days,
+            "activities": activities[:100],
+            "total_count": len(activities),
+        })
+
+    def _get_assignment_target(self, job):
+        if job.scope == AssignmentJob.SCOPE_PROJECT:
+            return {"type": "project", "name": job.project.name}
+        elif job.scope == AssignmentJob.SCOPE_LAYER:
+            return {"type": "layer", "layer_id": job.layer_id}
+        else:
+            return {"type": "feature", "id": str(job.feature.id) if job.feature else None}
+
+    def _get_status_display(self, status):
+        display_map = {
+            Feature.STATUS_PENDING: "Pending",
+            Feature.STATUS_ASSIGNED: "Assigned",
+            Feature.STATUS_UNDER_REVIEW: "Under Review",
+            Feature.STATUS_APPROVED: "Approved",
+            Feature.STATUS_REDO: "Redo",
+        }
+        return display_map.get(status, status)
+
+
+class EngineerStatsAPIView(APIView):
+    """Returns performance statistics for an engineer."""
+
+    def get(self, request):
+        engineer_id = request.query_params.get("engineer")
+        days = int(request.query_params.get("days", 30))
+
+        if not engineer_id:
+            return Response(
+                {"detail": "engineer query parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        since = timezone.now() - timedelta(days=days)
+
+        # Get features assigned to this engineer
+        features = Feature.objects.filter(
+            assignment_jobs__assignee_id=engineer_id
+        )
+
+        # Overall stats
+        overall = features.aggregate(
+            total=Count("id"),
+            approved=Count(Case(When(status=Feature.STATUS_APPROVED, then=1), output_field=IntegerField())),
+            under_review=Count(Case(When(status=Feature.STATUS_UNDER_REVIEW, then=1), output_field=IntegerField())),
+            redo=Count(Case(When(status=Feature.STATUS_REDO, then=1), output_field=IntegerField())),
+            assigned=Count(Case(When(status=Feature.STATUS_ASSIGNED, then=1), output_field=IntegerField())),
+            pending=Count(Case(When(status=Feature.STATUS_PENDING, then=1), output_field=IntegerField())),
+        )
+
+        # Recent activity (last N days)
+        recent_features = features.filter(updated_at__gte=since)
+        recent = recent_features.aggregate(
+            total=Count("id"),
+            approved=Count(Case(When(status=Feature.STATUS_APPROVED, then=1), output_field=IntegerField())),
+        )
+
+        # Daily breakdown for the period
+        daily_stats = []
+        for day_offset in range(days):
+            day_start = since + timedelta(days=day_offset)
+            day_end = day_start + timedelta(days=1)
+
+            day_features = recent_features.filter(
+                updated_at__gte=day_start,
+                updated_at__lt=day_end
+            )
+
+            day_stat = day_features.aggregate(
+                updated=Count("id"),
+                approved=Count(Case(When(status=Feature.STATUS_APPROVED, then=1), output_field=IntegerField())),
+            )
+
+            daily_stats.append({
+                "date": day_start.date().isoformat(),
+                "updated": day_stat["updated"],
+                "approved": day_stat["approved"],
+            })
+
+        # Project breakdown
+        project_stats = features.values(
+            "project__id", "project__name"
+        ).annotate(
+            total=Count("id"),
+            approved=Count(Case(When(status=Feature.STATUS_APPROVED, then=1), output_field=IntegerField())),
+            under_review=Count(Case(When(status=Feature.STATUS_UNDER_REVIEW, then=1), output_field=IntegerField())),
+            redo=Count(Case(When(status=Feature.STATUS_REDO, then=1), output_field=IntegerField())),
+        ).order_by("-total")
+
+        return Response({
+            "engineer_id": engineer_id,
+            "period_days": days,
+            "overall": {
+                "total": overall["total"],
+                "approved": overall["approved"],
+                "under_review": overall["under_review"],
+                "redo": overall["redo"],
+                "assigned": overall["assigned"],
+                "pending": overall["pending"],
+                "approval_rate": round(
+                    (overall["approved"] / overall["total"] * 100), 2
+                ) if overall["total"] > 0 else 0,
+            },
+            "recent_period": {
+                "total": recent["total"],
+                "approved": recent["approved"],
+            },
+            "daily_breakdown": daily_stats,
+            "project_breakdown": [
+                {
+                    "project": {
+                        "id": str(p["project__id"]),
+                        "name": p["project__name"],
+                    },
+                    "total": p["total"],
+                    "approved": p["approved"],
+                    "under_review": p["under_review"],
+                    "redo": p["redo"],
+                }
+                for p in project_stats
+            ],
+        })
+
+
+class FeatureFieldMeasurementsAPIView(APIView):
+    """Update field measurements for a feature."""
+
+    def patch(self, request, pk):
+        try:
+            feature = Feature.objects.get(pk=pk)
+        except Feature.DoesNotExist:
+            return Response(
+                {"detail": "Feature not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        field_measurements = request.data.get("field_measurements")
+        comparison_notes = request.data.get("comparison_notes")
+
+        if field_measurements is not None:
+            if not isinstance(field_measurements, dict):
+                return Response(
+                    {"detail": "field_measurements must be a JSON object"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            feature.field_measurements = field_measurements
+
+        if comparison_notes is not None:
+            feature.comparison_notes = comparison_notes
+
+        feature.save()
+
+        return Response({
+            "id": str(feature.id),
+            "field_measurements": feature.field_measurements,
+            "comparison_notes": feature.comparison_notes,
+            "updated_at": feature.updated_at.isoformat(),
+        })
+
+
+class FeatureSubmitAPIView(APIView):
+    """Submit feature(s) for review."""
+
+    def post(self, request):
+        feature_ids = request.data.get("feature_ids", [])
+        engineer_id = request.data.get("engineer")
+
+        if not feature_ids:
+            return Response(
+                {"detail": "feature_ids is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not engineer_id:
+            return Response(
+                {"detail": "engineer is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Verify engineer has access to these features
+        features = Feature.objects.filter(
+            id__in=feature_ids,
+            assignment_jobs__assignee_id=engineer_id
+        )
+
+        if features.count() != len(feature_ids):
+            found_ids = set(str(f.id) for f in features)
+            missing = set(feature_ids) - found_ids
+            return Response(
+                {"detail": f"Features not found or not assigned: {missing}"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Only allow submission from certain statuses
+        valid_statuses = [Feature.STATUS_ASSIGNED, Feature.STATUS_REDO]
+        invalid_features = [
+            {"id": str(f.id), "status": f.status}
+            for f in features
+            if f.status not in valid_statuses
+        ]
+
+        if invalid_features:
+            return Response(
+                {
+                    "detail": "Some features cannot be submitted",
+                    "invalid_features": invalid_features,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Update status to under_review
+        updated_count = features.filter(
+            status__in=valid_statuses
+        ).update(status=Feature.STATUS_UNDER_REVIEW)
+
+        return Response({
+            "submitted_count": updated_count,
+            "feature_ids": [str(f.id) for f in features],
+            "new_status": Feature.STATUS_UNDER_REVIEW,
+            "status_display": "Under Review",
+        })
