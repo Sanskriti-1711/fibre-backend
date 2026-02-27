@@ -248,6 +248,7 @@ This is the new assignment job system with scope.
 - `project={proj_id}`
 - `layer_id={layer_id}` (optional)
 - `scope=feature|layer|project` (optional)
+- `assignee={engineer_user_id}` (optional)
 
 ---
 
