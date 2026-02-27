@@ -24,6 +24,7 @@ class AssignmentJobListCreateAPIView(generics.ListCreateAPIView):
         project_id = self.request.query_params.get("project")
         scope = self.request.query_params.get("scope")
         layer_id = self.request.query_params.get("layer_id")
+        assignee_id = self.request.query_params.get("assignee")
 
         if project_id:
             qs = qs.filter(project_id=project_id)
@@ -31,6 +32,8 @@ class AssignmentJobListCreateAPIView(generics.ListCreateAPIView):
             qs = qs.filter(scope=scope)
         if layer_id:
             qs = qs.filter(layer_id=layer_id)
+        if assignee_id:
+            qs = qs.filter(assignee_id=assignee_id)
 
         return qs.order_by("scope", "layer_id", "created_at")
 
