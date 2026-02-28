@@ -51,20 +51,23 @@ class AssignmentJobSummaryAPIView(APIView):
     def get(self, request):
         project_id = request.query_params.get("project")
         assignee_id = request.query_params.get("assignee")
-        if not project_id:
+        if not project_id and not assignee_id:
             return Response(
-                {"detail": "project query parameter is required"},
+                {"detail": "Either project or assignee query parameter is required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         assignments = (
             AssignmentJob.objects.select_related("project", "feature", "assignee")
-            .filter(project_id=project_id)
-            .order_by("scope", "layer_id", "created_at")
         )
+
+        if project_id:
+            assignments = assignments.filter(project_id=project_id)
 
         if assignee_id:
             assignments = assignments.filter(assignee_id=assignee_id)
+
+        assignments = assignments.order_by("scope", "layer_id", "created_at")
 
         serializer = AssignmentJobDetailSerializer(assignments, many=True)
         grouped = {"project": [], "layer": [], "feature": []}
