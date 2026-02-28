@@ -158,6 +158,13 @@ Handles GPKG file upload and import pipeline.
 
 ---
 
+### Import Status
+**GET** `/api/projects/{proj_id}/import/status/`
+
+**Description:** Returns the current import status for a project.
+
+---
+
 ### Microservice Direct Import (Optional)
 **POST** `https://fiber-import.zeabur.app/import/gpkg`
 
@@ -197,53 +204,7 @@ Handles GPKG file upload and import pipeline.
 
 ---
 
-## 5. Assignments & Activity API
-
-### Create Assignment
-**POST** `/api/assignments/`
-
-**Body:**
-```json
-{
-  "project": "PROJECT_UUID",
-  "layer_name": "Duct",
-  "feature_id": "FEATURE_UUID",
-  "feature_name": "Duct #A-11",
-  "engineer": "ENGINEER_UUID"
-}
-```
-
----
-
-### Delete Assignment
-**DELETE** `/api/assignments/{assignment_id}/`
-
----
-
-### Activity List
-**GET** `/api/activity/`
-
----
-
-### Create Activity
-**POST** `/api/activity/`
-
-**Body:**
-```json
-{
-  "project": "PROJECT_UUID",
-  "event_type": "assignment.created",
-  "payload": {
-    "feature_id": "FEATURE_UUID",
-    "layer_name": "Duct",
-    "engineer_id": "ENGINEER_UUID"
-  }
-}
-```
-
----
-
-## 6. Assignment Jobs API
+## 5. Assignment Jobs API
 
 This is the new assignment job system with scope.
 
@@ -326,13 +287,16 @@ This is the new assignment job system with scope.
 **GET** `/api/assignments/summary/`
 
 **Query Parameters:**
-- `?project={proj_id}`
+- `?project={proj_id}` (optional if assignee provided)
+- `?assignee={engineer_id}` (optional if project provided)
 
-**Description:** Returns aggregated stats.
+**Description:** Returns aggregated stats. Requires at least one of project or assignee.
+
+**Note:** Either `project` or `assignee` (or both) must be provided.
 
 ---
 
-## 7. Job Assignments List API
+## 6. Job Assignments List API
 
 **GET** `/api/assignments/jobs/`
 
@@ -403,7 +367,7 @@ This is the new assignment job system with scope.
 
 ---
 
-## 8. Engineer Activity API
+## 7. Engineer Activity API
 
 ### Get Activity Timeline
 
@@ -460,7 +424,7 @@ This is the new assignment job system with scope.
 
 ---
 
-## 9. Engineer Stats API
+## 8. Engineer Stats API
 
 ### Get Performance Statistics
 
@@ -518,7 +482,7 @@ This is the new assignment job system with scope.
 
 ---
 
-## 10. Feature Field Measurements API
+## 9. Feature Field Measurements API
 
 ### Update Field Measurements
 
@@ -560,7 +524,7 @@ This is the new assignment job system with scope.
 
 ---
 
-## 11. Feature Submit API
+## 10. Feature Submit API
 
 ### Submit Features for Review
 
