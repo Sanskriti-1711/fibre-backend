@@ -10,21 +10,6 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RenameIndex(
-            model_name='feature',
-            new_name='features_project_24b9e2_idx',
-            old_name='feature_proj_layer_idx',
-        ),
-        migrations.RenameIndex(
-            model_name='feature',
-            new_name='features_layer_i_335aee_idx',
-            old_name='feature_layer_id_idx',
-        ),
-        migrations.RenameIndex(
-            model_name='feature',
-            new_name='features_status_b4cdda_idx',
-            old_name='feature_status_idx',
-        ),
         migrations.AddField(
             model_name='feature',
             name='photo',
