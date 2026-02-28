@@ -88,6 +88,7 @@ class AssignmentJobDetailSerializer(AssignmentJobSerializer):
         return {
             "id": str(obj.assignee_id),
             "email": obj.assignee.email,
+            "full_name": obj.assignee.full_name,
             "role": obj.assignee.role,
         }
 
