@@ -15,6 +15,8 @@ from .layers import (
     ProjectLayerDetailAPIView,
     ProjectFeatureDetailAPIView,
 )
+from .completion import ProjectCompletionAPIView
+from .layer_weights import ProjectLayerWeightsAPIView
 
 urlpatterns = [
     path("projects/", ProjectListCreateAPIView.as_view()),
@@ -28,6 +30,15 @@ urlpatterns = [
     path(
         "projects/<uuid:project_id>/features/<uuid:feature_id>/",
         ProjectFeatureDetailAPIView.as_view(),
+    ),
+    # Completion endpoints
+    path(
+        "projects/<uuid:project_id>/completion/",
+        ProjectCompletionAPIView.as_view(),
+    ),
+    path(
+        "projects/<uuid:project_id>/layers/weights/",
+        ProjectLayerWeightsAPIView.as_view(),
     ),
     # Import endpoints
     path("projects/<uuid:project_id>/import/upload/", GpkgUploadView.as_view()),

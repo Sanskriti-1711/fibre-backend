@@ -108,105 +108,287 @@ Dynamic completion is used for:
 ---
 # **5\. Approval Dependency (Critical Rule)**
 Completion must only consider **approved features**.
+
 Workflow:
 Engineer completes feature  
-→ Status \= Submitted  
+→ Status = `assigned` or `redo`  
+→ Engineer submits → Status = `under_review`  
 → Admin reviews  
-→ Status \= Approved  
+→ Status = `approved`  
 → Included in completion calculations
+
 Statuses:
 
 | Status | Included in Completion? |
 | ----- | ----- |
-| Draft | ❌ No |
-| Submitted | ❌ No |
-| Approved | ✅ Yes |
-| Rejected | ❌ No |
+| `pending` | ❌ No |
+| `assigned` | ❌ No |
+| `under_review` | ❌ No |
+| `approved` | ✅ Yes |
+| `redo` | ❌ No |
 ---
 # **6\. Data Requirements**
+
 ## **Feature Table Fields**
-Minimum required:
-feature\_id  
-layer\_id  
-project\_id  
-status  
-assigned\_engineer\_id  
-approved\_at  
+```
+Feature
+- id: UUID (primary key)
+- project_id: ForeignKey to Project
+- layer_id: CharField (string identifier)
+- layer_name: CharField
+- status: CharField (pending, assigned, under_review, approved, redo)
+- field_measurements: JSONField
+- comparison_notes: TextField
+- submitted_at: DateTimeField (null until submitted)
+- approved_at: DateTimeField (null until approved)
+- created_at, updated_at: DateTimeField
+```
+
+**Note:** Assignment tracking is handled via separate `AssignmentJob` model, not `assigned_engineer_id` field.
+
 ---
-## **Layer Table Fields**
-layer\_id  
-project\_id  
-layer\_name  
-weight\_percentage
-Weight must sum to 100 per project.
----
+
+## **LayerWeight Table Fields**
+```
+LayerWeight
+- id: UUID (primary key)
+- project_id: ForeignKey to Project
+- layer_id: CharField (string identifier)
+- weight_percentage: DecimalField (max 100.00)
+- created_at, updated_at: DateTimeField
+```
+
+**Note:** Weights do NOT need to sum to 100%. Partial weighting is supported - undefined layers receive auto-weighted equal share of remaining percentage.
 # **7\. API Requirements**
+
 ## **Project Completion API**
-GET /api/projects/{id}/completion
+
+**GET** `/api/projects/{id}/completion/`
+
 Response:
-{  
- "project\_id": 12,  
- "standard\_completion": 60.0,  
- "dynamic\_completion": 69.0,  
- "total\_features": 1000,  
- "approved\_features": 600,  
- "layers": \[  
-   {  
-     "layer\_id": 1,  
-     "name": "Backbone",  
-     "weight": 40,  
-     "total\_features": 100,  
-     "approved\_features": 80,  
-     "progress": 80,  
-     "contribution": 32  
-   }  
- \]  
-}  
+```json
+{
+  "project_id": "uuid-string",
+  "standard_completion": 60.0,
+  "dynamic_completion": 69.0,
+  "total_features": 1000,
+  "approved_features": 600,
+  "weights_defined": true,
+  "layers": [
+    {
+      "layer_id": "backbone_fiber",
+      "layer_name": "Backbone Fiber",
+      "weight": 40.0,
+      "total_features": 100,
+      "approved_features": 80,
+      "progress_percentage": 80.0,
+      "contribution": 32.0
+    }
+  ]
+}
+```
+
 ---
-# **8\. Dashboard Requirements**
-Completion dashboard should display:
-## **Project Level**
-* Standard Completion %
-* Dynamic Completion %
-* Difference between them
----
-## **Layer Level**
-For each layer:
-* Total features
-* Completed features
-* Weight
-* Contribution %
----
-## **Engineer Level (Optional Phase 1\)**
-* Features completed
-* Contribution to completion
-* Productivity metrics
----
-# **9\. Validation Rules**
-1. Layer weights must sum to 100%.
+# **8\. Validation Rules**
+1. Layer weights cannot exceed 100% total (but can be partial).
 2. Only approved features count toward completion.
 3. Completion cannot exceed 100%.
-4. Projects without weights default to equal weights.
+4. Unweighted layers receive equal share of remaining percentage.
+5. Features must be `under_review` to be approved or rejected.
+6. Engineers can only submit features assigned to them.
 ---
-# **10\. Phase Scope**
-## **Phase 1**
+# **9\. Phase Scope**
+## **Phase 1 (Implemented)**
 Included:
-* Standard completion  
-* Dynamic completion (layer-level weights)  
-* Completion dashboard  
-* Approval dependency
+* Standard completion calculation
+* Dynamic completion with layer-level weights
+* Partial weighting support (auto-equal distribution)
+* Approval workflow (submit → review → approve/reject)
+* Completion API endpoints
+* Layer weight management endpoints
+
 Excluded:
+* Completion dashboard UI
 * Feature-level weighting
 * AI-based completion prediction
 * Time-based performance scoring
 ---
-# **11\. Simple Summary (For Non-Technical Stakeholders)**
+# **10\. Simple Summary (For Non-Technical Stakeholders)**
 Standard Completion shows how much work is finished.  
  Dynamic Completion shows how valuable the finished work is.
 Both are required to understand real project progress.
-# **12\. Recommended Implementation Order**
-1. Feature approval workflow
-2. Layer weights storage
-3. Completion calculation service
-4. Completion API
-5. Dashboard UI
+
+---
+
+# **11\. Implementation Summary**
+
+## **Built in Phase 1:**
+1. ✅ Feature approval workflow (submit → under_review → approve/reject)
+2. ✅ Layer weights storage (`LayerWeight` model)
+3. ✅ Completion calculation service (on-demand, partial weighting)
+4. ✅ Completion API (`GET /api/projects/{id}/completion/`)
+5. ✅ Layer Weights API (GET/PUT endpoints)
+
+## **Future Work:**
+- Dashboard UI for visualizing completion metrics
+- Feature-level weighting (vs layer-level)
+- AI-based completion prediction
+- Time-based performance scoring
+
+---
+
+# **12\. Implementation Details (Built)**
+
+This section documents the actual implementation as built in the Fiber Backend.
+
+## **12.1 Data Models**
+
+### **LayerWeight Model** (`projects/models/layer_weight.py`)
+```python
+LayerWeight
+- id: UUID (primary key)
+- project: ForeignKey to Project
+- layer_id: CharField(max_length=255)
+- weight_percentage: DecimalField(max_digits=5, decimal_places=2)
+- created_at: DateTimeField
+- updated_at: DateTimeField
+
+# Unique constraint: (project, layer_id)
+```
+
+### **Feature Model Extensions** (`projects/models/feature.py`)
+Added fields:
+```python
+Feature
+- submitted_at: DateTimeField(null=True, blank=True)
+- approved_at: DateTimeField(null=True, blank=True)
+```
+
+Feature statuses:
+- `pending` - Initial status after import
+- `assigned` - Assigned to an engineer
+- `under_review` - Submitted by engineer, awaiting review
+- `approved` - Approved by admin, counts toward completion
+- `redo` - Rejected, needs rework
+
+### **Project Model** (`projects/models/project.py`)
+Renamed field:
+```python
+Project
+- standard_completion: DecimalField(max_digits=5, decimal_places=2, default=0)
+  # Previously: completion_percentage
+```
+
+## **12.2 Completion Calculation Service** (`projects/services/completion_service.py`)
+
+### **Key Features:**
+- **On-demand calculation** - Computed at request time (no caching)
+- **Partial weighting support** - Layers without explicit weights receive equal share of remaining percentage
+- **Decimal precision** - Uses Decimal for accurate calculations with 2 decimal places
+
+### **Partial Weighting Algorithm:**
+```
+1. Calculate total defined weight from LayerWeight records
+2. Identify undefined layers (layers without explicit weights)
+3. remaining_weight = 100 - total_defined_weight
+4. If undefined layers exist and remaining_weight > 0:
+   auto_weight = remaining_weight / count(undefined_layers)
+5. Each undefined layer gets auto_weight
+```
+
+Example:
+- Defined: Backbone=40%, Distribution=30% (total 70%)
+- Undefined layers: Poles, Chambers (2 layers)
+- Auto-weight for each: (100-70)/2 = 15%
+- Final: Poles=15%, Chambers=15%
+
+## **12.3 API Endpoints**
+
+### **Completion API**
+```
+GET /api/projects/{id}/completion/
+```
+
+### **Layer Weights API**
+```
+GET /api/projects/{id}/layers/weights/     # Get current weights
+PUT /api/projects/{id}/layers/weights/     # Update weights
+```
+
+### **Feature Workflow APIs**
+```
+POST /api/features/submit/    # Engineer submits for review
+POST /api/features/approve/   # Admin approves features
+POST /api/features/reject/    # Admin rejects features (to redo)
+```
+
+## **12.4 Implementation Differences from Original Spec**
+
+| Aspect | Original Spec | Actual Implementation |
+|--------|--------------|----------------------|
+| **Layer Model** | Dedicated Layer table | LayerWeight model stores weights per (project, layer_id) |
+| **Weight Sum** | Must equal 100% | Can be partial (undefined layers auto-weighted) |
+| **Assignment** | assigned_engineer_id on Feature | Separate AssignmentJob model |
+| **Status Names** | Draft, Submitted, Approved | pending, assigned, under_review, approved, redo |
+| **Approval Tracking** | approved_at timestamp | ✅ Implemented as specified |
+| **Completion Storage** | Not specified | On-demand calculation (no caching) |
+
+## **12.5 Validation Rules Implemented**
+
+1. **Layer weight validation** - Total weight cannot exceed 100%
+2. **Approval dependency** - Only `approved` status features count toward completion
+3. **Status workflow** - Features must be `under_review` to be approved/rejected
+4. **Assignment check** - Engineers can only submit features assigned to them
+
+## **12.6 File Locations**
+
+```
+projects/
+  models/
+    layer_weight.py          # LayerWeight model
+    feature.py                # Feature with submitted_at, approved_at
+    project.py                # Project with standard_completion
+  services/
+    completion_service.py    # Completion calculation logic
+  api/
+    completion.py            # ProjectCompletionAPIView
+    layer_weights.py         # ProjectLayerWeightsAPIView
+    urls.py                  # Endpoint routing
+
+assignments/
+  api/
+    views.py                 # FeatureApproveAPIView, FeatureRejectAPIView
+    urls.py                  # Endpoint routing
+```
+
+---
+
+# **13\. API Usage Examples**
+
+## **Get Project Completion**
+```bash
+curl /api/projects/123e4567/completion/
+```
+
+## **Set Layer Weights**
+```bash
+curl -X PUT /api/projects/123e4567/layers/weights/ \
+  -H "Content-Type: application/json" \
+  -d '{"weights": {"backbone": 40, "distribution": 30}}'
+```
+
+## **Approve Features**
+```bash
+curl -X POST /api/features/approve/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "feature_ids": ["feat-1", "feat-2"],
+    "reviewer": "admin-id",
+    "notes": "Approved after verification"
+  }'
+```
+
+---
+
+*Documentation updated: 2026-02-28*
+*Implementation Phase: 1 (Complete)*

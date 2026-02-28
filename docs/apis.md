@@ -573,3 +573,241 @@ This is the new assignment job system with scope.
 - Features must be assigned to the specified engineer
 - Only features with status `assigned` or `redo` can be submitted
 - Features with status `approved`, `under_review`, or `pending` cannot be submitted
+
+---
+
+## 11. Completion Rate API
+
+### Get Project Completion
+
+**GET** `/api/projects/{proj_id}/completion/`
+
+**Description:** Returns standard and dynamic completion rates for a project with per-layer breakdown.
+
+**Response:**
+
+```json
+{
+  "project_id": "proj_uuid",
+  "standard_completion": 60.0,
+  "dynamic_completion": 69.0,
+  "total_features": 1000,
+  "approved_features": 600,
+  "weights_defined": true,
+  "layers": [
+    {
+      "layer_id": "backbone_fiber",
+      "layer_name": "Backbone Fiber",
+      "weight": 40.0,
+      "total_features": 100,
+      "approved_features": 80,
+      "progress_percentage": 80.0,
+      "contribution": 32.0
+    },
+    {
+      "layer_id": "distribution",
+      "layer_name": "Distribution",
+      "weight": 30.0,
+      "total_features": 300,
+      "approved_features": 150,
+      "progress_percentage": 50.0,
+      "contribution": 15.0
+    }
+  ]
+}
+```
+
+**Notes:**
+- `standard_completion`: Simple count-based percentage (approved/total × 100)
+- `dynamic_completion`: Weight-based completion (Σ layer_progress × layer_weight)
+- `weights_defined`: Indicates if custom weights have been set for this project
+- Unweighted layers receive equal share of remaining percentage automatically
+- Only features with `approved` status count toward completion
+
+---
+
+## 12. Layer Weights API
+
+### Get Layer Weights
+
+**GET** `/api/projects/{proj_id}/layers/weights/`
+
+**Description:** Returns current weight configuration for all project layers.
+
+**Response:**
+
+```json
+{
+  "project_id": "proj_uuid",
+  "weights_defined": true,
+  "total_defined_weight": 70.0,
+  "auto_weight_for_undefined": 15.0,
+  "weights": {
+    "backbone_fiber": 40.0,
+    "distribution": 30.0
+  },
+  "layers": [
+    {
+      "layer_id": "backbone_fiber",
+      "layer_name": "Backbone Fiber",
+      "has_weight": true,
+      "weight": 40.0
+    },
+    {
+      "layer_id": "distribution",
+      "layer_name": "Distribution",
+      "has_weight": true,
+      "weight": 30.0
+    },
+    {
+      "layer_id": "poles",
+      "layer_name": "Poles",
+      "has_weight": false,
+      "weight": 0
+    }
+  ]
+}
+```
+
+### Update Layer Weights
+
+**PUT** `/api/projects/{proj_id}/layers/weights/`
+
+**Description:** Sets custom weights for project layers. Partial weighting supported - undefined layers auto-split remaining percentage.
+
+**Body:**
+
+```json
+{
+  "weights": {
+    "backbone_fiber": 40.0,
+    "distribution": 30.0,
+    "poles": 20.0,
+    "chambers": 10.0
+  }
+}
+```
+
+**Response:**
+
+```json
+{
+  "project_id": "proj_uuid",
+  "weights": {
+    "backbone_fiber": 40.0,
+    "distribution": 30.0,
+    "poles": 20.0,
+    "chambers": 10.0
+  },
+  "total_weight": 100.0
+}
+```
+
+**Error Response:**
+
+```json
+{
+  "detail": "Total weight exceeds 100% (current: 110%)"
+}
+```
+
+**Notes:**
+- Total weight cannot exceed 100%
+- Weights can be partial (e.g., only define 70%, remaining 30% auto-distributed)
+- Weights are stored per project/layer combination
+
+---
+
+## 13. Feature Approve API
+
+### Approve Features
+
+**POST** `/api/features/approve/`
+
+**Description:** Bulk approve features that are under review. Changes status from `under_review` to `approved` and sets `approved_at` timestamp.
+
+**Body:**
+
+```json
+{
+  "feature_ids": ["feature_uuid_1", "feature_uuid_2"],
+  "reviewer": "reviewer_uuid",
+  "notes": "All measurements verified and approved"
+}
+```
+
+**Response:**
+
+```json
+{
+  "approved_count": 2,
+  "feature_ids": ["feature_uuid_1", "feature_uuid_2"],
+  "reviewer_id": "reviewer_uuid",
+  "notes": "All measurements verified and approved",
+  "new_status": "approved",
+  "status_display": "Approved",
+  "approved_at": "2026-02-28T12:00:00Z"
+}
+```
+
+**Error Response:**
+
+```json
+{
+  "detail": "No features found in 'under_review' status"
+}
+```
+
+**Notes:**
+- Only features with status `under_review` can be approved
+- Approved features are included in completion rate calculations
+- Sets `approved_at` timestamp for tracking
+
+---
+
+## 14. Feature Reject API
+
+### Reject Features (Send to Redo)
+
+**POST** `/api/features/reject/`
+
+**Description:** Bulk reject features under review and send back to engineers. Changes status from `under_review` to `redo` and clears `submitted_at`.
+
+**Body:**
+
+```json
+{
+  "feature_ids": ["feature_uuid_1", "feature_uuid_2"],
+  "reviewer": "reviewer_uuid",
+  "rejection_reason": "Measurements do not match specifications. Please re-verify."
+}
+```
+
+**Response:**
+
+```json
+{
+  "rejected_count": 2,
+  "feature_ids": ["feature_uuid_1", "feature_uuid_2"],
+  "reviewer_id": "reviewer_uuid",
+  "rejection_reason": "Measurements do not match specifications. Please re-verify.",
+  "new_status": "redo",
+  "status_display": "Redo"
+}
+```
+
+**Error Response:**
+
+```json
+{
+  "detail": "No features found in 'under_review' status"
+}
+```
+
+**Notes:**
+- Only features with status `under_review` can be rejected
+- Rejected features return to `redo` status for correction
+- Clears `submitted_at` timestamp to allow re-submission
+- Rejection reason is stored in `comparison_notes` field
+
+---

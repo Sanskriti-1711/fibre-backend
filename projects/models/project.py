@@ -20,7 +20,7 @@ class Project(models.Model):
         default="draft"
     )
 
-    completion_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    standard_completion = models.DecimalField(max_digits=5, decimal_places=2, default=0)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

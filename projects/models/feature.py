@@ -37,6 +37,9 @@ class Feature(models.Model):
     field_measurements = models.JSONField(null=True, blank=True)
     comparison_notes = models.TextField(blank=True)
 
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
