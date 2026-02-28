@@ -43,6 +43,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
+    full_name = models.CharField(max_length=150, blank=True, null=True)
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.ENGINEER)
 
     created_by = models.ForeignKey(
