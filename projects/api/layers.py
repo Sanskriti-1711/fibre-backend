@@ -179,3 +179,53 @@ class ProjectFeatureDetailAPIView(APIView):
                 "layer_source": geojson_payload.get("layer", feature.layer_name),
             }
         )
+
+
+class FeaturePhotoUploadView(APIView):
+    """POST /api/features/{feature_id}/upload-photo/"""
+
+    def post(self, request, feature_id):
+        try:
+            feature = Feature.objects.get(id=feature_id)
+        except Feature.DoesNotExist:
+            return Response(
+                {"detail": "Feature not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if "photo" not in request.FILES:
+            return Response(
+                {"detail": "No photo provided"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        photo = request.FILES["photo"]
+
+        # Validate file type
+        allowed_types = ["image/jpeg", "image/png", "image/jpg"]
+        if photo.content_type not in allowed_types:
+            return Response(
+                {"detail": "Invalid file type. Only JPEG and PNG are allowed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate file size (max 10MB)
+        max_size = 10 * 1024 * 1024  # 10MB
+        if photo.size > max_size:
+            return Response(
+                {"detail": "File too large. Maximum size is 10MB."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Save the photo
+        feature.photo = photo
+        feature.save()
+
+        return Response(
+            {
+                "id": str(feature.id),
+                "photo_url": request.build_absolute_uri(feature.photo.url) if feature.photo else None,
+                "uploaded_at": feature.updated_at.isoformat(),
+            },
+            status=status.HTTP_200_OK,
+        )
