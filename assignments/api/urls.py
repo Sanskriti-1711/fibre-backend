@@ -6,7 +6,9 @@ from assignments.api.views import (
     AssignmentJobSummaryAPIView,
     EngineerActivityAPIView,
     EngineerStatsAPIView,
+    FeatureApproveAPIView,
     FeatureFieldMeasurementsAPIView,
+    FeatureRejectAPIView,
     FeatureSubmitAPIView,
     JobAssignmentsListAPIView,
 )
@@ -20,4 +22,6 @@ urlpatterns = [
     path("engineer/stats/", EngineerStatsAPIView.as_view()),
     path("features/<uuid:pk>/field-measurements/", FeatureFieldMeasurementsAPIView.as_view()),
     path("features/submit/", FeatureSubmitAPIView.as_view()),
+    path("features/approve/", FeatureApproveAPIView.as_view()),
+    path("features/reject/", FeatureRejectAPIView.as_view()),
 ]

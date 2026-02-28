@@ -158,6 +158,13 @@ Handles GPKG file upload and import pipeline.
 
 ---
 
+### Import Status
+**GET** `/api/projects/{proj_id}/import/status/`
+
+**Description:** Returns the current import status for a project.
+
+---
+
 ### Microservice Direct Import (Optional)
 **POST** `https://fiber-import.zeabur.app/import/gpkg`
 
@@ -197,53 +204,7 @@ Handles GPKG file upload and import pipeline.
 
 ---
 
-## 5. Assignments & Activity API
-
-### Create Assignment
-**POST** `/api/assignments/`
-
-**Body:**
-```json
-{
-  "project": "PROJECT_UUID",
-  "layer_name": "Duct",
-  "feature_id": "FEATURE_UUID",
-  "feature_name": "Duct #A-11",
-  "engineer": "ENGINEER_UUID"
-}
-```
-
----
-
-### Delete Assignment
-**DELETE** `/api/assignments/{assignment_id}/`
-
----
-
-### Activity List
-**GET** `/api/activity/`
-
----
-
-### Create Activity
-**POST** `/api/activity/`
-
-**Body:**
-```json
-{
-  "project": "PROJECT_UUID",
-  "event_type": "assignment.created",
-  "payload": {
-    "feature_id": "FEATURE_UUID",
-    "layer_name": "Duct",
-    "engineer_id": "ENGINEER_UUID"
-  }
-}
-```
-
----
-
-## 6. Assignment Jobs API
+## 5. Assignment Jobs API
 
 This is the new assignment job system with scope.
 
@@ -326,13 +287,16 @@ This is the new assignment job system with scope.
 **GET** `/api/assignments/summary/`
 
 **Query Parameters:**
-- `?project={proj_id}`
+- `?project={proj_id}` (optional if assignee provided)
+- `?assignee={engineer_id}` (optional if project provided)
 
-**Description:** Returns aggregated stats.
+**Description:** Returns aggregated stats. Requires at least one of project or assignee.
+
+**Note:** Either `project` or `assignee` (or both) must be provided.
 
 ---
 
-## 7. Job Assignments List API
+## 6. Job Assignments List API
 
 **GET** `/api/assignments/jobs/`
 
@@ -403,7 +367,7 @@ This is the new assignment job system with scope.
 
 ---
 
-## 8. Engineer Activity API
+## 7. Engineer Activity API
 
 ### Get Activity Timeline
 
@@ -460,7 +424,7 @@ This is the new assignment job system with scope.
 
 ---
 
-## 9. Engineer Stats API
+## 8. Engineer Stats API
 
 ### Get Performance Statistics
 
@@ -518,7 +482,7 @@ This is the new assignment job system with scope.
 
 ---
 
-## 10. Feature Field Measurements API
+## 9. Feature Field Measurements API
 
 ### Update Field Measurements
 
@@ -560,7 +524,7 @@ This is the new assignment job system with scope.
 
 ---
 
-## 11. Feature Submit API
+## 10. Feature Submit API
 
 ### Submit Features for Review
 
@@ -609,3 +573,241 @@ This is the new assignment job system with scope.
 - Features must be assigned to the specified engineer
 - Only features with status `assigned` or `redo` can be submitted
 - Features with status `approved`, `under_review`, or `pending` cannot be submitted
+
+---
+
+## 11. Completion Rate API
+
+### Get Project Completion
+
+**GET** `/api/projects/{proj_id}/completion/`
+
+**Description:** Returns standard and dynamic completion rates for a project with per-layer breakdown.
+
+**Response:**
+
+```json
+{
+  "project_id": "proj_uuid",
+  "standard_completion": 60.0,
+  "dynamic_completion": 69.0,
+  "total_features": 1000,
+  "approved_features": 600,
+  "weights_defined": true,
+  "layers": [
+    {
+      "layer_id": "backbone_fiber",
+      "layer_name": "Backbone Fiber",
+      "weight": 40.0,
+      "total_features": 100,
+      "approved_features": 80,
+      "progress_percentage": 80.0,
+      "contribution": 32.0
+    },
+    {
+      "layer_id": "distribution",
+      "layer_name": "Distribution",
+      "weight": 30.0,
+      "total_features": 300,
+      "approved_features": 150,
+      "progress_percentage": 50.0,
+      "contribution": 15.0
+    }
+  ]
+}
+```
+
+**Notes:**
+- `standard_completion`: Simple count-based percentage (approved/total × 100)
+- `dynamic_completion`: Weight-based completion (Σ layer_progress × layer_weight)
+- `weights_defined`: Indicates if custom weights have been set for this project
+- Unweighted layers receive equal share of remaining percentage automatically
+- Only features with `approved` status count toward completion
+
+---
+
+## 12. Layer Weights API
+
+### Get Layer Weights
+
+**GET** `/api/projects/{proj_id}/layers/weights/`
+
+**Description:** Returns current weight configuration for all project layers.
+
+**Response:**
+
+```json
+{
+  "project_id": "proj_uuid",
+  "weights_defined": true,
+  "total_defined_weight": 70.0,
+  "auto_weight_for_undefined": 15.0,
+  "weights": {
+    "backbone_fiber": 40.0,
+    "distribution": 30.0
+  },
+  "layers": [
+    {
+      "layer_id": "backbone_fiber",
+      "layer_name": "Backbone Fiber",
+      "has_weight": true,
+      "weight": 40.0
+    },
+    {
+      "layer_id": "distribution",
+      "layer_name": "Distribution",
+      "has_weight": true,
+      "weight": 30.0
+    },
+    {
+      "layer_id": "poles",
+      "layer_name": "Poles",
+      "has_weight": false,
+      "weight": 0
+    }
+  ]
+}
+```
+
+### Update Layer Weights
+
+**PUT** `/api/projects/{proj_id}/layers/weights/`
+
+**Description:** Sets custom weights for project layers. Partial weighting supported - undefined layers auto-split remaining percentage.
+
+**Body:**
+
+```json
+{
+  "weights": {
+    "backbone_fiber": 40.0,
+    "distribution": 30.0,
+    "poles": 20.0,
+    "chambers": 10.0
+  }
+}
+```
+
+**Response:**
+
+```json
+{
+  "project_id": "proj_uuid",
+  "weights": {
+    "backbone_fiber": 40.0,
+    "distribution": 30.0,
+    "poles": 20.0,
+    "chambers": 10.0
+  },
+  "total_weight": 100.0
+}
+```
+
+**Error Response:**
+
+```json
+{
+  "detail": "Total weight exceeds 100% (current: 110%)"
+}
+```
+
+**Notes:**
+- Total weight cannot exceed 100%
+- Weights can be partial (e.g., only define 70%, remaining 30% auto-distributed)
+- Weights are stored per project/layer combination
+
+---
+
+## 13. Feature Approve API
+
+### Approve Features
+
+**POST** `/api/features/approve/`
+
+**Description:** Bulk approve features that are under review. Changes status from `under_review` to `approved` and sets `approved_at` timestamp.
+
+**Body:**
+
+```json
+{
+  "feature_ids": ["feature_uuid_1", "feature_uuid_2"],
+  "reviewer": "reviewer_uuid",
+  "notes": "All measurements verified and approved"
+}
+```
+
+**Response:**
+
+```json
+{
+  "approved_count": 2,
+  "feature_ids": ["feature_uuid_1", "feature_uuid_2"],
+  "reviewer_id": "reviewer_uuid",
+  "notes": "All measurements verified and approved",
+  "new_status": "approved",
+  "status_display": "Approved",
+  "approved_at": "2026-02-28T12:00:00Z"
+}
+```
+
+**Error Response:**
+
+```json
+{
+  "detail": "No features found in 'under_review' status"
+}
+```
+
+**Notes:**
+- Only features with status `under_review` can be approved
+- Approved features are included in completion rate calculations
+- Sets `approved_at` timestamp for tracking
+
+---
+
+## 14. Feature Reject API
+
+### Reject Features (Send to Redo)
+
+**POST** `/api/features/reject/`
+
+**Description:** Bulk reject features under review and send back to engineers. Changes status from `under_review` to `redo` and clears `submitted_at`.
+
+**Body:**
+
+```json
+{
+  "feature_ids": ["feature_uuid_1", "feature_uuid_2"],
+  "reviewer": "reviewer_uuid",
+  "rejection_reason": "Measurements do not match specifications. Please re-verify."
+}
+```
+
+**Response:**
+
+```json
+{
+  "rejected_count": 2,
+  "feature_ids": ["feature_uuid_1", "feature_uuid_2"],
+  "reviewer_id": "reviewer_uuid",
+  "rejection_reason": "Measurements do not match specifications. Please re-verify.",
+  "new_status": "redo",
+  "status_display": "Redo"
+}
+```
+
+**Error Response:**
+
+```json
+{
+  "detail": "No features found in 'under_review' status"
+}
+```
+
+**Notes:**
+- Only features with status `under_review` can be rejected
+- Rejected features return to `redo` status for correction
+- Clears `submitted_at` timestamp to allow re-submission
+- Rejection reason is stored in `comparison_notes` field
+
+---

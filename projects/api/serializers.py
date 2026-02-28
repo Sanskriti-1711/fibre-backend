@@ -13,7 +13,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "description",
             "region",
             "status",
-            "completion_percentage",
+            "standard_completion",
             "created_at",
             "updated_at",
             "last_activity_at",

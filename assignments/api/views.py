@@ -562,14 +562,107 @@ class FeatureSubmitAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Update status to under_review
+        # Update status to under_review and set submitted_at
+        now = timezone.now()
         updated_count = features.filter(
             status__in=valid_statuses
-        ).update(status=Feature.STATUS_UNDER_REVIEW)
+        ).update(
+            status=Feature.STATUS_UNDER_REVIEW,
+            submitted_at=now
+        )
 
         return Response({
             "submitted_count": updated_count,
             "feature_ids": [str(f.id) for f in features],
             "new_status": Feature.STATUS_UNDER_REVIEW,
             "status_display": "Under Review",
+        })
+
+
+class FeatureApproveAPIView(APIView):
+    """Approve feature(s) - admin only."""
+
+    def post(self, request):
+        feature_ids = request.data.get("feature_ids", [])
+        reviewer_id = request.data.get("reviewer")
+        notes = request.data.get("notes", "")
+
+        if not feature_ids:
+            return Response(
+                {"detail": "feature_ids is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Get features that are under_review
+        features = Feature.objects.filter(
+            id__in=feature_ids,
+            status=Feature.STATUS_UNDER_REVIEW
+        )
+
+        if features.count() == 0:
+            return Response(
+                {"detail": "No features found in 'under_review' status"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Update status to approved and set approved_at
+        now = timezone.now()
+        updated_count = features.update(
+            status=Feature.STATUS_APPROVED,
+            approved_at=now
+        )
+
+        approved_ids = [str(f.id) for f in features]
+
+        return Response({
+            "approved_count": updated_count,
+            "feature_ids": approved_ids,
+            "reviewer_id": reviewer_id,
+            "notes": notes,
+            "new_status": Feature.STATUS_APPROVED,
+            "status_display": "Approved",
+            "approved_at": now.isoformat(),
+        })
+
+
+class FeatureRejectAPIView(APIView):
+    """Reject feature(s) and send back to redo - admin only."""
+
+    def post(self, request):
+        feature_ids = request.data.get("feature_ids", [])
+        reviewer_id = request.data.get("reviewer")
+        rejection_reason = request.data.get("rejection_reason", "")
+
+        if not feature_ids:
+            return Response(
+                {"detail": "feature_ids is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Get features that are under_review
+        features = Feature.objects.filter(
+            id__in=feature_ids,
+            status=Feature.STATUS_UNDER_REVIEW
+        )
+
+        if features.count() == 0:
+            return Response(
+                {"detail": "No features found in 'under_review' status"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Update status to redo and clear submitted_at (for re-submission)
+        updated_count = features.update(
+            status=Feature.STATUS_REDO,
+            submitted_at=None,
+            comparison_notes=rejection_reason
+        )
+
+        return Response({
+            "rejected_count": updated_count,
+            "feature_ids": [str(f.id) for f in features],
+            "reviewer_id": reviewer_id,
+            "rejection_reason": rejection_reason,
+            "new_status": Feature.STATUS_REDO,
+            "status_display": "Redo",
         })
