@@ -167,7 +167,7 @@ class JobAssignmentsListAPIView(APIView):
                         "assignee": {
                             "id": str(job.assignee.id),
                             "email": job.assignee.email,
-                            "initials": job.assignee.email[0].upper() if job.assignee.email else "?",
+                            "full_name": job.assignee.full_name,
                         },
                         "feature_count": total_features,
                         "status": agg_status,
@@ -187,7 +187,7 @@ class JobAssignmentsListAPIView(APIView):
                         "assignee": {
                             "id": str(job.assignee.id),
                             "email": job.assignee.email,
-                            "initials": job.assignee.email[0].upper() if job.assignee.email else "?",
+                            "full_name": job.assignee.full_name,
                         },
                         "feature": {
                             "id": str(feature.id),
