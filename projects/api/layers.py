@@ -168,7 +168,7 @@ class ProjectFeatureDetailAPIView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        feature_data = FeatureSerializer(feature).data
+        feature_data = FeatureSerializer(feature, context={'request': request}).data
 
         return Response(
             {
