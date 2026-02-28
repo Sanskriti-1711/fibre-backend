@@ -8,7 +8,7 @@ from .models import User
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ("id", "email", "role", "created_by", "created_at")
+        fields = ("id", "email", "full_name", "role", "created_by", "created_at")
         read_only_fields = fields
 
 
@@ -17,7 +17,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ("id", "email", "password", "role")
+        fields = ("id", "email", "full_name", "password", "role")
         read_only_fields = ("id",)
 
     def validate_password(self, value):
@@ -39,6 +39,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return User.objects.create_user(
             email=validated_data["email"],
             password=validated_data["password"],
+            full_name=validated_data.get("full_name"),
             role=validated_data.get("role", User.Role.ENGINEER),
             created_by=created_by,
         )
