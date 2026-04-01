@@ -158,6 +158,7 @@ CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "false").lower() ==
 
 CORS_ALLOWED_ORIGINS = [
     "https://fiberbackend.zeabur.app",
+    "https://fiber.zeabur.app",
     "https://fe.dippuzen.com",
     "https://qadmin.dippuzen.com",
     "http://127.0.0.1:5500",
