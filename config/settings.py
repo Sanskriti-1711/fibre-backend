@@ -99,7 +99,7 @@ DATABASES = {
         'PORT': '31768',
     },
     'gis': {
-        'ENGINE': 'django.contrib.gis.db.backends.postgis',
+        'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'fiber_gis',
         'USER': 'zeabur_user',
         'PASSWORD': 'ybSCV1v2RLdP90xZg73fq456uOhpD8iJ',
