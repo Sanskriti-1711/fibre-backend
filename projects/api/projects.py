@@ -97,13 +97,6 @@ class ProjectDetailAPIView(APIView):
                 except (OSError, IOError):
                     pass  # Continue even if file deletion fails
 
-        # Delete orphaned activity events (table exists but model removed from codebase)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "DELETE FROM projects_activityevent WHERE project_id = %s",
-                [str(project_id)]
-            )
-
         # All related models (Features, AssignmentJobs, ImportSessions) have
         # on_delete=CASCADE, so deleting the project will cascade delete everything
         project.delete()
