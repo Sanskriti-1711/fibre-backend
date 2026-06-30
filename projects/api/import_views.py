@@ -215,6 +215,10 @@ class GpkgImportView(APIView):
             if not layer_name or not layer_id:
                 continue
 
+            # Engineer field schema derived by the import microservice from the
+            # original GIS column names (same for every feature in the layer).
+            field_schema = layer_payload.get("field_schema")
+
             features_payload = layer_payload.get("features", [])
             if not isinstance(features_payload, list):
                 continue
@@ -233,6 +237,7 @@ class GpkgImportView(APIView):
                         "layer_name": layer_name,
                         "layer_id": layer_id,
                         "properties": properties,
+                        "field_schema": field_schema,
                         "status": Feature.STATUS_PENDING,
                     }
                 )

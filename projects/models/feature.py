@@ -28,6 +28,11 @@ class Feature(models.Model):
 
     properties = models.JSONField(default=dict)
 
+    # Engineer field schema for this feature's layer, derived from the imported
+    # GIS column names. Tells the mobile app which fields the engineer fills in
+    # (and with what widget) vs. which are read-only reference data.
+    field_schema = models.JSONField(null=True, blank=True)
+
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,

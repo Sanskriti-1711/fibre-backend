@@ -30,6 +30,7 @@ class FeatureSerializer(serializers.ModelSerializer):
             "layer_name",
             "layer_id",
             "properties",
+            "field_schema",
             "field_measurements",
             "comparison_notes",
             "status",
