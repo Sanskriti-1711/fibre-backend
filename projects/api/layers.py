@@ -5,7 +5,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from projects.models import Project, Feature
+from projects.models import Project, Feature, LayerFieldConfig
 from .serializers import FeatureSerializer
 
 
@@ -169,6 +169,20 @@ class ProjectFeatureDetailAPIView(APIView):
             )
 
         feature_data = FeatureSerializer(feature, context={'request': request}).data
+
+        # If an admin has configured this layer's fields, serve that schema
+        # instead of the auto-derived one so the engineer clients use it.
+        # Broad except so a not-yet-migrated table (deploy ordering) degrades
+        # to the derived schema rather than 500-ing this endpoint.
+        try:
+            cfg = LayerFieldConfig.objects.get(
+                project=project, layer_id=feature.layer_id
+            )
+            feature_data['field_schema'] = cfg.schema
+        except LayerFieldConfig.DoesNotExist:
+            pass
+        except Exception:
+            pass
 
         return Response(
             {

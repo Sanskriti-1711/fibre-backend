@@ -18,12 +18,17 @@ from .layers import (
 )
 from .completion import ProjectCompletionAPIView
 from .layer_weights import ProjectLayerWeightsAPIView
+from .layer_field_config import LayerFieldConfigAPIView
 
 urlpatterns = [
     path("projects/", ProjectListCreateAPIView.as_view()),
     path("projects/latest/", LatestProjectUpdatesAPIView.as_view()),
     path("projects/<uuid:project_id>/", ProjectDetailAPIView.as_view()),
     path("projects/<uuid:project_id>/layers/", ProjectLayerListAPIView.as_view()),
+    path(
+        "projects/<uuid:project_id>/layers/<str:layer_id>/field-config/",
+        LayerFieldConfigAPIView.as_view(),
+    ),
     path(
         "projects/<uuid:project_id>/layers/<str:layer_id>/",
         ProjectLayerDetailAPIView.as_view(),
