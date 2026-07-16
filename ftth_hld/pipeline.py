@@ -214,107 +214,27 @@ def generate_survey_package(project_id: str) -> bytes:
     return zip_buffer.getvalue()
 
 
-# ======================================================================
-# Step-by-step pipeline execution (new in 2.0.0)
-# ======================================================================
-
-
-def run_step(
-    project_id: str,
-    step: str,
-    input_files: dict[str, tuple[str, bytes, str]],
-    parameters: dict[str, str] | None = None,
-) -> dict:
+def delete_project(project_id: str) -> dict:
     """
-    Run a single pipeline step via the FastAPI engine.
+    Delete a project from the FastAPI engine (disk + PostGIS).
 
-    Args:
-        project_id: The project UUID.
-        step: Step name (object, polygon, network, trench, cable, duct).
-        input_files: Dict mapping form field name → (filename, bytes, content_type).
-        parameters: Dict of step-specific query/form parameters.
-
-    Returns the JSON response from the engine.
+    Returns the engine's response.
     """
-    url = _engine_url(f"/ftth/hld/run/step/{step}")
-
-    files: list = []
-    data: dict[str, str] = {"project_id": project_id}
-    if parameters:
-        data.update(parameters)
-
-    for field_name, (fname, content, content_type) in input_files.items():
-        files.append(
-            (field_name, (fname, content, content_type))
-        )
+    url = _engine_url(f"/ftth/hld/projects/{project_id}")
 
     try:
-        resp = requests.post(url, files=files, data=data, timeout=300)
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Engine unreachable for step '{step}': {exc}")
-
-    if resp.status_code not in (200, 201, 202):
+        resp = requests.delete(url, timeout=30)
+        if resp.status_code == 200:
+            return resp.json()
         detail = "Unknown error"
         try:
             body = resp.json()
             detail = body.get("detail") or body.get("message") or str(body)
         except Exception:
             detail = resp.text[:500]
-        raise RuntimeError(f"Engine returned {resp.status_code}: {detail}")
-
-    return resp.json()
-
-
-def get_pipeline_progress(project_id: str) -> dict:
-    """
-    Get the pipeline_state (step-level progress) from the FastAPI engine.
-    Used by the resume API to show which steps are done/pending/failed.
-    """
-    url = _engine_url(f"/ftth/hld/progress/{project_id}")
-    try:
-        resp = requests.get(url, timeout=10)
-        if resp.status_code == 200:
-            return resp.json()
+        return {"deleted": False, "detail": f"Engine returned {resp.status_code}: {detail}"}
     except requests.RequestException as exc:
-        logger.warning("Engine unreachable for progress %s: %s", project_id, exc)
-    return {
-        "project_id": project_id,
-        "status": "unknown",
-        "pipeline_state": None,
-    }
-
-
-
-def validate_inputs(excel_path: str, roads_path: str) -> dict:
-    """
-    Upload files to the FastAPI engine's pre-validation endpoint and return
-    the validation results (checks, pass/fail, warnings).
-    """
-    url = _engine_url("/ftth/hld/validate")
-
-    with open(excel_path, "rb") as ef, open(roads_path, "rb") as rf:
-        files = {
-            "excel": (Path(excel_path).name, ef, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-            "roads": (Path(roads_path).name, rf, "application/octet-stream"),
-        }
-        resp = requests.post(url, files=files, timeout=60)
-
-    if resp.status_code == 200:
-        return resp.json()
-    detail = "Unknown error"
-    try:
-        body = resp.json()
-        detail = body.get("detail") or body.get("message") or str(body)
-    except Exception:
-        detail = resp.text[:500]
-    return {
-        "valid": False,
-        "summary": f"Validation endpoint returned {resp.status_code}: {detail}",
-        "checks": [],
-        "pass_count": 0,
-        "warn_count": 0,
-        "fail_count": 1,
-    }
+        return {"deleted": False, "detail": f"Engine unreachable: {exc}"}
 
 
 def list_projects() -> list[dict]:

@@ -28,19 +28,17 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from .config import LAYER_NAME_MAP, PIPELINE_STEPS, STEP_DEPENDENCIES, STAGES
+from .config import LAYER_NAME_MAP, STAGES
 from .models import FtthProject
 from .pipeline import (
     HOST_OUTPUTS_DIR,
+    delete_project,
     generate_survey_package,
     get_download_file,
     get_layer_geojson,
-    get_pipeline_progress,
     get_status,
     list_projects,
     run_pipeline,
-    run_step,
-    validate_inputs,
 )
 
 
@@ -316,20 +314,27 @@ class SurveyPackageView(APIView):
         )
 
 
+
+
+
+
+
 # ======================================================================
-# GET /api/ftth/hld/progress/<project_id>/
+# DELETE /api/ftth/hld/projects/<project_id>/
 # ======================================================================
 
-class PipelineProgressView(APIView):
+class DeleteProjectView(APIView):
     """
-    Return the step-by-step pipeline_state for resume capability.
-    Shows which steps are completed, pending, or failed, along with
-    their output files.
+    Delete a pipeline project.
+
+    Proxies the delete to the FastAPI engine (removes disk + PostGIS data)
+    AND removes the Django FtthProject record.
     """
 
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, project_id):
+    def delete(self, request, project_id):
+        # Check it exists in Django first
         try:
             project = FtthProject.objects.get(pk=project_id)
         except FtthProject.DoesNotExist:
@@ -338,161 +343,24 @@ class PipelineProgressView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        progress_data = get_pipeline_progress(project_id)
+        # 1. Attempt to delete from the FastAPI engine
+        engine_result = delete_project(project_id)
+
+        # 2. Remove the Django record
+        project.delete()
+
+        # 3. Remove local cached files
+        import shutil
+        project_dir = HOST_OUTPUTS_DIR / project_id
+        if project_dir.exists():
+            shutil.rmtree(str(project_dir), ignore_errors=True)
 
         return JsonResponse({
+            "deleted": True,
             "project_id": project_id,
-            "status": progress_data.get("status", project.status),
-            "pipeline_state": progress_data.get("pipeline_state"),
-            "created_at": project.created_at.isoformat(),
-            "updated_at": project.updated_at.isoformat(),
+            "engine_deleted": engine_result.get("deleted", False),
+            "engine_detail": engine_result.get("detail"),
         })
-
-
-# ======================================================================
-# POST /api/ftth/hld/run/step/<step_name>/
-# ======================================================================
-
-class RunStepView(APIView):
-    """
-    Run an individual pipeline step.
-
-    Accepts the project_id, step-specific input files (previous step's
-    output GPKGs), and step-specific parameters. Proxies the request to
-    the FastAPI engine and returns the result.
-
-    The step name in the URL determines which algorithm runs and which
-    inputs/parameters are expected.
-    """
-
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, step_name):
-        # Validate step name
-        valid_steps = {s["name"] for s in PIPELINE_STEPS}
-        if step_name not in valid_steps:
-            return JsonResponse(
-                {"detail": f"Unknown step '{step_name}'. Valid: {', '.join(sorted(valid_steps))}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        project_id = request.POST.get("project_id")
-        if not project_id:
-            return JsonResponse(
-                {"detail": "'project_id' is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Get or create project record
-        project, created = FtthProject.objects.get_or_create(
-            pk=project_id,
-            defaults={
-                "created_by": request.user if request.user.is_authenticated else None,
-                "status": FtthProject.STATUS_QUEUED,
-            },
-        )
-
-        # Check dependency chain
-        dep = STEP_DEPENDENCIES.get(step_name)
-        if dep:
-            progress_data = get_pipeline_progress(project_id)
-            dep_state = None
-            if progress_data.get("pipeline_state"):
-                dep_state = (
-                    progress_data["pipeline_state"]
-                    .get("steps", {})
-                    .get(dep, {})
-                    .get("status")
-                )
-            if dep_state != "completed":
-                fallback_status = "pending"
-                return JsonResponse(
-                    {"detail": f"Cannot run '{step_name}' — dependency '{dep}' has status '{dep_state or fallback_status}'. Complete '{dep}' first."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-        # Collect uploaded files
-        input_files = {}
-        for field_name in request.FILES:
-            f = request.FILES[field_name]
-            input_files[field_name] = (f.name, f.read(), f.content_type)
-
-        # Collect parameters
-        parameters = dict(request.POST)
-        parameters.pop("project_id", None)
-
-        try:
-            result = run_step(project_id, step_name, input_files, parameters)
-        except RuntimeError as exc:
-            return JsonResponse(
-                {"detail": str(exc)},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        project.status = result.get("status", "queued")
-        project.save(update_fields=["status"])
-
-        return JsonResponse(result, status=status.HTTP_202_ACCEPTED)
-
-
-# ======================================================================
-# POST /api/ftth/hld/validate/
-# ======================================================================
-
-class ValidateInputsView(APIView):
-    """
-    Pre-flight validation: upload files and run quick checks
-    (plugin health, file format, bounding box) without starting
-    the full pipeline. Returns pass/fail per check.
-    """
-
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        excel = request.FILES.get("excel")
-        roads = request.FILES.get("roads")
-
-        if not excel or not roads:
-            return JsonResponse(
-                {"detail": "Both 'excel' and 'roads' files are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Save to temp location
-        project_id = uuid.uuid4().hex
-        host_input_dir = HOST_OUTPUTS_DIR / project_id / "inputs"
-        host_input_dir.mkdir(parents=True, exist_ok=True)
-
-        excel_path = host_input_dir / (excel.name or "validate_addresses.xlsx")
-        roads_path = host_input_dir / (roads.name or "validate_roads.gpkg")
-
-        with open(excel_path, "wb") as f:
-            for chunk in excel.chunks():
-                f.write(chunk)
-        with open(roads_path, "wb") as f:
-            for chunk in roads.chunks():
-                f.write(chunk)
-
-        try:
-            result = validate_inputs(
-                excel_path=str(excel_path),
-                roads_path=str(roads_path),
-            )
-        except RuntimeError as exc:
-            return JsonResponse(
-                {"valid": False, "summary": str(exc), "checks": [],
-                 "pass_count": 0, "warn_count": 0, "fail_count": 1},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-        finally:
-            # Clean up temp files
-            try:
-                import shutil
-                shutil.rmtree(str(host_input_dir.parent), ignore_errors=True)
-            except Exception:
-                pass
-
-        return JsonResponse(result)
 
 
 # ======================================================================

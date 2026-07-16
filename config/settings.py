@@ -173,6 +173,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5500",
     "http://localhost:8765",
     "http://127.0.0.1:8765",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
@@ -181,6 +183,8 @@ CSRF_TRUSTED_ORIGINS = [
     "https://qadmin.dippuzen.com",
     "http://127.0.0.1:5500",
     "http://localhost:5500",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
 ]
 
 # REST Framework + JWT Config
