@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     'users',
     'projects',
     'assignments',
+    'ftth_hld',
 ]
 
 MIDDLEWARE = [
@@ -69,45 +70,52 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'HOST': os.getenv('POSTGRES_HOST', 'fiber.crwqq2g60zoe.eu-west-2.rds.amazonaws.com'),
-#         'PORT': os.getenv('POSTGRES_PORT', '5432'),
-#         'NAME': os.getenv('POSTGRES_DB', 'postgres'),
-#         'USER': os.getenv('POSTGRES_USER', 'postgres'),
-#         'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'postgres'),
-#         'CONN_MAX_AGE': 60,
-#     },
-#     'gis': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': 'postgres',
-#         'USER': 'postgres',
-#         'PASSWORD': 'postgres',
-#         'HOST': 'postgis.crwqq2g60zoe.eu-west-2.rds.amazonaws.com',
-#         'PORT': '5432',
-#     }
+# ---------------------------------------------------------------------------
+# Database configuration
+# ---------------------------------------------------------------------------
+# Production: uses two remote PostgreSQL databases (business + GIS) on Zeabur.
+# Local dev:   uses a single local Docker PostGIS with gis + business schemas.
+#              Switch by setting FTTH_DB=local or uncommenting the local block.
+# ---------------------------------------------------------------------------
 
-# }
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'zeabur_db',
-        'USER': 'zeabur_user',
-        'PASSWORD': 'ybSCV1v2RLdP90xZg73fq456uOhpD8iJ',
-        'HOST': '43.157.58.101',
-        'PORT': '31768',
-    },
-    'gis': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'fiber_gis',
-        'USER': 'zeabur_user',
-        'PASSWORD': 'ybSCV1v2RLdP90xZg73fq456uOhpD8iJ',
-        'HOST': '43.157.58.101',
-        'PORT': '31768',
+if os.getenv("FTTH_DB", "").lower() in ("local", "dev", "docker"):
+    # Local development — share Docker PostGIS with the FastAPI engine.
+    # The Docker postgis service runs on localhost:5432 with database "ftth".
+    # Django creates its tables in the "business" schema (search_path order).
+    # The FastAPI engine uses the "gis" schema for spatial tables.
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('PGDATABASE', 'ftth'),
+            'USER': os.getenv('PGUSER', 'ftth'),
+            'PASSWORD': os.getenv('PGPASSWORD', 'ftth'),
+            'HOST': os.getenv('PGHOST', 'localhost'),
+            'PORT': os.getenv('PGPORT', '5432'),
+            'OPTIONS': {
+                'options': '-c search_path=business,public'
+            },
+        },
     }
-
-}
+else:
+    # Production — remote PostgreSQL on Zeabur
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': 'zeabur_db',
+            'USER': 'zeabur_user',
+            'PASSWORD': 'ybSCV1v2RLdP90xZg73fq456uOhpD8iJ',
+            'HOST': '43.157.58.101',
+            'PORT': '31768',
+        },
+        'gis': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': 'fiber_gis',
+            'USER': 'zeabur_user',
+            'PASSWORD': 'ybSCV1v2RLdP90xZg73fq456uOhpD8iJ',
+            'HOST': '43.157.58.101',
+            'PORT': '31768',
+        },
+    }
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
@@ -163,6 +171,8 @@ CORS_ALLOWED_ORIGINS = [
     "https://qadmin.dippuzen.com",
     "http://127.0.0.1:5500",
     "http://localhost:5500",
+    "http://localhost:8765",
+    "http://127.0.0.1:8765",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
