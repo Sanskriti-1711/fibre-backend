@@ -8,6 +8,7 @@ urlpatterns = [
     path('api/users/', include('users.urls')),
     path("api/", include("projects.api.urls")),
     path("api/", include("assignments.api.urls")),
+    path("api/", include("ftth_hld.urls")),
 ]
 
 # Serve media files in development

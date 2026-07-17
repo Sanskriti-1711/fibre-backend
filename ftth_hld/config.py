@@ -14,7 +14,7 @@ import os
 # The engine (ftth-engine/) handles Docker exec/cp for qgis_process.
 FTTH_ENGINE_URL = os.getenv(
     "FTTH_ENGINE_URL",
-    "http://localhost:8080",
+    "http://ftth.zeabur.app",
 ).rstrip("/")
 
 # ---------------------------------------------------------------------------
