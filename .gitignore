@@ -43,6 +43,9 @@ Thumbs.db
 htmlcov/
 .pytest_cache/
 
+# Pipeline sample data (large files, not for version control)
+/pipeline_samples/
+
 # Build artifacts
 dist/
 build/

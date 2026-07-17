@@ -97,23 +97,18 @@ if os.getenv("FTTH_DB", "").lower() in ("local", "dev", "docker"):
         },
     }
 else:
-    # Production — remote PostgreSQL on Zeabur
+    # Production — cloud PostgreSQL with business + gis schemas
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': 'zeabur_db',
-            'USER': 'zeabur_user',
-            'PASSWORD': 'ybSCV1v2RLdP90xZg73fq456uOhpD8iJ',
-            'HOST': '43.157.58.101',
-            'PORT': '31768',
-        },
-        'gis': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': 'fiber_gis',
-            'USER': 'zeabur_user',
-            'PASSWORD': 'ybSCV1v2RLdP90xZg73fq456uOhpD8iJ',
-            'HOST': '43.157.58.101',
-            'PORT': '31768',
+            'NAME': 'zeabur',
+            'USER': 'root',
+            'PASSWORD': 'D5o70r8Y19zhQI43FLCv2RSjuGpZm6xH',
+            'HOST': '91.98.18.217',
+            'PORT': '32467',
+            'OPTIONS': {
+                'options': '-c search_path=business,public'
+            },
         },
     }
 
