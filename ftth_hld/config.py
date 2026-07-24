@@ -98,3 +98,32 @@ SURVEY_PACKAGE_FILES = [
     "Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg",
     "BOQ.xlsx", "BOM.xlsx",
 ]
+
+# GeoJSON files to include in the survey package zip.
+# Maps the engine's output filename → the lowercase filename that will
+# appear inside the ZIP (the mobile app's parser is case-insensitive but
+# lowercase is conventional).
+#
+# The HLD engine produces these .geojson files alongside the .gpkg files.
+# Coordinates are reprojected from the source CRS (detected from the
+# GeoJSON ``crs`` field, defaulting to EPSG:25833) to EPSG:4326 (WGS84)
+# so MapLibre can render them correctly.
+SURVEY_GEOJSON_FILES = {
+    "Objects.geojson":              "objects.geojson",
+    "Polygons.geojson":             "polygons.geojson",
+    "PDPs.geojson":                 "pdps.geojson",
+    "MFG.geojson":                  "mfg.geojson",
+    "Feeder_Cable.geojson":         "feeder_cable.geojson",
+    "Distribution_Cable.geojson":   "distribution_cable.geojson",
+    "Feeder_Ducts.geojson":         "feeder_ducts.geojson",
+    "Distribution_Ducts.geojson":   "distribution_ducts.geojson",
+    "Feeder_Trench.geojson":        "feeder_trench.geojson",
+    "Distribution_Trench.geojson":  "distribution_trench.geojson",
+    "Garden_Trench.geojson":        "garden_trench.geojson",
+    "Final_Trenches.geojson":       "final_trenches.geojson",
+}
+
+# Fallback CRS when the GeoJSON has no ``crs`` field.
+# EPSG:25833 = UTM Zone 33N (used for Berlin / central Europe test data).
+# This should match the CRS of the input road network.
+DEFAULT_SOURCE_CRS = "EPSG:25833"

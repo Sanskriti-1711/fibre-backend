@@ -13,6 +13,7 @@ LLD, etc.) to reuse the same FastAPI pipeline gateway.
 import io
 import json
 import logging
+import re
 import zipfile
 from pathlib import Path
 
@@ -20,7 +21,13 @@ import requests
 
 from django.conf import settings
 
-from .config import FTTH_ENGINE_URL, STAGES, SURVEY_PACKAGE_FILES
+from .config import (
+    FTTH_ENGINE_URL,
+    STAGES,
+    SURVEY_PACKAGE_FILES,
+    SURVEY_GEOJSON_FILES,
+    DEFAULT_SOURCE_CRS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -186,10 +193,133 @@ def get_download_file(project_id: str, file_path: str) -> bytes | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# CRS reprojection helpers
+# ---------------------------------------------------------------------------
+
+# Regex to extract the EPSG code from a GeoJSON ``crs`` field like
+# ``urn:ogc:def:crs:EPSG::25833`` or ``EPSG:25833``.
+_EPSG_RE = re.compile(r"EPSG(?::|::|/)(\d+)", re.IGNORECASE)
+
+
+def _detect_crs(geojson: dict) -> str:
+    """
+    Detect the source CRS from a GeoJSON object's ``crs`` field.
+    Falls back to ``DEFAULT_SOURCE_CRS`` if not present.
+    """
+    crs = geojson.get("crs")
+    if crs and isinstance(crs, dict):
+        name = crs.get("properties", {}).get("name", "")
+        match = _EPSG_RE.search(str(name))
+        if match:
+            return f"EPSG:{match.group(1)}"
+    return DEFAULT_SOURCE_CRS
+
+
+def _reproject_geojson(geojson_bytes: bytes) -> bytes:
+    """
+    Reproject a GeoJSON FeatureCollection from its source CRS to
+    EPSG:4326 (WGS84) so that MapLibre / Mapbox can render it.
+
+    The source CRS is auto-detected from the ``crs`` field in the
+    GeoJSON. If absent, ``DEFAULT_SOURCE_CRS`` is used.
+
+    Returns the reprojected GeoJSON as bytes with the ``crs`` field
+    removed (WGS84 is the GeoJSON default).
+    """
+    try:
+        from pyproj import Transformer
+    except ImportError:
+        logger.warning(
+            "pyproj is not installed — GeoJSON will be bundled "
+            "WITHOUT reprojection. Coordinates may be wrong. "
+            "Install with: pip install pyproj"
+        )
+        return geojson_bytes
+
+    try:
+        data = json.loads(geojson_bytes)
+    except json.JSONDecodeError as exc:
+        logger.error("Invalid GeoJSON for reprojection: %s", exc)
+        return geojson_bytes  # pass through unchanged
+
+    source_crs = _detect_crs(data)
+
+    # If already WGS84, no reprojection needed
+    if source_crs.upper() in ("EPSG:4326", "WGS84"):
+        return geojson_bytes
+
+    transformer = Transformer.from_crs(source_crs, "EPSG:4326", always_xy=True)
+    features = data.get("features", [])
+    reprojected = 0
+
+    for feature in features:
+        geom = feature.get("geometry")
+        if not geom:
+            continue
+        _reproject_geometry(geom, transformer)
+        reprojected += 1
+
+    # Update / remove the CRS field — WGS84 is the GeoJSON default
+    data.pop("crs", None)
+
+    logger.info(
+        "Reprojected %d features from %s → EPSG:4326",
+        reprojected, source_crs,
+    )
+    return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
+
+def _reproject_coord(coord: list, transformer) -> list:
+    """
+    Reproject a single coordinate pair. Preserves optional Z values.
+    """
+    lng, lat = transformer.transform(coord[0], coord[1])
+    result = [lng, lat]
+    if len(coord) > 2:
+        result.append(coord[2])  # preserve elevation / Z
+    return result
+
+
+def _reproject_geometry(geom: dict, transformer) -> None:
+    """
+    Recursively reproject all coordinate pairs in a GeoJSON geometry.
+    Handles 2D and 3D coordinates. Modifies ``geom`` in place.
+    """
+    gtype = geom.get("type")
+    coords = geom.get("coordinates")
+    if coords is None:
+        return
+
+    if gtype == "Point":
+        geom["coordinates"] = _reproject_coord(coords, transformer)
+    elif gtype in ("MultiPoint", "LineString"):
+        geom["coordinates"] = [
+            _reproject_coord(c, transformer) for c in coords
+        ]
+    elif gtype in ("MultiLineString", "Polygon"):
+        geom["coordinates"] = [
+            [_reproject_coord(c, transformer) for c in ring]
+            for ring in coords
+        ]
+    elif gtype == "MultiPolygon":
+        geom["coordinates"] = [
+            [[_reproject_coord(c, transformer) for c in ring] for ring in poly]
+            for poly in coords
+        ]
+    elif gtype == "GeometryCollection":
+        for sub in geom.get("geometries", []):
+            _reproject_geometry(sub, transformer)
+
+
 def generate_survey_package(project_id: str) -> bytes:
     """
     Generate a survey package zip by fetching all GPKG + BOQ + BOM
     files from the FastAPI engine and bundling them.
+
+    Also includes GeoJSON versions of each layer, **reprojected to
+    EPSG:4326 (WGS84)**, so the mobile app can render them on MapLibre
+    without needing a GPKG reader or client-side reprojection.
 
     Returns the raw zip bytes.
     """
@@ -197,11 +327,23 @@ def generate_survey_package(project_id: str) -> bytes:
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         files_added = 0
+
+        # 1. Original GPKG + BOQ + BOM files
         for fname in SURVEY_PACKAGE_FILES:
             data = get_download_file(project_id, fname)
             if data is not None:
                 zf.writestr(fname, data)
                 files_added += 1
+
+        # 2. GeoJSON versions (reprojected to WGS84) for mobile app parsing
+        for engine_fname, zip_fname in SURVEY_GEOJSON_FILES.items():
+            raw = get_download_file(project_id, engine_fname)
+            if raw is None:
+                logger.warning("GeoJSON not found: %s/%s", project_id, engine_fname)
+                continue
+            reprojected = _reproject_geojson(raw)
+            zf.writestr(zip_fname, reprojected)
+            files_added += 1
 
     zip_buffer.seek(0)
 
