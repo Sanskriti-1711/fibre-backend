@@ -58,6 +58,7 @@ LAYER_NAME_MAP = {
     "distribution_cable":  ("Distribution_Cable",   "Distribution_Cable"),
     "feeder_ducts":        ("Feeder_Ducts",         "Feeder_Ducts"),
     "distribution_ducts":  ("Distribution_Ducts",   "Distribution_Ducts"),
+    "drop_ducts":          ("Drop_Ducts",             "Drop_Ducts"),
     "trenches":            ("Final_Trenches",       "trench_layer"),
     # Backward-compatible aliases
     "network":             ("Network",              "network_layer"),
@@ -79,7 +80,7 @@ PIPELINE_STEPS = [
     {"name": "cable",   "alg_id": "hldplanning:06_cable_layer",   "label": "Cable Layer",
      "outputs": ["Feeder_Cable.gpkg", "Distribution_Cable.gpkg"]},
     {"name": "duct",    "alg_id": "hldplanning:05_duct_layer",    "label": "Duct Layer",
-     "outputs": ["Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg"]},
+     "outputs": ["Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg"]},
 ]
 
 # Step dependency chain: which step must be completed before this one
