@@ -12,9 +12,12 @@ import os
 # ---------------------------------------------------------------------------
 # The Django ftth_hld app proxies all pipeline operations to this service.
 # The engine (ftth-engine/) handles Docker exec/cp for qgis_process.
+# IMPORTANT: the default below targets LOCAL development (the FastAPI engine
+# started on :8080 from HLD_Planning_01/web/backend). In production you MUST
+# set the FTTH_ENGINE_URL env var (e.g. https://ftth.zeabur.app) explicitly.
 FTTH_ENGINE_URL = os.getenv(
     "FTTH_ENGINE_URL",
-    "http://ftth.zeabur.app",
+    "http://localhost:8080",  # local dev: the FastAPI engine runs on :8080
 ).rstrip("/")
 
 # ---------------------------------------------------------------------------
