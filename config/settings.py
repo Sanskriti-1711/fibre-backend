@@ -182,6 +182,12 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8081",
 ]
 
+# Allow any https *.zeabur.app subdomain (future frontend/other services on
+# Zeabur).  Explicit origins above still take precedence for non-Zeabur domains.
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://[a-z0-9-]+\.zeabur\.app$",
+]
+
 CSRF_TRUSTED_ORIGINS = [
     "https://fiberbackend.zeabur.app",
     "https://fe.dippuzen.com",
