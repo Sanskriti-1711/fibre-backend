@@ -36,8 +36,8 @@ from .pipeline import (
     generate_survey_package,
     get_download_file,
     get_layer_geojson,
+    ftth_project_payloads,
     get_status,
-    list_projects,
     run_pipeline,
 )
 
@@ -388,32 +388,4 @@ class FtthProjectListView(APIView):
 
     def get(self, request):
         limit = int(request.GET.get("limit", 50))
-        qs = FtthProject.objects.all()[:limit]
-
-        engine_data = {}
-        try:
-            engine_projects = list_projects()
-            for ep in engine_projects:
-                pid = ep.get("project_id")
-                if pid:
-                    engine_data[pid] = ep
-        except Exception:
-            pass
-
-        data = []
-        for p in qs:
-            enriched = engine_data.get(p.project_id, {})
-            data.append({
-                "project_id": p.project_id,
-                "name": p.name,
-                "status": enriched.get("status", p.status),
-                "progress": enriched.get("progress", p.progress),
-                "stage_name": enriched.get("stage_name", p.stage_name),
-                "excel_filename": p.excel_filename,
-                "roads_filename": p.roads_filename,
-                "created_at": p.created_at.isoformat(),
-                "updated_at": p.updated_at.isoformat(),
-                "downloads": enriched.get("downloads", []),
-                "layers": enriched.get("layers", []),
-            })
-        return JsonResponse(data, safe=False)
+        return JsonResponse(ftth_project_payloads(limit), safe=False)

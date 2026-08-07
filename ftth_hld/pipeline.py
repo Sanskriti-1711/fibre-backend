@@ -401,3 +401,39 @@ def list_projects() -> list[dict]:
     except requests.RequestException as exc:
         logger.warning("Engine unreachable for project list: %s", exc)
     return []
+
+
+def ftth_project_payloads(limit: int = 50) -> list[dict]:
+    """Serialize FtthProject rows (DB) enriched with live engine data.
+
+    Shared by the HLD project list endpoint (/api/ftth/hld/projects/) and the
+    unified projects list (/api/projects/) so HLD rows look identical in both.
+    """
+    from .models import FtthProject
+
+    engine_data = {}
+    try:
+        for ep in list_projects():
+            pid = ep.get("project_id")
+            if pid:
+                engine_data[pid] = ep
+    except Exception:
+        pass
+
+    data = []
+    for p in FtthProject.objects.all()[:limit]:
+        enriched = engine_data.get(p.project_id, {})
+        data.append({
+            "project_id": p.project_id,
+            "name": p.name,
+            "status": enriched.get("status", p.status),
+            "progress": enriched.get("progress", p.progress),
+            "stage_name": enriched.get("stage_name", p.stage_name),
+            "excel_filename": p.excel_filename,
+            "roads_filename": p.roads_filename,
+            "created_at": p.created_at.isoformat(),
+            "updated_at": p.updated_at.isoformat(),
+            "downloads": enriched.get("downloads", []),
+            "layers": enriched.get("layers", []),
+        })
+    return data

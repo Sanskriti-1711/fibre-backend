@@ -9,6 +9,7 @@ from django.db import connection
 
 from projects.models.project import Project
 from projects.models.import_session import ImportSession
+from ftth_hld.pipeline import ftth_project_payloads
 from .serializers import ProjectSerializer
 
 
@@ -34,8 +35,35 @@ class ProjectListCreateAPIView(APIView):
         if region_filter:
             qs = qs.filter(region__icontains=region_filter)
 
-        serializer = ProjectSerializer(qs, many=True)
-        return Response(serializer.data)
+        # kind: 'survey' (default) | 'hld' | 'all' — which project kinds to
+        # return. Survey-only by default so downstream consumers (job dropdowns,
+        # approval queues) never see HLD run ids; the projects page opts into
+        # 'all' for the unified view.
+        kind = request.GET.get("kind", "survey").lower()
+
+        survey = ProjectSerializer(qs, many=True).data
+        for item in survey:
+            item["type"] = "survey"
+
+        hld = []
+        if kind in ("hld", "all"):
+            # HLD pipeline runs (FtthProject). Runs have no region, so a region
+            # filter excludes them; a status filter matches their own statuses
+            # (queued / running / completed / failed).
+            hld = ftth_project_payloads(limit=100)
+            if status_filter:
+                hld = [h for h in hld if h.get("status") == status_filter]
+            if region_filter:
+                hld = []
+            for item in hld:
+                item["type"] = "hld"
+
+        if kind == "hld":
+            return Response(hld)
+
+        merged = survey + hld
+        merged.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+        return Response(merged)
 
     def post(self, request):
         serializer = ProjectSerializer(data=request.data)
