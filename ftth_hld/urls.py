@@ -9,6 +9,7 @@ from django.urls import path
 
 from .api import (
     DeleteProjectView,
+    DesignPackageView,
     DownloadFileView,
     FtthProjectListView,
     LayerGeoJSONView,
@@ -32,9 +33,13 @@ urlpatterns = [
     path("ftth/hld/download/<str:project_id>/<path:file_path>",
          DownloadFileView.as_view(), name="ftth-download"),
 
-    # GET  /api/ftth/hld/results/<id>/survey-package/ — ZIP of all GPKGs + BOQ + BOM
+    # GET  /api/ftth/hld/results/<id>/survey-package/ — field-survey subset (ZIP)
     path("ftth/hld/results/<str:project_id>/survey-package/",
          SurveyPackageView.as_view(), name="ftth-survey-package"),
+
+    # GET  /api/ftth/hld/results/<id>/design-package/ — full design package (ZIP)
+    path("ftth/hld/results/<str:project_id>/design-package/",
+         DesignPackageView.as_view(), name="ftth-design-package"),
 
     # GET  /api/ftth/hld/projects/ — list recent pipeline runs
     path("ftth/hld/projects/", FtthProjectListView.as_view(), name="ftth-projects"),

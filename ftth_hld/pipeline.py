@@ -22,11 +22,13 @@ import requests
 from django.conf import settings
 
 from .config import (
+    DEFAULT_SOURCE_CRS,
+    DESIGN_GEOJSON_FILES,
+    DESIGN_PACKAGE_FILES,
     FTTH_ENGINE_URL,
     STAGES,
-    SURVEY_PACKAGE_FILES,
     SURVEY_GEOJSON_FILES,
-    DEFAULT_SOURCE_CRS,
+    SURVEY_PACKAGE_FILES,
 )
 
 logger = logging.getLogger(__name__)
@@ -324,31 +326,31 @@ def _reproject_geometry(geom: dict, transformer) -> None:
             _reproject_geometry(sub, transformer)
 
 
-def generate_survey_package(project_id: str) -> bytes:
+def _build_package_zip(project_id: str, gpkg_files: list, geojson_map: dict,
+                         label: str) -> bytes:
     """
-    Generate a survey package zip by fetching all GPKG + BOQ + BOM
-    files from the FastAPI engine and bundling them.
+    Build a ZIP of pipeline outputs fetched from the FastAPI engine.
 
-    Also includes GeoJSON versions of each layer, **reprojected to
-    EPSG:4326 (WGS84)**, so the mobile app can render them on MapLibre
-    without needing a GPKG reader or client-side reprojection.
-
-    Returns the raw zip bytes.
+    Each file in ``gpkg_files`` is bundled under its original engine
+    filename. Each entry in ``geojson_map`` (engine filename → zip
+    filename) is bundled **reprojected to EPSG:4326 (WGS84)** so the
+    layers render on MapLibre / web viewers without client-side
+    reprojection. ``label`` is used in the "no files found" error.
     """
     zip_buffer = io.BytesIO()
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         files_added = 0
 
-        # 1. Original GPKG + BOQ + BOM files
-        for fname in SURVEY_PACKAGE_FILES:
+        # 1. Original GPKG / document files
+        for fname in gpkg_files:
             data = get_download_file(project_id, fname)
             if data is not None:
                 zf.writestr(fname, data)
                 files_added += 1
 
-        # 2. GeoJSON versions (reprojected to WGS84) for mobile app parsing
-        for engine_fname, zip_fname in SURVEY_GEOJSON_FILES.items():
+        # 2. GeoJSON versions (reprojected to WGS84)
+        for engine_fname, zip_fname in geojson_map.items():
             raw = get_download_file(project_id, engine_fname)
             if raw is None:
                 logger.warning("GeoJSON not found: %s/%s", project_id, engine_fname)
@@ -361,11 +363,83 @@ def generate_survey_package(project_id: str) -> bytes:
 
     if files_added == 0:
         raise FileNotFoundError(
-            f"No survey files found for project '{project_id}'. "
+            f"No {label} files found for project '{project_id}'. "
             "The pipeline may still be running."
         )
 
     return zip_buffer.getvalue()
+
+
+def generate_survey_package(project_id: str) -> bytes:
+    """
+    Generate the **field-survey package** zip — the compact subset a
+    surveyor needs on site: polygons, PDPs, cables, chambers, final
+    trenches, ducts (incl. drop ducts) and existing brownfield
+    infrastructure.
+
+    Includes GPKG files plus GeoJSON versions **reprojected to
+    EPSG:4326 (WGS84)** so the mobile app can render them on MapLibre
+    without needing a GPKG reader or client-side reprojection.
+
+    Returns the raw zip bytes.
+    """
+    return _build_package_zip(
+        project_id,
+        SURVEY_PACKAGE_FILES,
+        SURVEY_GEOJSON_FILES,
+        "survey",
+    )
+
+
+def generate_design_package(project_id: str) -> bytes:
+    """
+    Generate the **HLD design package** zip — the full deliverable for
+    a design engineer: every output layer (objects, polygons, PDPs,
+    MFG, all trenches, cables, ducts, chambers, poles, brownfield) plus
+    the generated documents (BOQ / BOM) and WGS84 GeoJSON versions.
+
+    Prefers the engine's own ``downloads`` list (from status.json) so
+    newly added layers are picked up automatically, and falls back to
+    the curated ``DESIGN_PACKAGE_FILES`` list when the engine has not
+    reported any downloads (e.g. engine unreachable). Raw inputs
+    (address Excel, road network, brownfield source files) are excluded
+    from the deliverable.
+
+    Returns the raw zip bytes.
+    """
+    status = _read_status(project_id) or {}
+    downloads = status.get("downloads") or []
+
+    names = []
+    for dl in downloads:
+        n = dl.get("name") if isinstance(dl, dict) else str(dl)
+        if not n or n.startswith(("inputs/", "brownfield/")):
+            continue  # raw source inputs are not design deliverables
+        if n.lower().endswith(".geojson"):
+            # Known layers are added reprojected (WGS84) via the map
+            # below; keep any brand-new geojson raw so nothing is lost.
+            if n not in DESIGN_GEOJSON_FILES:
+                names.append(n)
+            continue
+        names.append(n)
+
+    # Deduplicate while preserving order
+    seen = set()
+    ordered = []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            ordered.append(n)
+
+    if not ordered:
+        ordered = list(DESIGN_PACKAGE_FILES)
+
+    return _build_package_zip(
+        project_id,
+        ordered,
+        DESIGN_GEOJSON_FILES,
+        "design",
+    )
 
 
 def delete_project(project_id: str) -> dict:

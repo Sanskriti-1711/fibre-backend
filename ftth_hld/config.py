@@ -105,19 +105,23 @@ STEP_DEPENDENCIES = {
     "duct": "trench",
 }
 
-# List of output files to include in the survey package zip
+# ======================================================================
+# FIELD SURVEY PACKAGE — compact subset a surveyor needs in the field.
+# Planned network (polygons / PDPs / cables / chambers / final trenches /
+# ducts incl. drop) + existing brownfield infrastructure.
+# ======================================================================
+
+# GPKG files to include in the field-survey package zip.
 SURVEY_PACKAGE_FILES = [
-    "Objects.gpkg", "Polygons.gpkg", "PDPs.gpkg", "MFG.gpkg",
-    "Feeder_Trench.gpkg", "Distribution_Trench.gpkg", "Garden_Trench.gpkg",
-    "Drill_Trench.gpkg", "Final_Trenches.gpkg",
+    "Polygons.gpkg", "PDPs.gpkg",
     "Feeder_Cable.gpkg", "Distribution_Cable.gpkg",
-    "Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg",
-    "Chambers.gpkg", "Poles.gpkg",
+    "Chambers.gpkg",
+    "Final_Trenches.gpkg",
+    "Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg",
     "Existing_Infrastructure.gpkg", "Existing_Infrastructure_Points.gpkg",
-    "BOQ.xlsx", "BOM.xlsx",
 ]
 
-# GeoJSON files to include in the survey package zip.
+# GeoJSON files to include in the field-survey package zip.
 # Maps the engine's output filename → the lowercase filename that will
 # appear inside the ZIP (the mobile app's parser is case-insensitive but
 # lowercase is conventional).
@@ -127,6 +131,39 @@ SURVEY_PACKAGE_FILES = [
 # GeoJSON ``crs`` field, defaulting to EPSG:25833) to EPSG:4326 (WGS84)
 # so MapLibre can render them correctly.
 SURVEY_GEOJSON_FILES = {
+    "Polygons.geojson":             "polygons.geojson",
+    "PDPs.geojson":                 "pdps.geojson",
+    "Feeder_Cable.geojson":         "feeder_cable.geojson",
+    "Distribution_Cable.geojson":   "distribution_cable.geojson",
+    "Chambers.geojson":             "chambers.geojson",
+    "Final_Trenches.geojson":       "final_trenches.geojson",
+    "Feeder_Ducts.geojson":         "feeder_ducts.geojson",
+    "Distribution_Ducts.geojson":   "distribution_ducts.geojson",
+    "Drop_Ducts.geojson":           "drop_ducts.geojson",
+    "Existing_Infrastructure.geojson":       "existing_infrastructure.geojson",
+    "Existing_Infrastructure_Points.geojson": "existing_infrastructure_points.geojson",
+}
+
+# ======================================================================
+# HLD DESIGN PACKAGE — every output layer + generated documents.
+# This is the full deliverable a design engineer opens in QGIS.
+# ======================================================================
+
+# GPKG files to include in the full design package zip.
+DESIGN_PACKAGE_FILES = [
+    "Objects.gpkg", "Polygons.gpkg", "PDPs.gpkg", "MFG.gpkg",
+    "Feeder_Trench.gpkg", "Distribution_Trench.gpkg", "Garden_Trench.gpkg",
+    "Drill_Trench.gpkg", "Final_Trenches.gpkg", "Pseudo_HH.gpkg",
+    "Feeder_Cable.gpkg", "Distribution_Cable.gpkg",
+    "Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg",
+    "Chambers.gpkg", "Poles.gpkg",
+    "Existing_Infrastructure.gpkg", "Existing_Infrastructure_Points.gpkg",
+    "BOQ.xlsx", "BOM.xlsx",
+]
+
+# GeoJSON files to include in the full design package zip (reprojected to
+# WGS84 so they open anywhere, including web viewers).
+DESIGN_GEOJSON_FILES = {
     "Objects.geojson":              "objects.geojson",
     "Polygons.geojson":             "polygons.geojson",
     "PDPs.geojson":                 "pdps.geojson",
@@ -135,6 +172,7 @@ SURVEY_GEOJSON_FILES = {
     "Distribution_Cable.geojson":   "distribution_cable.geojson",
     "Feeder_Ducts.geojson":         "feeder_ducts.geojson",
     "Distribution_Ducts.geojson":   "distribution_ducts.geojson",
+    "Drop_Ducts.geojson":           "drop_ducts.geojson",
     "Feeder_Trench.geojson":        "feeder_trench.geojson",
     "Distribution_Trench.geojson":  "distribution_trench.geojson",
     "Garden_Trench.geojson":        "garden_trench.geojson",

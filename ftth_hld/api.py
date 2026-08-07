@@ -33,6 +33,7 @@ from .models import FtthProject
 from .pipeline import (
     HOST_OUTPUTS_DIR,
     delete_project,
+    generate_design_package,
     generate_survey_package,
     get_download_file,
     get_layer_geojson,
@@ -327,6 +328,60 @@ class SurveyPackageView(APIView):
 
 
 
+
+
+# ======================================================================
+# GET /api/ftth/hld/results/<project_id>/design-package/
+# ======================================================================
+
+class DesignPackageView(APIView):
+    """
+    Generate and download the HLD design package — a single ZIP with
+    every output layer (GPKG + WGS84 GeoJSON) plus the BOQ / BOM and
+    any other generated documents.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id):
+        try:
+            project = FtthProject.objects.get(pk=project_id)
+        except FtthProject.DoesNotExist:
+            return JsonResponse(
+                {"detail": "Project not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if project.status not in (FtthProject.STATUS_COMPLETED, "completed"):
+            return JsonResponse(
+                {"detail": "Pipeline has not completed yet. Design package is only "
+                           "available for completed pipelines."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            zip_bytes = generate_design_package(project_id)
+        except FileNotFoundError as exc:
+            return JsonResponse(
+                {"detail": str(exc)},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except Exception as exc:
+            return JsonResponse(
+                {"detail": f"Failed to generate design package: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        zip_name = f"{project_id}_design_package.zip"
+
+        return HttpResponse(
+            zip_bytes,
+            content_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{zip_name}"',
+                "Content-Length": str(len(zip_bytes)),
+            },
+        )
 
 
 # ======================================================================
