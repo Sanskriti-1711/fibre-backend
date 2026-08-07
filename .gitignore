@@ -21,6 +21,7 @@ db.sqlite3-journal
 .env
 .env.*
 *.env
+!.env.example
 
 # Virtual environments
 venv/

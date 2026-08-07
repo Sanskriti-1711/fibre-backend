@@ -10,10 +10,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-%p=ow#x9d^a8!#t%5p-m0#@(29wyu1f258$ae$a77_jz1rppf0'
+# Production must set DJANGO_SECRET_KEY (Zeabur service variable).
+SECRET_KEY = os.getenv(
+    "DJANGO_SECRET_KEY",
+    "django-insecure-dev-only-do-not-use-in-production",
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Default: DEBUG on for local dev (FTTH_DB=local/dev/docker), off otherwise.
+# Override explicitly with DJANGO_DEBUG=true|false in the environment.
+DEBUG = os.getenv(
+    "DJANGO_DEBUG",
+    "true" if os.getenv("FTTH_DB", "").lower() in ("local", "dev", "docker") else "false",
+).lower() == "true"
 
 ALLOWED_HOSTS = ["*"]
 
@@ -102,11 +111,11 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': 'zeabur',
-            'USER': 'root',
-            'PASSWORD': 'D5o70r8Y19zhQI43FLCv2RSjuGpZm6xH',
-            'HOST': '91.98.18.217',
-            'PORT': '32467',
+            'NAME': os.getenv('PGDATABASE', 'zeabur'),
+            'USER': os.getenv('PGUSER', 'root'),
+            'PASSWORD': os.getenv('PGPASSWORD'),
+            'HOST': os.getenv('PGHOST', '91.98.18.217'),
+            'PORT': os.getenv('PGPORT', '32467'),
             'OPTIONS': {
                 'options': '-c search_path=business,public'
             },
