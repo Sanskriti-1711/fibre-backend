@@ -13,16 +13,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Production must set DJANGO_SECRET_KEY (Zeabur service variable).
 SECRET_KEY = os.getenv(
     "DJANGO_SECRET_KEY",
-    "django-insecure-dev-only-do-not-use-in-production",
+    "django-insecure-%p=ow#x9d^a8!#t%5p-m0#@(29wyu1f258$ae$a77_jz1rppf0",
 )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-# Default: DEBUG on for local dev (FTTH_DB=local/dev/docker), off otherwise.
-# Override explicitly with DJANGO_DEBUG=true|false in the environment.
-DEBUG = os.getenv(
-    "DJANGO_DEBUG",
-    "true" if os.getenv("FTTH_DB", "").lower() in ("local", "dev", "docker") else "false",
-).lower() == "true"
+# Default: DEBUG on (original behavior); set DJANGO_DEBUG=false in production.
+DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
 
 ALLOWED_HOSTS = ["*"]
 
@@ -107,13 +103,15 @@ if os.getenv("FTTH_DB", "").lower() in ("local", "dev", "docker"):
         },
     }
 else:
-    # Production — cloud PostgreSQL with business + gis schemas
+    # Production — cloud PostgreSQL with business + gis schemas.
+    # Env vars override these shared Zeabur DB credentials; the hardcoded
+    # fallback keeps production (and any services sharing this DB) unaffected.
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.getenv('PGDATABASE', 'zeabur'),
             'USER': os.getenv('PGUSER', 'root'),
-            'PASSWORD': os.getenv('PGPASSWORD'),
+            'PASSWORD': os.getenv('PGPASSWORD', 'D5o70r8Y19zhQI43FLCv2RSjuGpZm6xH'),
             'HOST': os.getenv('PGHOST', '91.98.18.217'),
             'PORT': os.getenv('PGPORT', '32467'),
             'OPTIONS': {
