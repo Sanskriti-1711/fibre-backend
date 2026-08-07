@@ -563,6 +563,7 @@ class SurveyFeature(models.Model):
         default=SyncState.PENDING,
     )
     change_reason = models.TextField(blank=True, default='', help_text='Why the engineer made this change')
+    review_notes = models.TextField(blank=True, default='', help_text='Planner/approver notes from the approval decision')
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

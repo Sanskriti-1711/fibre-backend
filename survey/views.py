@@ -45,6 +45,22 @@ def _get_engineer(request):
     return request.user
 
 
+def _survey_scope(request, qs):
+    """Scope survey data by role.
+
+    Engineers see only their own survey rows. Platform (SUBADMIN) users see
+    all engineers' data — needed for planner review / LLD — and may narrow
+    to a single engineer with ``?engineer=<user_id>``.
+    """
+    user = request.user
+    if getattr(user, 'role', None) == 'SUBADMIN':
+        engineer_id = request.GET.get('engineer')
+        if engineer_id:
+            qs = qs.filter(engineer_id=engineer_id)
+        return qs
+    return qs.filter(engineer=user)
+
+
 def _paginate(request, queryset, serializer_class, context=None):
     """Paginate a queryset and return a standardised paginated response.
 
@@ -362,7 +378,7 @@ class SurveyChangeListAPIView(APIView):
 
     def get(self, request):
         engineer = _get_engineer(request)
-        qs = SurveyChange.objects.filter(engineer=engineer)
+        qs = _survey_scope(request, SurveyChange.objects.all())
         feature_id = request.GET.get('feature')
         field_name = request.GET.get('field_name')
         if feature_id:
@@ -392,7 +408,7 @@ class SurveyStatusAPIView(APIView):
         if feature_id:
             qs = SurveyStatus.objects.filter(feature_id=feature_id)
         else:
-            qs = SurveyStatus.objects.filter(engineer=engineer)
+            qs = _survey_scope(request, SurveyStatus.objects.all())
         if status_filter:
             qs = qs.filter(status=status_filter)
         qs = _apply_date_filter(qs, request, 'updated_at')
@@ -510,7 +526,7 @@ class SurveyFeatureListCreateAPIView(APIView):
 
     def get(self, request):
         engineer = _get_engineer(request)
-        qs = SurveyFeature.objects.filter(engineer=engineer)
+        qs = _survey_scope(request, SurveyFeature.objects.all())
         project_id = request.GET.get('project')
         layer_id = request.GET.get('layer_id')
         survey_status = request.GET.get('survey_status')
@@ -544,8 +560,8 @@ class SurveyFeatureDetailAPIView(APIView):
        DELETE /api/survey/survey-features/<id>/ — remove a survey feature"""
 
     def get(self, request, feature_id):
-        engineer = _get_engineer(request)
-        sf = get_object_or_404(SurveyFeature, id=feature_id, engineer=engineer)
+        qs = _survey_scope(request, SurveyFeature.objects.all())
+        sf = get_object_or_404(qs, id=feature_id)
         serializer = SurveyFeatureSerializer(sf)
         return Response(serializer.data)
 
@@ -559,6 +575,13 @@ class SurveyFeatureDetailAPIView(APIView):
             if 'survey_geometry' in data or 'survey_attributes' in data:
                 sf.version_number = (sf.version_number or 1) + 1
                 if sf.survey_status == SurveyFeature.SurveyStatus.NEW:
+                    sf.survey_status = SurveyFeature.SurveyStatus.MODIFIED
+                elif sf.survey_status in (
+                    SurveyFeature.SurveyStatus.APPROVED,
+                    SurveyFeature.SurveyStatus.REJECTED,
+                    SurveyFeature.SurveyStatus.COMPLETED,
+                ):
+                    # Re-edit after a decision -> re-enter the approval queue
                     sf.survey_status = SurveyFeature.SurveyStatus.MODIFIED
                 sf.sync_status = SurveyFeature.SyncState.PENDING
             serializer.save(version_number=sf.version_number,
@@ -611,6 +634,13 @@ class SurveyFeatureUpsertAPIView(APIView):
                 if 'survey_geometry' in data or 'survey_attributes' in data:
                     extra['version_number'] = (sf.version_number or 1) + 1
                     if sf.survey_status == SurveyFeature.SurveyStatus.NEW:
+                        extra['survey_status'] = SurveyFeature.SurveyStatus.MODIFIED
+                    elif sf.survey_status in (
+                        SurveyFeature.SurveyStatus.APPROVED,
+                        SurveyFeature.SurveyStatus.REJECTED,
+                        SurveyFeature.SurveyStatus.COMPLETED,
+                    ):
+                        # Re-edit after a decision -> re-enter the approval queue
                         extra['survey_status'] = SurveyFeature.SurveyStatus.MODIFIED
                     extra['sync_status'] = SurveyFeature.SyncState.PENDING
             serializer.save(engineer=engineer, **extra)
@@ -666,3 +696,40 @@ class SurveyFeaturePhotoUploadView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class SurveyFeatureApprovalAPIView(APIView):
+    """POST /api/survey/survey-features/<id>/approval/
+
+    Planner-only (SUBADMIN) decision endpoint.
+
+    Body: { decision: 'approve' | 'redo', notes?: str }
+    - approve -> survey_status = approved
+    - redo    -> survey_status = rejected (engineer sees the notes)
+    """
+
+    def post(self, request, feature_id):
+        if getattr(request.user, 'role', None) != 'SUBADMIN':
+            return Response(
+                {'error': 'Only planners (SUBADMIN) can approve survey changes'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        sf = get_object_or_404(SurveyFeature, id=feature_id)
+        decision = request.data.get('decision')
+        notes = request.data.get('notes', '') or ''
+
+        if decision == 'approve':
+            sf.survey_status = SurveyFeature.SurveyStatus.APPROVED
+        elif decision == 'redo':
+            sf.survey_status = SurveyFeature.SurveyStatus.REJECTED
+        else:
+            return Response(
+                {'error': "decision must be 'approve' or 'redo'"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        sf.review_notes = notes
+        sf.save(update_fields=['survey_status', 'review_notes', 'updated_at'])
+        serializer = SurveyFeatureSerializer(sf, context={'request': request})
+        return Response(serializer.data)

@@ -182,7 +182,7 @@ class SurveyFeatureSerializer(serializers.ModelSerializer):
             'survey_geometry', 'survey_attributes',
             'photo_url',
             'survey_status', 'version_number',
-            'sync_status', 'change_reason',
+            'sync_status', 'change_reason', 'review_notes',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'engineer', 'created_at', 'updated_at']
