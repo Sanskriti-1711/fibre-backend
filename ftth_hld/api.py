@@ -58,6 +58,7 @@ class RunPipelineView(APIView):
     def post(self, request):
         excel = request.FILES.get("excel")
         roads = request.FILES.get("roads")
+        brownfield = request.FILES.get("brownfield")
         name = request.POST.get("name", "")
         poly_method = int(request.POST.get("poly_method", 3))
 
@@ -98,6 +99,14 @@ class RunPipelineView(APIView):
             for chunk in roads.chunks():
                 f.write(chunk)
 
+        # Optional brownfield (existing infrastructure) ZIP / vector file
+        brownfield_path = None
+        if brownfield:
+            brownfield_path = host_input_dir / (brownfield.name or "brownfield.zip")
+            with open(brownfield_path, "wb") as f:
+                for chunk in brownfield.chunks():
+                    f.write(chunk)
+
         FtthProject.objects.create(
             project_id=project_id,
             name=name,
@@ -114,6 +123,7 @@ class RunPipelineView(APIView):
                 project_id=project_id,
                 name=name,
                 poly_method=poly_method,
+                brownfield_path=str(brownfield_path) if brownfield_path else None,
             )
         except RuntimeError as exc:
             return JsonResponse(

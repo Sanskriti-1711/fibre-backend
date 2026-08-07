@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     'projects',
     'assignments',
     'ftth_hld',
+    'survey',
 ]
 
 MIDDLEWARE = [
@@ -170,6 +171,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8765",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
@@ -180,6 +183,8 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5500",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
 ]
 
 # REST Framework + JWT Config

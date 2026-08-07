@@ -12,13 +12,22 @@ import os
 # ---------------------------------------------------------------------------
 # The Django ftth_hld app proxies all pipeline operations to this service.
 # The engine (ftth-engine/) handles Docker exec/cp for qgis_process.
-# IMPORTANT: the default below targets LOCAL development (the FastAPI engine
-# started on :8080 from HLD_Planning_01/web/backend). In production you MUST
-# set the FTTH_ENGINE_URL env var (e.g. https://ftth.zeabur.app) explicitly.
-FTTH_ENGINE_URL = os.getenv(
-    "FTTH_ENGINE_URL",
-    "http://localhost:8080",  # local dev: the FastAPI engine runs on :8080
-).rstrip("/")
+#
+# Resolution order:
+#   1. FTTH_ENGINE_URL env var (always wins — set this on Zeabur if the
+#      production engine moves).
+#   2. Local development (FTTH_DB=local|dev|docker — same flag settings.py
+#      uses) → http://localhost:8080 (the FastAPI engine started from
+#      HLD_Planning_01/web/backend).
+#   3. Production default → https://ftth.zeabur.app (live engine built from
+#      the sanskriti17/ftth_planning Docker image).
+def _default_engine_url() -> str:
+    if os.getenv("FTTH_DB", "").lower() in ("local", "dev", "docker"):
+        return "http://localhost:8080"
+    return "https://ftth.zeabur.app"
+
+
+FTTH_ENGINE_URL = os.getenv("FTTH_ENGINE_URL", _default_engine_url()).rstrip("/")
 
 # ---------------------------------------------------------------------------
 # Pipeline stages
@@ -59,6 +68,9 @@ LAYER_NAME_MAP = {
     "feeder_ducts":        ("Feeder_Ducts",         "Feeder_Ducts"),
     "distribution_ducts":  ("Distribution_Ducts",   "Distribution_Ducts"),
     "drop_ducts":          ("Drop_Ducts",             "Drop_Ducts"),
+    "chambers":            ("Chambers",             "Chambers"),
+    "poles":               ("Poles",                "Poles"),
+    "brownfield":          ("Existing_Infrastructure", "brownfield"),
     "trenches":            ("Final_Trenches",       "trench_layer"),
     # Backward-compatible aliases
     "network":             ("Network",              "network_layer"),
@@ -100,6 +112,8 @@ SURVEY_PACKAGE_FILES = [
     "Drill_Trench.gpkg", "Final_Trenches.gpkg",
     "Feeder_Cable.gpkg", "Distribution_Cable.gpkg",
     "Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg",
+    "Chambers.gpkg", "Poles.gpkg",
+    "Existing_Infrastructure.gpkg", "Existing_Infrastructure_Points.gpkg",
     "BOQ.xlsx", "BOM.xlsx",
 ]
 
@@ -125,6 +139,10 @@ SURVEY_GEOJSON_FILES = {
     "Distribution_Trench.geojson":  "distribution_trench.geojson",
     "Garden_Trench.geojson":        "garden_trench.geojson",
     "Final_Trenches.geojson":       "final_trenches.geojson",
+    "Chambers.geojson":             "chambers.geojson",
+    "Poles.geojson":                "poles.geojson",
+    "Existing_Infrastructure.geojson":       "existing_infrastructure.geojson",
+    "Existing_Infrastructure_Points.geojson": "existing_infrastructure_points.geojson",
 }
 
 # Fallback CRS when the GeoJSON has no ``crs`` field.

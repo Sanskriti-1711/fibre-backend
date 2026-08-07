@@ -74,9 +74,13 @@ def _write_status(data):
 
 def run_pipeline(excel_path: str, roads_path: str,
                  project_id: str = None, name: str = "",
-                 poly_method: int = 3) -> dict:
+                 poly_method: int = 3, brownfield_path: str = None) -> dict:
     """
     Upload files to the FastAPI engine and start a pipeline run.
+
+    ``brownfield_path`` is optional: a ZIP (or single vector file) of
+    existing infrastructure layers that the engine unzips and feeds to
+    the pipeline's BF_* parameters (USE_BROWNFIELD=true).
 
     Returns the JSON response from the engine (which includes
     ``project_id``, ``status``, etc.).
@@ -88,6 +92,12 @@ def run_pipeline(excel_path: str, roads_path: str,
             "excel": (Path(excel_path).name, ef, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
             "roads": (Path(roads_path).name, rf, "application/octet-stream"),
         }
+        if brownfield_path:
+            files["brownfield"] = (
+                Path(brownfield_path).name,
+                open(brownfield_path, "rb"),
+                "application/octet-stream",
+            )
         data = {"poly_method": str(poly_method)}
         if name:
             data["name"] = name
@@ -95,6 +105,8 @@ def run_pipeline(excel_path: str, roads_path: str,
             data["project_id"] = project_id
 
         resp = requests.post(url, files=files, data=data, timeout=120)
+        if "brownfield" in files:
+            files["brownfield"][1].close()
 
     if resp.status_code not in (200, 201, 202):
         detail = "Unknown error"

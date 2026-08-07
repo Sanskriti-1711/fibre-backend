@@ -160,6 +160,15 @@ class SurveyFeatureSerializer(serializers.ModelSerializer):
     engineer_name = serializers.CharField(source='engineer.full_name', read_only=True)
     project_name = serializers.CharField(source='project.name', read_only=True)
     hld_feature_id = serializers.UUIDField(source='original_hld_feature_id', read_only=True)
+    photo_url = serializers.SerializerMethodField()
+
+    def get_photo_url(self, obj):
+        if obj.photo:
+            request = self.context.get('request')
+            if request is not None:
+                return request.build_absolute_uri(obj.photo.url)
+            return obj.photo.url
+        return None
 
     class Meta:
         model = SurveyFeature
@@ -171,6 +180,7 @@ class SurveyFeatureSerializer(serializers.ModelSerializer):
             'layer_id', 'layer_name',
             'original_geometry', 'original_attributes',
             'survey_geometry', 'survey_attributes',
+            'photo_url',
             'survey_status', 'version_number',
             'sync_status', 'change_reason',
             'created_at', 'updated_at',

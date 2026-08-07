@@ -540,6 +540,16 @@ class SurveyFeature(models.Model):
     survey_geometry = models.JSONField(help_text='Engineer-edited geometry')
     survey_attributes = models.JSONField(default=dict, help_text='Engineer-edited attributes')
 
+    # Field evidence photo — engineers can attach a photo to engineer-created
+    # points (no HLD feature row exists for them, so the HLD photo endpoint
+    # cannot be used). Mirrors the projects.Feature.photo ImageField.
+    photo = models.ImageField(
+        upload_to='survey_feature_photos/%Y/%m/%d/',
+        blank=True,
+        null=True,
+        help_text='Evidence photo attached to this survey feature',
+    )
+
     # Lifecycle
     survey_status = models.CharField(
         max_length=20,

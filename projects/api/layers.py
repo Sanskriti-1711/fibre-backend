@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from projects.models import Project, Feature, LayerFieldConfig
-from .serializers import FeatureSerializer
+from .serializers import FeatureSerializer, FeatureUpdateSerializer
 
 
 MICROSERVICE_BASE_URL = "https://fiber-import.zeabur.app"
@@ -151,23 +151,6 @@ class ProjectFeatureDetailAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        microservice_url = (
-            f"{MICROSERVICE_BASE_URL}/geo/projects/{project_id}/features/{feature_id}"
-        )
-
-        try:
-            response = requests.get(microservice_url, timeout=30)
-            response.raise_for_status()
-            geojson_payload = response.json()
-        except requests.RequestException as exc:
-            return Response(
-                {
-                    "detail": "Failed to fetch feature geometry from microservice",
-                    "error": str(exc),
-                },
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-
         feature_data = FeatureSerializer(feature, context={'request': request}).data
 
         # If an admin has configured this layer's fields, serve that schema
@@ -184,14 +167,95 @@ class ProjectFeatureDetailAPIView(APIView):
         except Exception:
             pass
 
+        # ── Try microservice for authoritative geometry; fall back to local ──
+        microservice_url = (
+            f"{MICROSERVICE_BASE_URL}/geo/projects/{project_id}/features/{feature_id}"
+        )
+
+        try:
+            response = requests.get(microservice_url, timeout=30)
+            response.raise_for_status()
+            geojson_payload = response.json()
+            geojson_feature = geojson_payload.get("feature")
+            layer_source = geojson_payload.get("layer", feature.layer_name)
+        except requests.RequestException:
+            # Microservice unavailable — fall back to the local geometry stored
+            # in Django's Feature model.  This is a best-effort copy that may
+            # be stale if the authoritative PostGIS was updated directly.
+            local_geom = feature.geometry
+            if local_geom:
+                geojson_feature = {
+                    "type": "Feature",
+                    "geometry": local_geom,
+                    "properties": feature.properties,
+                }
+            else:
+                geojson_feature = None
+            layer_source = feature.layer_name
+
         return Response(
             {
                 "project_id": str(project.id),
                 "layer_name": feature.layer_name,
                 "feature": feature_data,
-                "geojson": geojson_payload.get("feature"),
-                "layer_source": geojson_payload.get("layer", feature.layer_name),
+                "geojson": geojson_feature,
+                "layer_source": layer_source,
             }
+        )
+
+
+class ProjectFeatureUpdateAPIView(APIView):
+    """
+    PATCH /api/projects/<project_id>/features/<feature_id>/
+
+    Update a feature's geometry, properties, field_measurements, status, etc.
+    All fields are optional — only provided fields are updated.
+    """
+
+    def patch(self, request, project_id, feature_id):
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            return Response(
+                {"detail": "Project not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            feature = Feature.objects.get(id=feature_id, project=project)
+        except Feature.DoesNotExist:
+            return Response(
+                {"detail": "Feature not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = FeatureUpdateSerializer(
+            feature,
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
+
+        if not serializer.is_valid():
+            return Response(
+                {"detail": "Validation error", "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        updated_feature = serializer.save()
+
+        # Return the full feature representation
+        response_serializer = FeatureSerializer(
+            updated_feature,
+            context={"request": request},
+        )
+
+        return Response(
+            {
+                "project_id": str(project.id),
+                "feature": response_serializer.data,
+            },
+            status=status.HTTP_200_OK,
         )
 
 

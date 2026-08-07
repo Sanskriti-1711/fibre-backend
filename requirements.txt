@@ -1,4 +1,4 @@
-Django==6.0.1
+Django>=5.1,<6.0
 djangorestframework
 djangorestframework-simplejwt
 django-cors-headers

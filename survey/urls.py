@@ -19,6 +19,7 @@ from .views import (
     SurveyFeatureListCreateAPIView,
     SurveyFeatureDetailAPIView,
     SurveyFeatureUpsertAPIView,
+    SurveyFeaturePhotoUploadView,
 )
 
 urlpatterns = [
@@ -55,5 +56,6 @@ urlpatterns = [
     # Survey Features (HLD/Survey Separation)
     path('survey-features/', SurveyFeatureListCreateAPIView.as_view()),
     path('survey-features/upsert/', SurveyFeatureUpsertAPIView.as_view()),
+    path('survey-features/<uuid:feature_id>/upload-photo/', SurveyFeaturePhotoUploadView.as_view()),
     path('survey-features/<uuid:feature_id>/', SurveyFeatureDetailAPIView.as_view()),
 ]

@@ -9,6 +9,7 @@ urlpatterns = [
     path("api/", include("projects.api.urls")),
     path("api/", include("assignments.api.urls")),
     path("api/", include("ftth_hld.urls")),
+    path("api/survey/", include("survey.urls")),
 ]
 
 # Serve media files in development

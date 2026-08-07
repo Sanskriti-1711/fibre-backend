@@ -45,6 +45,14 @@ class Feature(models.Model):
     submitted_at = models.DateTimeField(null=True, blank=True)
     approved_at = models.DateTimeField(null=True, blank=True)
 
+    # Edited GeoJSON geometry (stored locally for fast reads;
+    # the authoritative copy may live in the PostGIS microservice).
+    geometry = models.JSONField(null=True, blank=True)
+
+    # Audit trail for geometry edits
+    edited_by = models.UUIDField(null=True, blank=True)
+    edited_at = models.DateTimeField(null=True, blank=True)
+
     photo = models.ImageField(upload_to='feature_photos/%Y/%m/%d/', blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)

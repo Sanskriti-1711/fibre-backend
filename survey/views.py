@@ -616,3 +616,53 @@ class SurveyFeatureUpsertAPIView(APIView):
             serializer.save(engineer=engineer, **extra)
             return Response(serializer.data, status=status.HTTP_200_OK if sf else status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class SurveyFeaturePhotoUploadView(APIView):
+    """POST /api/survey/survey-features/<id>/upload-photo/
+
+    Attach an evidence photo to a survey feature. Mirrors the HLD
+    FeaturePhotoUploadView (projects.api.layers) so engineer-created points
+    (which have no HLD Feature row) can carry field photos too.
+    """
+
+    def post(self, request, feature_id):
+        engineer = _get_engineer(request)
+        sf = get_object_or_404(SurveyFeature, id=feature_id, engineer=engineer)
+
+        if "photo" not in request.FILES:
+            return Response(
+                {"detail": "No photo provided"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        photo = request.FILES["photo"]
+
+        # Validate file type
+        allowed_types = ["image/jpeg", "image/png", "image/jpg"]
+        if photo.content_type not in allowed_types:
+            return Response(
+                {"detail": "Invalid file type. Only JPEG and PNG are allowed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate file size (max 10MB)
+        max_size = 10 * 1024 * 1024  # 10MB
+        if photo.size > max_size:
+            return Response(
+                {"detail": "File too large. Maximum size is 10MB."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Save the photo
+        sf.photo = photo
+        sf.save()
+
+        return Response(
+            {
+                "id": str(sf.id),
+                "photo_url": request.build_absolute_uri(sf.photo.url) if sf.photo else None,
+                "uploaded_at": sf.updated_at.isoformat(),
+            },
+            status=status.HTTP_200_OK,
+        )

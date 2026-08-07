@@ -14,6 +14,7 @@ from .layers import (
     ProjectLayerListAPIView,
     ProjectLayerDetailAPIView,
     ProjectFeatureDetailAPIView,
+    ProjectFeatureUpdateAPIView,
     FeaturePhotoUploadView,
 )
 from .completion import ProjectCompletionAPIView
@@ -36,6 +37,10 @@ urlpatterns = [
     path(
         "projects/<uuid:project_id>/features/<uuid:feature_id>/",
         ProjectFeatureDetailAPIView.as_view(),
+    ),
+    path(
+        "projects/<uuid:project_id>/features/<uuid:feature_id>/update/",
+        ProjectFeatureUpdateAPIView.as_view(),
     ),
     # Feature photo upload endpoint
     path(

@@ -1,6 +1,7 @@
 import os
 import requests
 import json
+import zipfile
 from uuid import UUID
 
 from django.conf import settings
@@ -16,10 +17,21 @@ from projects.models import Project, ImportSession, Feature
 MICROSERVICE_BASE_URL = "https://fiber-import.zeabur.app"
 
 
+def _is_zip_file(filename):
+    """Check if a filename has a .zip extension."""
+    return filename.lower().endswith(".zip")
+
+
+def _get_extension(filename):
+    """Get the file extension from a filename."""
+    _, ext = os.path.splitext(filename.lower())
+    return ext
+
+
 class GpkgUploadView(APIView):
     """
     POST /api/projects/{project_id}/import/upload/
-    Upload GPKG file, save as {project_id}.gpkg, create ImportSession
+    Upload .gpkg or .zip file, create ImportSession.
     """
     parser_classes = (MultiPartParser, FormParser)
 
@@ -39,15 +51,16 @@ class GpkgUploadView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Validate file extension
-        if not file_obj.name.endswith(".gpkg"):
+        # Accept both .gpkg and .zip files
+        name_lower = file_obj.name.lower()
+        if not (name_lower.endswith(".gpkg") or name_lower.endswith(".zip")):
             return Response(
-                {"detail": "File must be a .gpkg file"},
+                {"detail": "File must be a .gpkg or .zip file"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Save file as {project_id}.gpkg in media/imports/
-        filename = f"{project_id}.gpkg"
+        ext = _get_extension(file_obj.name)
+        filename = f"{project_id}{ext}"
         file_path = os.path.join("imports", filename)
         
         # Ensure directory exists
@@ -80,7 +93,8 @@ class GpkgUploadView(APIView):
 class GpkgDiscoverView(APIView):
     """
     POST /api/projects/{project_id}/import/discover/
-    Call microservice /gpkg/discover to get layer list
+    For .gpkg: call microservice.
+    For .zip: extract and list .geojson layers.
     """
     def post(self, request, project_id):
         try:
@@ -107,37 +121,78 @@ class GpkgDiscoverView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Call microservice discover endpoint
-        try:
-            with open(file_path, "rb") as f:
-                response = requests.post(
-                    f"{MICROSERVICE_BASE_URL}/import/gpkg/discover",
-                    files={"file": (f"{project_id}.gpkg", f)},
-                    timeout=60
+        original_filename = import_session.original_filename or ""
+
+        if _is_zip_file(original_filename):
+            # ── ZIP discover: extract & list .geojson layers ────────────────
+            layers = []
+            try:
+                with zipfile.ZipFile(file_path, "r") as zf:
+                    for info in zf.infolist():
+                        if not info.filename.lower().endswith(".geojson"):
+                            continue
+                        layer_name = os.path.splitext(os.path.basename(info.filename))[0]
+                        # Count features in this GeoJSON file
+                        feature_count = 0
+                        try:
+                            content = zf.read(info.filename).decode("utf-8")
+                            data = json.loads(content)
+                            features = data.get("features", [])
+                            if isinstance(features, list):
+                                feature_count = len(features)
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            pass
+                        layers.append({
+                            "name": layer_name,
+                            "feature_count": feature_count,
+                            "filename": info.filename,
+                        })
+            except zipfile.BadZipFile as e:
+                return Response(
+                    {"detail": f"Invalid zip file: {str(e)}"},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
-                response.raise_for_status()
-                layers_data = response.json()
-        except requests.RequestException as e:
-            return Response(
-                {"detail": f"Error discovering layers: {str(e)}"},
-                status=status.HTTP_502_BAD_GATEWAY
-            )
 
-        # Update session status
-        import_session.status = "validated"
-        import_session.validation_summary = {"layers": layers_data}
-        import_session.save()
+            import_session.status = "validated"
+            import_session.validation_summary = {"layers": layers}
+            import_session.save()
 
-        return Response({
-            "project_id": str(project_id),
-            "layers": layers_data
-        })
+            return Response({
+                "project_id": str(project_id),
+                "layers": layers,
+            })
+        else:
+            # ── GPKG discover: call microservice ────────────────────────────
+            try:
+                with open(file_path, "rb") as f:
+                    response = requests.post(
+                        f"{MICROSERVICE_BASE_URL}/import/gpkg/discover",
+                        files={"file": (f"{project_id}.gpkg", f)},
+                        timeout=60
+                    )
+                    response.raise_for_status()
+                    layers_data = response.json()
+            except requests.RequestException as e:
+                return Response(
+                    {"detail": f"Error discovering layers: {str(e)}"},
+                    status=status.HTTP_502_BAD_GATEWAY
+                )
+
+            import_session.status = "validated"
+            import_session.validation_summary = {"layers": layers_data}
+            import_session.save()
+
+            return Response({
+                "project_id": str(project_id),
+                "layers": layers_data,
+            })
 
 
 class GpkgImportView(APIView):
     """
     POST /api/projects/{project_id}/import/import/
-    Import selected layers via microservice
+    For .gpkg: call microservice.
+    For .zip: extract .geojson and create Features directly.
     """
     def post(self, request, project_id):
         try:
@@ -171,88 +226,176 @@ class GpkgImportView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Call microservice import endpoint
-        try:
-            with open(file_path, "rb") as f:
-                response = requests.post(
-                    f"{MICROSERVICE_BASE_URL}/import/gpkg",
-                    files={"file": (f"{project_id}.gpkg", f)},
-                    data={
-                        "project_id": str(project_id),
-                        "layers": json.dumps(selected_layers)
-                    },
-                    timeout=120
+        original_filename = import_session.original_filename or ""
+
+        if _is_zip_file(original_filename):
+            # ── ZIP import: extract .geojson, create Feature records directly ─
+            features_created = 0
+            try:
+                with zipfile.ZipFile(file_path, "r") as zf:
+                    for info in zf.infolist():
+                        if not info.filename.lower().endswith(".geojson"):
+                            continue
+                        layer_name = os.path.splitext(os.path.basename(info.filename))[0]
+
+                        # Check if this layer is in the selected list
+                        selected_layers_lower = [s.lower() for s in selected_layers]
+                        if layer_name.lower() not in selected_layers_lower:
+                            continue
+
+                        # Read and parse the GeoJSON
+                        try:
+                            content = zf.read(info.filename).decode("utf-8")
+                            data = json.loads(content)
+                        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                            continue
+
+                        features = data.get("features", [])
+                        if not isinstance(features, list):
+                            continue
+
+                        # Derive field schema from the first feature's properties
+                        field_schema = None
+                        if features:
+                            first_props = features[0].get("properties", {})
+                            if isinstance(first_props, dict):
+                                field_schema = [
+                                    {
+                                        "key": k,
+                                        "label": k.replace("_", " ").title(),
+                                        "type": "text",
+                                    }
+                                    for k in first_props.keys()
+                                ]
+
+                        for feature_payload in features:
+                            geom = feature_payload.get("geometry")
+                            props = feature_payload.get("properties", {})
+                            if not isinstance(props, dict):
+                                props = {}
+
+                            if not geom or not isinstance(geom, dict):
+                                continue
+
+                            Feature.objects.create(
+                                project=project,
+                                layer_name=layer_name,
+                                layer_id=layer_name,
+                                properties=props,
+                                geometry=geom,
+                                field_schema=field_schema,
+                                status=Feature.STATUS_PENDING,
+                            )
+                            features_created += 1
+
+            except zipfile.BadZipFile as e:
+                return Response(
+                    {"detail": f"Invalid zip file: {str(e)}"},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
-                response.raise_for_status()
-                import_result = response.json()
-        except requests.RequestException as e:
-            error_detail = f"Error importing layers: {str(e)}"
-            if e.response is not None:
-                error_detail += f" | Status: {e.response.status_code}"
-                try:
-                    error_detail += f" | Response: {e.response.text}"
-                except:
-                    pass
-            return Response(
-                {"detail": error_detail},
-                status=status.HTTP_502_BAD_GATEWAY
-            )
 
-        # Update session status
-        import_session.status = "imported"
-        import_session.save()
+            if features_created == 0:
+                import_session.status = "failed"
+                import_session.save()
+                return Response(
+                    {"detail": "No features could be created from the selected layers. Check that the zip contains valid GeoJSON files."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-        # Persist feature data from microservice response
-        features_created = False
-        layers_result = import_result.get("layers", [])
-        if not isinstance(layers_result, list):
-            layers_result = []
+            import_session.status = "imported"
+            import_session.save()
 
-        for layer_payload in layers_result:
-            layer_name = layer_payload.get("layer_name") or layer_payload.get("name")
-            layer_id = layer_payload.get("table_name") or layer_payload.get("layer_id")
+            if project.status != "active":
+                project.status = "active"
+                project.save(update_fields=["status", "updated_at", "last_activity_at"])
 
-            if not layer_name or not layer_id:
-                continue
+            return Response({
+                "project_id": str(project_id),
+                "status": "imported",
+                "imported_layers": selected_layers,
+                "features_created": features_created,
+            })
 
-            # Engineer field schema derived by the import microservice from the
-            # original GIS column names (same for every feature in the layer).
-            field_schema = layer_payload.get("field_schema")
+        else:
+            # ── GPKG import: call microservice ──────────────────────────────
+            try:
+                with open(file_path, "rb") as f:
+                    response = requests.post(
+                        f"{MICROSERVICE_BASE_URL}/import/gpkg",
+                        files={"file": (f"{project_id}.gpkg", f)},
+                        data={
+                            "project_id": str(project_id),
+                            "layers": json.dumps(selected_layers)
+                        },
+                        timeout=120
+                    )
+                    response.raise_for_status()
+                    import_result = response.json()
+            except requests.RequestException as e:
+                error_detail = f"Error importing layers: {str(e)}"
+                if e.response is not None:
+                    error_detail += f" | Status: {e.response.status_code}"
+                    try:
+                        error_detail += f" | Response: {e.response.text}"
+                    except:
+                        pass
+                return Response(
+                    {"detail": error_detail},
+                    status=status.HTTP_502_BAD_GATEWAY
+                )
 
-            features_payload = layer_payload.get("features", [])
-            if not isinstance(features_payload, list):
-                continue
+            import_session.status = "imported"
+            import_session.save()
 
-            for feature_payload in features_payload:
-                feature_id = feature_payload.get("id")
-                if not feature_id:
+            # Persist feature data from microservice response
+            features_created = False
+            layers_result = import_result.get("layers", [])
+            if not isinstance(layers_result, list):
+                layers_result = []
+
+            for layer_payload in layers_result:
+                layer_name = layer_payload.get("layer_name") or layer_payload.get("name")
+                layer_id = layer_payload.get("table_name") or layer_payload.get("layer_id")
+
+                if not layer_name or not layer_id:
                     continue
 
-                properties = feature_payload.get("properties", {})
+                field_schema = layer_payload.get("field_schema")
 
-                Feature.objects.update_or_create(
-                    id=feature_id,
-                    defaults={
-                        "project": project,
-                        "layer_name": layer_name,
-                        "layer_id": layer_id,
-                        "properties": properties,
-                        "field_schema": field_schema,
-                        "status": Feature.STATUS_PENDING,
-                    }
-                )
-                features_created = True
+                features_payload = layer_payload.get("features", [])
+                if not isinstance(features_payload, list):
+                    continue
 
-        if features_created and project.status != "active":
-            project.status = "active"
-            project.save(update_fields=["status", "updated_at", "last_activity_at"])
+                for feature_payload in features_payload:
+                    feature_id = feature_payload.get("id")
+                    if not feature_id:
+                        continue
 
-        return Response({
-            "project_id": str(project_id),
-            "status": "queued",
-            "imported_layers": selected_layers,
-            "microservice_response": import_result
-        })
+                    properties = feature_payload.get("properties", {})
+
+                    Feature.objects.update_or_create(
+                        id=feature_id,
+                        defaults={
+                            "project": project,
+                            "layer_name": layer_name,
+                            "layer_id": layer_id,
+                            "properties": properties,
+                            "field_schema": field_schema,
+                            "status": Feature.STATUS_PENDING,
+                        }
+                    )
+                    features_created = True
+
+            if features_created and project.status != "active":
+                project.status = "active"
+                project.save(update_fields=["status", "updated_at", "last_activity_at"])
+
+            return Response({
+                "project_id": str(project_id),
+                "status": "queued",
+                "imported_layers": selected_layers,
+                "microservice_response": import_result,
+            })
 
 
 class ImportStatusView(APIView):
