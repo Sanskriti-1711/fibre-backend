@@ -44,6 +44,7 @@ class ProjectListCreateAPIView(APIView):
         survey = ProjectSerializer(qs, many=True).data
         for item in survey:
             item["type"] = "survey"
+            item["kind"] = "survey"
 
         hld = []
         if kind in ("hld", "all"):
@@ -57,6 +58,7 @@ class ProjectListCreateAPIView(APIView):
                 hld = []
             for item in hld:
                 item["type"] = "hld"
+                item["kind"] = "hld"
 
         if kind == "hld":
             return Response(hld)
