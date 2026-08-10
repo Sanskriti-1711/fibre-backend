@@ -113,6 +113,7 @@ STEP_DEPENDENCIES = {
 
 # GPKG files to include in the field-survey package zip.
 SURVEY_PACKAGE_FILES = [
+    "Objects.gpkg",
     "Polygons.gpkg", "PDPs.gpkg",
     "Feeder_Cable.gpkg", "Distribution_Cable.gpkg",
     "Chambers.gpkg",
@@ -131,6 +132,7 @@ SURVEY_PACKAGE_FILES = [
 # GeoJSON ``crs`` field, defaulting to EPSG:25833) to EPSG:4326 (WGS84)
 # so MapLibre can render them correctly.
 SURVEY_GEOJSON_FILES = {
+    "Objects.geojson":              "objects.geojson",
     "Polygons.geojson":             "polygons.geojson",
     "PDPs.geojson":                 "pdps.geojson",
     "Feeder_Cable.geojson":         "feeder_cable.geojson",
