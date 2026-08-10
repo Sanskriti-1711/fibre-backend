@@ -220,11 +220,20 @@ def _detect_crs(geojson: dict) -> str:
     """
     Detect the source CRS from a GeoJSON object's ``crs`` field.
     Falls back to ``DEFAULT_SOURCE_CRS`` if not present.
+
+    The HLD engine already exports its GeoJSON layers in WGS84 using the
+    OGC CRS84 URN (``urn:ogc:def:crs:OGC:1.3:CRS84``). That is the same
+    lon/lat datum as EPSG:4326, so it is normalized to ``EPSG:4326`` here
+    to avoid a double-reprojection that would garble every coordinate.
     """
     crs = geojson.get("crs")
     if crs and isinstance(crs, dict):
-        name = crs.get("properties", {}).get("name", "")
-        match = _EPSG_RE.search(str(name))
+        name = str(crs.get("properties", {}).get("name", ""))
+        upper = name.upper()
+        # OGC CRS84 / WGS84 / EPSG:4326 are all already lon/lat WGS84.
+        if "CRS84" in upper or "WGS84" in upper or "EPSG:4326" in upper:
+            return "EPSG:4326"
+        match = _EPSG_RE.search(name)
         if match:
             return f"EPSG:{match.group(1)}"
     return DEFAULT_SOURCE_CRS
