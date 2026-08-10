@@ -57,9 +57,33 @@ class ProjectListCreateAPIView(APIView):
         kind = request.GET.get("kind", "survey").lower()
 
         survey = ProjectSerializer(qs, many=True).data
-        for item in survey:
-            item["type"] = "survey"
-            item["kind"] = "survey"
+
+        # Attach the engineers assigned to each survey copy (project-scope
+        # AssignmentJob), mirroring the shape HLD rows get from
+        # ftth_project_payloads() so the UI can show "Assigned To" on both.
+        # Only needed when survey rows are actually part of the response.
+        if survey and kind in ("survey", "all"):
+            from assignments.models import AssignmentJob
+            jobs = AssignmentJob.objects.filter(
+                project_id__in=[item["id"] for item in survey],
+                scope=AssignmentJob.SCOPE_PROJECT,
+                assignee__isnull=False,
+            ).select_related("assignee")
+            by_project = {}
+            for job in jobs:
+                by_project.setdefault(str(job.project_id), []).append(job)
+            for item in survey:
+                item["type"] = "survey"
+                item["kind"] = "survey"
+                engs = []
+                for job in by_project.get(str(item["id"]), []):
+                    engs.append({
+                        "id": str(job.assignee.id),
+                        "email": job.assignee.email,
+                        "full_name": job.assignee.full_name,
+                    })
+                item["assigned_engineer"] = engs[0] if engs else None
+                item["assigned_engineers"] = engs
 
         hld = []
         if kind in ("hld", "all"):
