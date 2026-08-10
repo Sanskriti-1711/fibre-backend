@@ -48,12 +48,18 @@ def find_survey_copy(ftth_project_id: str):
     ).first()
 
 
-def assign_hld_project(ftth_project_id: str, engineer_id: str) -> dict:
-    """Assign a completed HLD run to a field engineer.
+def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
+    """Assign a completed HLD run to one or more field engineers.
 
     Creates (or reuses) the Survey copy, imports the survey package into it,
-    and creates the project-scope AssignmentJob. Returns a summary dict.
+    and creates one project-scope AssignmentJob per engineer. Returns a
+    summary dict.
     """
+    if isinstance(engineer_ids, str):
+        engineer_ids = [engineer_ids]
+    engineer_ids = list(engineer_ids)
+    if not engineer_ids:
+        raise ValueError("At least one engineer_id is required")
     try:
         hld = FtthProject.objects.get(pk=ftth_project_id)
     except FtthProject.DoesNotExist:
@@ -65,87 +71,106 @@ def assign_hld_project(ftth_project_id: str, engineer_id: str) -> dict:
             f"(status={hld.status}); only completed runs can be assigned"
         )
 
-    try:
-        engineer = User.objects.get(pk=engineer_id)
-    except User.DoesNotExist:
-        raise ValueError(f"Engineer {engineer_id} not found")
-    if engineer.role != User.Role.ENGINEER:
-        raise ValueError(f"User {engineer_id} is not an engineer")
+    engineers = []
+    for eid in engineer_ids:
+        try:
+            eng = User.objects.get(pk=eid)
+        except User.DoesNotExist:
+            raise ValueError(f"Engineer {eid} not found")
+        if eng.role != User.Role.ENGINEER:
+            raise ValueError(f"User {eid} is not an engineer")
+        engineers.append(eng)
+    primary_engineer = engineers[0]
 
-    # ── 1. Survey copy (reuse if it already exists) ─────────────────────
-    survey = find_survey_copy(ftth_project_id)
-    if survey is None:
-        survey = Project.objects.create(
-            name=f"{hld.name or ftth_project_id}{SURVEY_SUFFIX}",
-            description=(
-                f"Survey copy of HLD run '{hld.name or ftth_project_id}'. "
-                "Field-survey package auto-imported for the assigned engineer."
-            ),
-            region="Field Survey",
-            status="assigned",
-            source_ftth_project_id=ftth_project_id,
-        )
-    else:
-        # Data-safety guard: once an engineer accepts the copy (active),
-        # re-assigning would wipe their survey progress. Refuse instead.
-        if survey.status == "active":
-            raise ValueError(
-                f"Survey copy '{survey.name}' is already accepted and in "
-                "progress by an engineer; re-assigning would erase survey "
-                "data. Re-assign only while the copy is pending."
-            )
-        survey.name = f"{hld.name or ftth_project_id}{SURVEY_SUFFIX}"
-        survey.status = "assigned"
-        survey.save(update_fields=["name", "status", "updated_at"])
-
-    # ── 2. Generate + store the survey package ZIP ───────────────────────
-    zip_bytes = generate_survey_package(ftth_project_id)
-    filename = f"{uuid.uuid4().hex}.zip"
-    rel_path = os.path.join("imports", filename)
-    full_path = os.path.join(settings.MEDIA_ROOT, rel_path)
-    os.makedirs(os.path.dirname(full_path), exist_ok=True)
-    with open(full_path, "wb") as f:
-        f.write(zip_bytes)
-
-    ImportSession.objects.update_or_create(
-        project=survey,
-        defaults={
-            "original_filename": f"{ftth_project_id}_survey_package.zip",
-            "stored_file_path": full_path,
-            "status": "imported",
-            "validation_summary": None,
-        },
-    )
-
-    # ── 3. Import the WGS84 GeoJSON layers as Feature rows ───────────────
-    from projects.api.import_views import discover_zip_layers, import_zip_layers
-
-    layers = discover_zip_layers(full_path)
-    layer_names = [l["name"] for l in layers]
-
-    # Re-assigning the same HLD run must be idempotent: drop any
-    # previously imported features so we never accumulate duplicates.
-    # Atomic: if the re-import fails, the old features stay intact.
+    # ── 1-4. Everything inside ONE transaction: a failure mid-way must
+    #         not leave an 'assigned' copy with zero features/jobs. ──────
     with transaction.atomic():
+        # ── 1. Survey copy (reuse if it already exists) ─────────────────
+        survey = find_survey_copy(ftth_project_id)
+        if survey is None:
+            survey = Project.objects.create(
+                name=f"{hld.name or ftth_project_id}{SURVEY_SUFFIX}",
+                description=(
+                    f"Survey copy of HLD run '{hld.name or ftth_project_id}'. "
+                    "Field-survey package auto-imported for the assigned engineer."
+                ),
+                region="Field Survey",
+                status="assigned",
+                source_ftth_project_id=ftth_project_id,
+            )
+        else:
+            # Data-safety guard: once an engineer accepts the copy (active),
+            # re-assigning would wipe their survey progress. Refuse instead.
+            if survey.status in ("active", "submitted", "completed"):
+                raise ValueError(
+                    f"Survey copy '{survey.name}' is already {survey.status}; "
+                    "re-assigning would erase survey data and approvals. "
+                    "Re-assign only while the copy is pending."
+                )
+            survey.name = f"{hld.name or ftth_project_id}{SURVEY_SUFFIX}"
+            survey.status = "assigned"
+            survey.save(update_fields=["name", "status", "updated_at"])
+
+        # ── 2. Generate + store the survey package ZIP ───────────────────
+        zip_bytes = generate_survey_package(ftth_project_id)
+        filename = f"{uuid.uuid4().hex}.zip"
+        rel_path = os.path.join("imports", filename)
+        full_path = os.path.join(settings.MEDIA_ROOT, rel_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, "wb") as f:
+            f.write(zip_bytes)
+
+        ImportSession.objects.update_or_create(
+            project=survey,
+            defaults={
+                "original_filename": f"{ftth_project_id}_survey_package.zip",
+                "stored_file_path": full_path,
+                "status": "imported",
+                "validation_summary": None,
+            },
+        )
+
+        # ── 3. Import the WGS84 GeoJSON layers as Feature rows ───────────
+        from projects.api.import_views import discover_zip_layers, import_zip_layers
+
+        layers = discover_zip_layers(full_path)
+        layer_names = [l["name"] for l in layers]
+
+        # Re-assigning the same HLD run must be idempotent: drop any
+        # previously imported features so we never accumulate duplicates.
+        # The enclosing transaction guarantees old features survive a
+        # failed re-import.
         Feature.objects.filter(project=survey).delete()
         features_created = import_zip_layers(survey, full_path, layer_names)
 
-    # Features imported as pending; a project-scope assignment marks the
-    # whole project as assigned (matches existing assignment semantics).
-    if features_created:
-        Feature.objects.filter(project=survey).exclude(
-            status=Feature.STATUS_ASSIGNED
-        ).update(status=Feature.STATUS_ASSIGNED)
+        # Features imported as pending; a project-scope assignment marks the
+        # whole project as assigned (matches existing assignment semantics).
+        if features_created:
+            Feature.objects.filter(project=survey).exclude(
+                status=Feature.STATUS_ASSIGNED
+            ).update(status=Feature.STATUS_ASSIGNED)
 
-    # ── 4. Project-scope AssignmentJob (preserve PK on re-assign) ───────
-    job, _ = AssignmentJob.objects.update_or_create(
-        project=survey,
-        scope=AssignmentJob.SCOPE_PROJECT,
-        defaults={"assignee": engineer},
-    )
+        # ── 4. Project-scope AssignmentJob per engineer (PK preserved) ───
+        existing_jobs = list(AssignmentJob.objects.filter(
+            project=survey, scope=AssignmentJob.SCOPE_PROJECT
+        ))
+        jobs = []
+        for eng in engineers:
+            job, _ = AssignmentJob.objects.update_or_create(
+                project=survey,
+                scope=AssignmentJob.SCOPE_PROJECT,
+                assignee=eng,
+                defaults={},
+            )
+            jobs.append(job)
+        # Drop jobs for engineers no longer assigned
+        keep_assignees = {eng.id for eng in engineers}
+        for job in existing_jobs:
+            if job.assignee_id not in keep_assignees:
+                job.delete()
 
     # ── 5. Record assignment on the HLD run ──────────────────────────────
-    hld.assigned_engineer = engineer
+    hld.assigned_engineer = primary_engineer
     hld.assigned_at = timezone.now()
     hld.save(update_fields=["assigned_engineer", "assigned_at", "updated_at"])
 
@@ -155,12 +180,15 @@ def assign_hld_project(ftth_project_id: str, engineer_id: str) -> dict:
         "survey_project_id": str(survey.id),
         "survey_project_name": survey.name,
         "survey_status": survey.status,
-        "engineer": {
-            "id": str(engineer.id),
-            "email": engineer.email,
-            "full_name": engineer.full_name,
-        },
-        "assignment_job_id": str(job.id),
+        "engineers": [
+            {
+                "id": str(eng.id),
+                "email": eng.email,
+                "full_name": eng.full_name,
+            }
+            for eng in engineers
+        ],
+        "assignment_job_ids": [str(j.id) for j in jobs],
         "layers": layer_names,
         "features_created": features_created,
     }
@@ -189,6 +217,43 @@ def accept_survey_project(project_id: str, user) -> dict:
     if survey.status == "assigned":
         survey.status = "active"
         survey.save(update_fields=["status", "updated_at", "last_activity_at"])
+
+    return {
+        "project_id": str(survey.id),
+        "name": survey.name,
+        "status": survey.status,
+        "source_ftth_project_id": survey.source_ftth_project_id,
+    }
+
+
+def submit_survey_project(project_id: str, user) -> dict:
+    """Engineer submits their finished Survey copy → status becomes submitted.
+
+    Only an engineer assigned to the project (project-scope AssignmentJob)
+    or a SUBADMIN may submit. Status must currently be ``active``.
+    """
+    try:
+        survey = Project.objects.get(pk=project_id)
+    except Project.DoesNotExist:
+        raise ValueError(f"Survey project {project_id} not found")
+
+    is_engineer = AssignmentJob.objects.filter(
+        project=survey,
+        scope=AssignmentJob.SCOPE_PROJECT,
+        assignee=user,
+    ).exists()
+    is_admin = getattr(user, "role", None) == User.Role.SUBADMIN
+    if not (is_engineer or is_admin):
+        raise PermissionError("Only the assigned engineer can submit this project")
+
+    if survey.status == "active":
+        survey.status = "submitted"
+        survey.save(update_fields=["status", "updated_at", "last_activity_at"])
+    elif survey.status != "submitted":
+        raise ValueError(
+            f"Cannot submit project in status '{survey.status}'; "
+            "only active projects can be submitted"
+        )
 
     return {
         "project_id": str(survey.id),

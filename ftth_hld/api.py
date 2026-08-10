@@ -468,17 +468,22 @@ class FtthProjectAssignView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        engineer_id = request.data.get("engineer_id") or request.POST.get("engineer_id")
-        if not engineer_id:
+        engineer_ids = (
+            request.data.get("engineer_ids")
+            or request.POST.getlist("engineer_ids")
+            or request.data.get("engineer_id")
+            or request.POST.get("engineer_id")
+        )
+        if not engineer_ids:
             return JsonResponse(
-                {"detail": "engineer_id is required."},
+                {"detail": "engineer_ids (list) or engineer_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
-            result = assign_hld_project(project_id, engineer_id)
+            result = assign_hld_project(project_id, engineer_ids)
         except ValueError as exc:
-            return JsonResponse({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+            return JsonResponse({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except FileNotFoundError as exc:
             return JsonResponse(
                 {"detail": f"Survey package not available: {exc}"},

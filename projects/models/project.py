@@ -15,6 +15,7 @@ class Project(models.Model):
             ("in_progress", "In Progress"),
             ("assigned", "Assigned"),
             ("active", "Active"),
+            ("submitted", "Submitted"),
             ("completed", "Completed"),
             ("archived", "Archived"),
         ],

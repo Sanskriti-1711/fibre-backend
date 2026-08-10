@@ -2,6 +2,7 @@ import os
 import requests
 
 from rest_framework.views import APIView
+from django.db.models import Q
 from rest_framework.response import Response
 from rest_framework import status
 
@@ -25,6 +26,19 @@ class ProjectListCreateAPIView(APIView):
 
     def get(self, request):
         qs = Project.objects.all().order_by("-created_at")
+
+        # Engineers only see projects assigned to them (project-scope jobs)
+        # plus projects they created — "My Projects". Admins see everything.
+        role = getattr(request.user, "role", None)
+        if role == "ENGINEER":
+            from assignments.models import AssignmentJob
+            # Project-, layer- and feature-scope jobs all mean "this engineer
+            # works on that project" — include every scope so My Projects
+            # never hides a project the engineer is actually assigned to.
+            assigned_ids = AssignmentJob.objects.filter(
+                assignee=request.user,
+            ).exclude(project__isnull=True).values_list("project_id", flat=True)
+            qs = qs.filter(id__in=list(assigned_ids))
 
         # Filters
         status_filter = request.GET.get("status")
@@ -167,7 +181,7 @@ class ProjectAcceptAPIView(APIView):
             result = accept_survey_project(str(project_id), request.user)
         except ValueError as exc:
             return Response(
-                {"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND
+                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
             )
         except PermissionError as exc:
             return Response(
@@ -176,6 +190,36 @@ class ProjectAcceptAPIView(APIView):
         except Exception as exc:
             return Response(
                 {"detail": f"Accept failed: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response(result)
+
+
+
+class ProjectSubmitAPIView(APIView):
+    """POST /api/projects/<uuid:project_id>/submit/
+
+    The engineer submits their finished survey → status flips
+    ``active`` → ``submitted``. Only the assigned engineer (or a SUBADMIN)
+    may submit.
+    """
+
+    def post(self, request, project_id):
+        from ftth_hld.assign import submit_survey_project
+
+        try:
+            result = submit_survey_project(str(project_id), request.user)
+        except ValueError as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
+            )
+        except PermissionError as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN
+            )
+        except Exception as exc:
+            return Response(
+                {"detail": f"Submit failed: {exc}"},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         return Response(result)

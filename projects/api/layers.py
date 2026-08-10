@@ -11,6 +11,104 @@ from .serializers import FeatureSerializer, FeatureUpdateSerializer
 
 MICROSERVICE_BASE_URL = "https://fiber-import.zeabur.app"
 
+_GEOM_NAMES = {
+    "Point": "Point",
+    "MultiPoint": "Point",
+    "LineString": "LineString",
+    "MultiLineString": "LineString",
+    "Polygon": "Polygon",
+    "MultiPolygon": "Polygon",
+}
+
+
+def _engineer_can_access(request, project):
+    """Engineers may only access projects they are assigned to (project-scope job).
+
+    Defense-in-depth: anonymous users are already blocked by the DRF default
+    IsAuthenticated permission, but we never let a non-authenticated request
+    through here regardless of role.
+    """
+    if not getattr(request.user, "is_authenticated", False):
+        return False
+    role = getattr(request.user, "role", None)
+    if role != "ENGINEER":
+        return True
+    from assignments.models import AssignmentJob
+    return AssignmentJob.objects.filter(
+        project=project,
+        scope=AssignmentJob.SCOPE_PROJECT,
+        assignee=request.user,
+    ).exists()
+
+
+def _deny():
+    return Response(
+        {"detail": "You do not have access to this project."},
+        status=status.HTTP_403_FORBIDDEN,
+    )
+
+
+class ProjectMapDataAPIView(APIView):
+    """GET /api/projects/<project_id>/map-data/
+
+    Serves the same ``{layers, features, geojson}`` shape the web map expects,
+    but built from the local Django Feature rows (survey packages live in the
+    Django DB, not in the external import microservice).
+    """
+
+    def get(self, request, project_id):
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            return Response(
+                {"detail": "Project not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not _engineer_can_access(request, project):
+            return _deny()
+
+        features_qs = Feature.objects.filter(project=project).order_by(
+            "layer_name", "created_at"
+        )
+
+        layers = []
+        geojson = {}
+        all_features = []
+        seen_layers = set()
+
+        for f in features_qs:
+            if not f.geometry:
+                continue
+            name = f.layer_name or f.layer_id or "layer"
+            if name not in seen_layers:
+                seen_layers.add(name)
+                geom_type = _GEOM_NAMES.get(f.geometry.get("type", ""), "Point")
+                layers.append({"name": name, "type": geom_type})
+                geojson[name] = {"type": "FeatureCollection", "features": []}
+            feature = {
+                "type": "Feature",
+                "geometry": f.geometry,
+                "properties": {
+                    **(f.properties or {}),
+                    "id": str(f.id),
+                    "feature_id": str(f.id),
+                    "layer": name,
+                    "status": f.status,
+                },
+            }
+            geojson[name]["features"].append(feature)
+            all_features.append(feature)
+
+        return Response(
+            {
+                "project_id": str(project.id),
+                "layers": layers,
+                "features": all_features,
+                "geojson": geojson,
+            }
+        )
+
 
 class ProjectLayerListAPIView(APIView):
     """GET /api/projects/<project_id>/layers/"""
@@ -23,6 +121,9 @@ class ProjectLayerListAPIView(APIView):
                 {"detail": "Project not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        if not _engineer_can_access(request, project):
+            return _deny()
 
         features_qs = Feature.objects.filter(project=project)
 
@@ -85,6 +186,9 @@ class ProjectLayerDetailAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        if not _engineer_can_access(request, project):
+            return _deny()
+
         layer_features = Feature.objects.filter(
             project=project,
             layer_id=layer_id,
@@ -142,6 +246,9 @@ class ProjectFeatureDetailAPIView(APIView):
                 {"detail": "Project not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        if not _engineer_can_access(request, project):
+            return _deny()
 
         try:
             feature = Feature.objects.get(id=feature_id, project=project)
@@ -221,6 +328,9 @@ class ProjectFeatureUpdateAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        if not _engineer_can_access(request, project):
+            return _deny()
+
         try:
             feature = Feature.objects.get(id=feature_id, project=project)
         except Feature.DoesNotExist:
@@ -270,6 +380,9 @@ class FeaturePhotoUploadView(APIView):
                 {"detail": "Feature not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        if not _engineer_can_access(request, feature.project):
+            return _deny()
 
         if "photo" not in request.FILES:
             return Response(

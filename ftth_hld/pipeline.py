@@ -509,6 +509,22 @@ def ftth_project_payloads(limit: int = 50) -> list[dict]:
         enriched = engine_data.get(p.project_id, {})
         copy = survey_copies.get(p.project_id)
         engineer = p.assigned_engineer
+        assigned_engineers = []
+        if copy is not None:
+            try:
+                from assignments.models import AssignmentJob
+                eng_rows = AssignmentJob.objects.filter(
+                    project=copy,
+                    scope=AssignmentJob.SCOPE_PROJECT,
+                ).select_related("assignee")
+                for job in eng_rows:
+                    assigned_engineers.append({
+                        "id": str(job.assignee.id),
+                        "email": job.assignee.email,
+                        "full_name": job.assignee.full_name,
+                    })
+            except Exception:
+                pass
         data.append({
             "project_id": p.project_id,
             "name": p.name,
@@ -526,6 +542,7 @@ def ftth_project_payloads(limit: int = 50) -> list[dict]:
                 "email": engineer.email,
                 "full_name": engineer.full_name,
             } if engineer else None,
+            "assigned_engineers": assigned_engineers,
             "assigned_at": p.assigned_at.isoformat() if p.assigned_at else None,
             "survey_copy_project_id": str(copy.id) if copy else None,
             "survey_status": copy.status if copy else None,

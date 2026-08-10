@@ -30,7 +30,8 @@ class AssignmentJob(models.Model):
         db_table = "assignment_jobs"
         constraints = [
             models.UniqueConstraint(
-                fields=["project"],
+                # One project-scope job PER ENGINEER (multi-engineer assignment).
+                fields=["project", "assignee"],
                 condition=models.Q(scope="project"),
                 name="unique_project_assignment",
             ),
