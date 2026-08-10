@@ -8,6 +8,10 @@ class Project(models.Model):
     description = models.TextField(blank=True)
     region = models.CharField(max_length=255, blank=True)
 
+    # Project lifecycle status. The engineer-facing workflow is:
+    #   assigned → (engineer accepts) → active → (engineer submits) → submitted
+    #   submitted → (admin) → under_review → reviewed → accepted   (final)
+    #   under_review / reviewed → (admin) → redo → (engineer re-does) → active/submitted
     status = models.CharField(
         max_length=20,
         choices=[
@@ -16,6 +20,10 @@ class Project(models.Model):
             ("assigned", "Assigned"),
             ("active", "Active"),
             ("submitted", "Submitted"),
+            ("under_review", "Under Review"),
+            ("reviewed", "Reviewed"),
+            ("accepted", "Accepted"),
+            ("redo", "Redo"),
             ("completed", "Completed"),
             ("archived", "Archived"),
         ],

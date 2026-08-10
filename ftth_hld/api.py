@@ -201,6 +201,34 @@ class PipelineStatusView(APIView):
                 error_message=status_data.get("error", ""),
             )
 
+        # Attach survey-assignment info so the results/status pages can show
+        # who this HLD run is assigned to for the field survey, plus the
+        # survey copy status (assigned / active / submitted / ...).
+        try:
+            from projects.models import Project as SurveyProject
+            from assignments.models import AssignmentJob
+            copy = SurveyProject.objects.filter(
+                source_ftth_project_id=project_id
+            ).first()
+            assigned_engineers = []
+            if copy is not None:
+                for job in AssignmentJob.objects.filter(
+                    project=copy, scope=AssignmentJob.SCOPE_PROJECT
+                ).select_related("assignee"):
+                    assigned_engineers.append({
+                        "id": str(job.assignee.id),
+                        "email": job.assignee.email,
+                        "full_name": job.assignee.full_name,
+                    })
+            status_data["survey"] = {
+                "copy_project_id": str(copy.id) if copy else None,
+                "copy_name": copy.name if copy else None,
+                "status": copy.status if copy else None,
+                "assigned_engineers": assigned_engineers,
+            }
+        except Exception:
+            status_data["survey"] = None
+
         return JsonResponse(status_data)
 
 

@@ -223,3 +223,40 @@ class ProjectSubmitAPIView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         return Response(result)
+
+
+class ProjectReviewAPIView(APIView):
+    """POST /api/projects/<uuid:project_id>/review/
+
+    Admin review workflow on a submitted Survey copy. Body:
+        {"action": "start_review" | "reviewed" | "accept" | "redo" | "complete"}
+
+    Transitions:
+      start_review: submitted -> under_review
+      reviewed:     under_review -> reviewed
+      accept:       reviewed (or under_review) -> accepted
+      redo:         submitted | under_review | reviewed -> redo
+      complete:     accepted -> completed
+    Only SUBADMIN users may review.
+    """
+
+    def post(self, request, project_id):
+        from ftth_hld.assign import review_survey_project
+
+        action = (request.data or {}).get("action", "")
+        try:
+            result = review_survey_project(str(project_id), request.user, action)
+        except ValueError as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
+            )
+        except PermissionError as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN
+            )
+        except Exception as exc:
+            return Response(
+                {"detail": f"Review failed: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response(result)

@@ -101,7 +101,10 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
         else:
             # Data-safety guard: once an engineer accepts the copy (active),
             # re-assigning would wipe their survey progress. Refuse instead.
-            if survey.status in ("active", "submitted", "completed"):
+            if survey.status in (
+                "in_progress", "active", "submitted", "under_review",
+                "reviewed", "accepted", "redo", "completed",
+            ):
                 raise ValueError(
                     f"Survey copy '{survey.name}' is already {survey.status}; "
                     "re-assigning would erase survey data and approvals. "
@@ -217,6 +220,10 @@ def accept_survey_project(project_id: str, user) -> dict:
     if survey.status == "assigned":
         survey.status = "active"
         survey.save(update_fields=["status", "updated_at", "last_activity_at"])
+    elif survey.status == "redo":
+        # Engineer picks the project back up after an admin requested changes.
+        survey.status = "active"
+        survey.save(update_fields=["status", "updated_at", "last_activity_at"])
 
     return {
         "project_id": str(survey.id),
@@ -246,18 +253,72 @@ def submit_survey_project(project_id: str, user) -> dict:
     if not (is_engineer or is_admin):
         raise PermissionError("Only the assigned engineer can submit this project")
 
-    if survey.status == "active":
+    if survey.status in ("active", "redo"):
         survey.status = "submitted"
         survey.save(update_fields=["status", "updated_at", "last_activity_at"])
     elif survey.status != "submitted":
         raise ValueError(
             f"Cannot submit project in status '{survey.status}'; "
-            "only active projects can be submitted"
+            "only active (or redo) projects can be submitted"
         )
 
     return {
         "project_id": str(survey.id),
         "name": survey.name,
         "status": survey.status,
+        "source_ftth_project_id": survey.source_ftth_project_id,
+    }
+
+def review_survey_project(project_id: str, user, action: str) -> dict:
+    """Admin review actions on a submitted Survey copy.
+
+    Actions (SUBADMIN only):
+      start_review  submitted     -> under_review   (admin starts reviewing)
+      reviewed      under_review  -> reviewed       (admin finished reviewing)
+      accept        reviewed      -> accepted       (final approval)
+      redo          submitted | under_review | reviewed -> redo (send back)
+      complete      accepted      -> completed      (close out)
+
+    Returns the updated project summary.
+    """
+    try:
+        survey = Project.objects.get(pk=project_id)
+    except Project.DoesNotExist:
+        raise ValueError(f"Survey project {project_id} not found")
+
+    is_admin = getattr(user, "role", None) == User.Role.SUBADMIN
+    if not is_admin:
+        raise PermissionError("Only a sub-admin can review projects")
+
+    if not isinstance(action, str):
+        raise ValueError("Review 'action' must be a string")
+    action = action.strip().lower()
+    transitions = {
+        "start_review": (("submitted",), "under_review"),
+        "reviewed": (("under_review",), "reviewed"),
+        "accept": (("reviewed", "under_review"), "accepted"),
+        "redo": (("submitted", "under_review", "reviewed"), "redo"),
+        "complete": (("accepted",), "completed"),
+    }
+    if action not in transitions:
+        raise ValueError(
+            f"Unknown review action '{action}'; "
+            "expected one of: " + ", ".join(sorted(transitions))
+        )
+
+    allowed_from, target = transitions[action]
+    if survey.status not in allowed_from:
+        raise ValueError(
+            f"Cannot {action} a project in status '{survey.status}'; "
+            f"allowed from: {', '.join(allowed_from)}"
+        )
+
+    survey.status = target
+    survey.save(update_fields=["status", "updated_at", "last_activity_at"])
+    return {
+        "project_id": str(survey.id),
+        "name": survey.name,
+        "status": survey.status,
+        "action": action,
         "source_ftth_project_id": survey.source_ftth_project_id,
     }
