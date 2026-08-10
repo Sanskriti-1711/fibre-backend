@@ -28,6 +28,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
+from .assign import accept_survey_project, assign_hld_project
 from .config import LAYER_NAME_MAP, STAGES
 from .models import FtthProject
 from .pipeline import (
@@ -444,3 +445,49 @@ class FtthProjectListView(APIView):
     def get(self, request):
         limit = int(request.GET.get("limit", 50))
         return JsonResponse(ftth_project_payloads(limit), safe=False)
+
+
+# ======================================================================
+# POST /api/ftth/hld/projects/<project_id>/assign/
+# ======================================================================
+
+class FtthProjectAssignView(APIView):
+    """Assign a completed HLD run to a field engineer.
+
+    Creates (or reuses) the Survey copy of the HLD run, auto-imports the
+    generated survey package into it, creates the project-scope AssignmentJob
+    and marks the engineer on the HLD project. SUBADMIN only.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+        if getattr(request.user, "role", None) != "SUBADMIN":
+            return JsonResponse(
+                {"detail": "Only SUBADMIN can assign projects."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        engineer_id = request.data.get("engineer_id") or request.POST.get("engineer_id")
+        if not engineer_id:
+            return JsonResponse(
+                {"detail": "engineer_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            result = assign_hld_project(project_id, engineer_id)
+        except ValueError as exc:
+            return JsonResponse({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except FileNotFoundError as exc:
+            return JsonResponse(
+                {"detail": f"Survey package not available: {exc}"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except Exception as exc:
+            return JsonResponse(
+                {"detail": f"Assignment failed: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return JsonResponse(result, status=status.HTTP_201_CREATED)

@@ -9,6 +9,7 @@ from django.db import connection
 
 from projects.models.project import Project
 from projects.models.import_session import ImportSession
+from ftth_hld.assign import accept_survey_project
 from ftth_hld.pipeline import ftth_project_payloads
 from .serializers import ProjectSerializer
 
@@ -151,3 +152,30 @@ class LatestProjectUpdatesAPIView(APIView):
 
         serializer = ProjectSerializer(qs, many=True)
         return Response(serializer.data)
+
+
+class ProjectAcceptAPIView(APIView):
+    """POST /api/projects/<uuid:project_id>/accept/
+
+    Engineer accepts their assigned Survey copy → status flips
+    ``assigned`` → ``active``. Only the assigned engineer (or a SUBADMIN)
+    may accept.
+    """
+
+    def post(self, request, project_id):
+        try:
+            result = accept_survey_project(str(project_id), request.user)
+        except ValueError as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND
+            )
+        except PermissionError as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN
+            )
+        except Exception as exc:
+            return Response(
+                {"detail": f"Accept failed: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response(result)

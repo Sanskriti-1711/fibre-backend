@@ -68,6 +68,18 @@ class FtthProject(models.Model):
     excel_filename = models.CharField(max_length=255, blank=True, default="")
     roads_filename = models.CharField(max_length=255, blank=True, default="")
 
+    # Field engineer this HLD run is assigned to (survey stage).
+    # The actual survey work happens on the Survey copy (Project row with
+    # source_ftth_project_id set); this field is bookkeeping for the UI.
+    assigned_engineer = models.ForeignKey(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="assigned_ftth_projects",
+    )
+    assigned_at = models.DateTimeField(null=True, blank=True)
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

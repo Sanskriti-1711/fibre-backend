@@ -164,6 +164,7 @@ class JobAssignmentsListAPIView(APIView):
                         "project": {
                             "id": str(job.project.id),
                             "name": job.project.name,
+                            "status": job.project.status,
                         },
                         "scope": job.scope,
                         "scope_display": job.get_scope_display(),
@@ -203,6 +204,48 @@ class JobAssignmentsListAPIView(APIView):
                         "status_display": self._get_status_display(feature.status),
                         "created_at": job.created_at.isoformat(),
                     })
+
+        # Include project-scope assignments (no Feature rows) so an engineer
+        # sees their assigned survey copy in the app's Active Assignments.
+        if engineer_id:
+            project_jobs = AssignmentJob.objects.filter(
+                assignee_id=engineer_id,
+                scope=AssignmentJob.SCOPE_PROJECT,
+            ).select_related("project", "assignee")
+            seen_project_job_ids = {j["id"] for j in jobs}
+            for pjob in project_jobs:
+                if str(pjob.id) in seen_project_job_ids:
+                    continue
+                seen_project_job_ids.add(str(pjob.id))
+                related_features = Feature.objects.filter(project=pjob.project)
+                status_counts = related_features.values("status").annotate(
+                    count=Count("id")
+                )
+                total_features = sum(s["count"] for s in status_counts)
+                agg_status = self._get_aggregate_status(
+                    {s["status"]: s["count"] for s in status_counts}
+                )
+                if status_filter and agg_status != status_filter:
+                    continue
+                jobs.append({
+                    "id": str(pjob.id),
+                    "project": {
+                        "id": str(pjob.project.id),
+                        "name": pjob.project.name,
+                        "status": pjob.project.status,
+                    },
+                    "scope": pjob.scope,
+                    "scope_display": pjob.get_scope_display(),
+                    "assignee": {
+                        "id": str(pjob.assignee.id),
+                        "email": pjob.assignee.email,
+                        "full_name": pjob.assignee.full_name,
+                    },
+                    "feature_count": total_features,
+                    "status": agg_status,
+                    "status_display": self._get_status_display(agg_status),
+                    "created_at": pjob.created_at.isoformat(),
+                })
 
         # Apply scope filter
         if scope_filter:

@@ -16,6 +16,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "region",
             "status",
             "standard_completion",
+            "source_ftth_project_id",
             "created_at",
             "updated_at",
             "last_activity_at",

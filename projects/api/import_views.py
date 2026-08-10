@@ -28,6 +28,89 @@ def _get_extension(filename):
     return ext
 
 
+def discover_zip_layers(file_path):
+    """List .geojson layers inside a zip, with feature counts.
+
+    Extracted from GpkgDiscoverView so the survey-package auto-import can
+    reuse the same discovery logic without an HTTP round-trip.
+    """
+    layers = []
+    with zipfile.ZipFile(file_path, "r") as zf:
+        for info in zf.infolist():
+            if not info.filename.lower().endswith(".geojson"):
+                continue
+            layer_name = os.path.splitext(os.path.basename(info.filename))[0]
+            feature_count = 0
+            try:
+                content = zf.read(info.filename).decode("utf-8")
+                data = json.loads(content)
+                features = data.get("features", [])
+                if isinstance(features, list):
+                    feature_count = len(features)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
+            layers.append({
+                "name": layer_name,
+                "feature_count": feature_count,
+                "filename": info.filename,
+            })
+    return layers
+
+
+def import_zip_layers(project, file_path, selected_layers):
+    """Create Feature records from .geojson layers inside a zip.
+
+    Extracted from GpkgImportView so the survey-package auto-import can
+    reuse the same import logic without an HTTP round-trip. Returns the
+    number of features created.
+    """
+    features_created = 0
+    selected_lower = [s.lower() for s in (selected_layers or [])]
+    with zipfile.ZipFile(file_path, "r") as zf:
+        for info in zf.infolist():
+            if not info.filename.lower().endswith(".geojson"):
+                continue
+            layer_name = os.path.splitext(os.path.basename(info.filename))[0]
+            if selected_lower and layer_name.lower() not in selected_lower:
+                continue
+            try:
+                content = zf.read(info.filename).decode("utf-8")
+                data = json.loads(content)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            features = data.get("features", [])
+            if not isinstance(features, list):
+                continue
+
+            field_schema = None
+            if features:
+                first_props = features[0].get("properties", {})
+                if isinstance(first_props, dict):
+                    field_schema = [
+                        {"key": k, "label": k.replace("_", " ").title(), "type": "text"}
+                        for k in first_props.keys()
+                    ]
+
+            for feature_payload in features:
+                geom = feature_payload.get("geometry")
+                props = feature_payload.get("properties", {})
+                if not isinstance(props, dict):
+                    props = {}
+                if not geom or not isinstance(geom, dict):
+                    continue
+                Feature.objects.create(
+                    project=project,
+                    layer_name=layer_name,
+                    layer_id=layer_name,
+                    properties=props,
+                    geometry=geom,
+                    field_schema=field_schema,
+                    status=Feature.STATUS_PENDING,
+                )
+                features_created += 1
+    return features_created
+
+
 class GpkgUploadView(APIView):
     """
     POST /api/projects/{project_id}/import/upload/
@@ -125,28 +208,8 @@ class GpkgDiscoverView(APIView):
 
         if _is_zip_file(original_filename):
             # ── ZIP discover: extract & list .geojson layers ────────────────
-            layers = []
             try:
-                with zipfile.ZipFile(file_path, "r") as zf:
-                    for info in zf.infolist():
-                        if not info.filename.lower().endswith(".geojson"):
-                            continue
-                        layer_name = os.path.splitext(os.path.basename(info.filename))[0]
-                        # Count features in this GeoJSON file
-                        feature_count = 0
-                        try:
-                            content = zf.read(info.filename).decode("utf-8")
-                            data = json.loads(content)
-                            features = data.get("features", [])
-                            if isinstance(features, list):
-                                feature_count = len(features)
-                        except (json.JSONDecodeError, UnicodeDecodeError):
-                            pass
-                        layers.append({
-                            "name": layer_name,
-                            "feature_count": feature_count,
-                            "filename": info.filename,
-                        })
+                layers = discover_zip_layers(file_path)
             except zipfile.BadZipFile as e:
                 return Response(
                     {"detail": f"Invalid zip file: {str(e)}"},
@@ -230,64 +293,8 @@ class GpkgImportView(APIView):
 
         if _is_zip_file(original_filename):
             # ── ZIP import: extract .geojson, create Feature records directly ─
-            features_created = 0
             try:
-                with zipfile.ZipFile(file_path, "r") as zf:
-                    for info in zf.infolist():
-                        if not info.filename.lower().endswith(".geojson"):
-                            continue
-                        layer_name = os.path.splitext(os.path.basename(info.filename))[0]
-
-                        # Check if this layer is in the selected list
-                        selected_layers_lower = [s.lower() for s in selected_layers]
-                        if layer_name.lower() not in selected_layers_lower:
-                            continue
-
-                        # Read and parse the GeoJSON
-                        try:
-                            content = zf.read(info.filename).decode("utf-8")
-                            data = json.loads(content)
-                        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                            continue
-
-                        features = data.get("features", [])
-                        if not isinstance(features, list):
-                            continue
-
-                        # Derive field schema from the first feature's properties
-                        field_schema = None
-                        if features:
-                            first_props = features[0].get("properties", {})
-                            if isinstance(first_props, dict):
-                                field_schema = [
-                                    {
-                                        "key": k,
-                                        "label": k.replace("_", " ").title(),
-                                        "type": "text",
-                                    }
-                                    for k in first_props.keys()
-                                ]
-
-                        for feature_payload in features:
-                            geom = feature_payload.get("geometry")
-                            props = feature_payload.get("properties", {})
-                            if not isinstance(props, dict):
-                                props = {}
-
-                            if not geom or not isinstance(geom, dict):
-                                continue
-
-                            Feature.objects.create(
-                                project=project,
-                                layer_name=layer_name,
-                                layer_id=layer_name,
-                                properties=props,
-                                geometry=geom,
-                                field_schema=field_schema,
-                                status=Feature.STATUS_PENDING,
-                            )
-                            features_created += 1
-
+                features_created = import_zip_layers(project, file_path, selected_layers)
             except zipfile.BadZipFile as e:
                 return Response(
                     {"detail": f"Invalid zip file: {str(e)}"},

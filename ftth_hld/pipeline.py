@@ -494,9 +494,21 @@ def ftth_project_payloads(limit: int = 50) -> list[dict]:
     except Exception:
         pass
 
+    # Survey copies are plain Project rows linked back via source_ftth_project_id.
+    from projects.models import Project as SurveyProject
+
+    survey_copies = {}
+    try:
+        for sc in SurveyProject.objects.filter(source_ftth_project_id__isnull=False):
+            survey_copies[sc.source_ftth_project_id] = sc
+    except Exception:
+        pass
+
     data = []
     for p in FtthProject.objects.all()[:limit]:
         enriched = engine_data.get(p.project_id, {})
+        copy = survey_copies.get(p.project_id)
+        engineer = p.assigned_engineer
         data.append({
             "project_id": p.project_id,
             "name": p.name,
@@ -509,5 +521,13 @@ def ftth_project_payloads(limit: int = 50) -> list[dict]:
             "updated_at": p.updated_at.isoformat(),
             "downloads": enriched.get("downloads", []),
             "layers": enriched.get("layers", []),
+            "assigned_engineer": {
+                "id": str(engineer.id),
+                "email": engineer.email,
+                "full_name": engineer.full_name,
+            } if engineer else None,
+            "assigned_at": p.assigned_at.isoformat() if p.assigned_at else None,
+            "survey_copy_project_id": str(copy.id) if copy else None,
+            "survey_status": copy.status if copy else None,
         })
     return data

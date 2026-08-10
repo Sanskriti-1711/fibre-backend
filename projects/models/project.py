@@ -13,11 +13,21 @@ class Project(models.Model):
         choices=[
             ("draft", "Draft"),
             ("in_progress", "In Progress"),
+            ("assigned", "Assigned"),
             ("active", "Active"),
             ("completed", "Completed"),
             ("archived", "Archived"),
         ],
         default="draft"
+    )
+
+    # When a Survey project is the copy of an HLD pipeline run, this holds
+    # the source FtthProject.project_id so we can find/reuse it on re-assign.
+    source_ftth_project_id = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        db_index=True,
     )
 
     standard_completion = models.DecimalField(max_digits=5, decimal_places=2, default=0)

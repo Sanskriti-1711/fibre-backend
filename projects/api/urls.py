@@ -1,5 +1,6 @@
 from django.urls import path
 from .projects import (
+    ProjectAcceptAPIView,
     ProjectListCreateAPIView,
     ProjectDetailAPIView,
     LatestProjectUpdatesAPIView,
@@ -25,6 +26,7 @@ urlpatterns = [
     path("projects/", ProjectListCreateAPIView.as_view()),
     path("projects/latest/", LatestProjectUpdatesAPIView.as_view()),
     path("projects/<uuid:project_id>/", ProjectDetailAPIView.as_view()),
+    path("projects/<uuid:project_id>/accept/", ProjectAcceptAPIView.as_view()),
     path("projects/<uuid:project_id>/layers/", ProjectLayerListAPIView.as_view()),
     path(
         "projects/<uuid:project_id>/layers/<str:layer_id>/field-config/",

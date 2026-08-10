@@ -11,6 +11,7 @@ from .api import (
     DeleteProjectView,
     DesignPackageView,
     DownloadFileView,
+    FtthProjectAssignView,
     FtthProjectListView,
     LayerGeoJSONView,
     PipelineStatusView,
@@ -46,4 +47,8 @@ urlpatterns = [
 
     # DELETE /api/ftth/hld/projects/<project_id>/ — delete a project
     path("ftth/hld/projects/<str:project_id>/", DeleteProjectView.as_view(), name="ftth-delete-project"),
+
+    # POST  /api/ftth/hld/projects/<project_id>/assign/ — assign to engineer
+    path("ftth/hld/projects/<str:project_id>/assign/",
+         FtthProjectAssignView.as_view(), name="ftth-assign-project"),
 ]
