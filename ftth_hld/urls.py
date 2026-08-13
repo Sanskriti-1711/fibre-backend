@@ -11,6 +11,9 @@ The LLD review/run workflow lives in the ``ftth_lld`` app
 from django.urls import path
 
 from .api import (
+    BoqDownloadView,
+    BoqRegenerateView,
+    BoqView,
     DeleteProjectView,
     DesignPackageView,
     DownloadFileView,
@@ -54,4 +57,16 @@ urlpatterns = [
     # POST  /api/ftth/hld/projects/<project_id>/assign/ — assign to engineer
     path("ftth/hld/projects/<str:project_id>/assign/",
          FtthProjectAssignView.as_view(), name="ftth-assign-project"),
+
+    # GET  /api/ftth/hld/results/<id>/boq/ — computed BOQ/BOM (JSON)
+    path("ftth/hld/results/<str:project_id>/boq/",
+         BoqView.as_view(), name="ftth-boq"),
+
+    # GET  /api/ftth/hld/results/<id>/boq/download/ — BOQ/BOM XLSX
+    path("ftth/hld/results/<str:project_id>/boq/download/",
+         BoqDownloadView.as_view(), name="ftth-boq-download"),
+
+    # POST /api/ftth/hld/results/<id>/boq/regenerate/ — force recompute
+    path("ftth/hld/results/<str:project_id>/boq/regenerate/",
+         BoqRegenerateView.as_view(), name="ftth-boq-regenerate"),
 ]

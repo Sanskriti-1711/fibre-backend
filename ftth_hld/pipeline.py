@@ -16,6 +16,7 @@ import logging
 import re
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 import requests
 
@@ -395,7 +396,7 @@ def _reproject_geometry(geom: dict, transformer) -> None:
 
 
 def _build_package_zip(project_id: str, gpkg_files: list, geojson_map: dict,
-                         label: str) -> bytes:
+                         label: str, extra_files: Optional[dict] = None) -> bytes:
     """
     Build a ZIP of pipeline outputs fetched from the FastAPI engine.
 
@@ -404,14 +405,21 @@ def _build_package_zip(project_id: str, gpkg_files: list, geojson_map: dict,
     filename) is bundled **reprojected to EPSG:4326 (WGS84)** so the
     layers render on MapLibre / web viewers without client-side
     reprojection. ``label`` is used in the "no files found" error.
+
+    ``extra_files`` (optional) maps zip filename → bytes and **overrides**
+    any engine file of the same name — used to inject the database-computed
+    BOQ/BOM workbooks over the engine's hardcoded templates.
     """
     zip_buffer = io.BytesIO()
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         files_added = 0
+        extra_files = extra_files or {}
 
-        # 1. Original GPKG / document files
+        # 1. Original GPKG / document files (skipped when an override exists)
         for fname in gpkg_files:
+            if fname in extra_files:
+                continue
             data = get_download_file(project_id, fname)
             if data is not None:
                 zf.writestr(fname, data)
@@ -425,6 +433,11 @@ def _build_package_zip(project_id: str, gpkg_files: list, geojson_map: dict,
                 continue
             reprojected = _reproject_geojson(raw)
             zf.writestr(zip_fname, reprojected)
+            files_added += 1
+
+        # 3. Extra generated documents (override engine files of same name)
+        for zip_fname, data in extra_files.items():
+            zf.writestr(zip_fname, data)
             files_added += 1
 
     zip_buffer.seek(0)
@@ -502,11 +515,24 @@ def generate_design_package(project_id: str) -> bytes:
     if not ordered:
         ordered = list(DESIGN_PACKAGE_FILES)
 
+    # Inject the database-computed BOQ/BOM over the engine's hardcoded
+    # template files (see ftth_hld/boq.py — quantities come from the
+    # persisted HLD layers, priced by the BoqRate card).
+    extra_files = {}
+    try:
+        from .boq import render_boq_xlsx
+
+        extra_files["BOQ.xlsx"] = render_boq_xlsx(project_id, sheets="boq")
+        extra_files["BOM.xlsx"] = render_boq_xlsx(project_id, sheets="bom")
+    except Exception as exc:
+        logger.warning("Could not generate BOQ/BOM for design package: %s", exc)
+
     return _build_package_zip(
         project_id,
         ordered,
         DESIGN_GEOJSON_FILES,
         "design",
+        extra_files=extra_files,
     )
 
 

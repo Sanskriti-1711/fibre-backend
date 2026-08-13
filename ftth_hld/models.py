@@ -124,3 +124,59 @@ class FtthLayer(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.ftth_project_id})"
+
+
+class BoqRate(models.Model):
+    """Rate card line item used to price BOQ/BOM quantities.
+
+    Seeded from the BOQ.xlsx template (item codes + names + units) via the
+    ``seed_boq_rates`` management command; prices are editable via Django
+    admin. ``material_rate`` / ``labour_rate`` / ``rent_rate`` are per-unit
+    prices in the project currency.
+    """
+
+    item_code = models.CharField(max_length=20, unique=True)
+    section = models.CharField(max_length=60, blank=True, default="")
+    item_name = models.CharField(max_length=255)
+    unit = models.CharField(max_length=20, blank=True, default="")
+    material_rate = models.FloatField(default=0.0)
+    labour_rate = models.FloatField(default=0.0)
+    rent_rate = models.FloatField(default=0.0)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = "ftth_boq_rates"
+        ordering = ["item_code"]
+
+    def __str__(self):
+        return f"{self.item_code} {self.item_name}"
+
+
+class BoqSnapshot(models.Model):
+    """Immutable per-project BOQ/BOM computed from the HLD output layers.
+
+    Created once the HLD run completes; regenerated only on demand. The
+    ``boq_json`` / ``bom_json`` hold the computed rows (section, code,
+    item, unit, quantity, unit prices, amounts). This decouples the
+    deliverable from the mutable layers and gives each HLD run a stable,
+    reproducible BOQ.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ftth_project = models.OneToOneField(
+        "ftth_hld.FtthProject",
+        on_delete=models.CASCADE,
+        related_name="boq_snapshot",
+    )
+    boq_json = models.JSONField(default=list)  # computed BOQ rows
+    bom_json = models.JSONField(default=list)  # computed BOM rows
+    boq_totals = models.JSONField(default=dict)
+    bom_totals = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    regenerated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "ftth_boq_snapshots"
+
+    def __str__(self):
+        return f"BOQ snapshot for {self.ftth_project_id}"

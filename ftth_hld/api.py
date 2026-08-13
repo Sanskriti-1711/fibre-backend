@@ -29,6 +29,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from .assign import accept_survey_project, assign_hld_project
+from .boq import (
+    compute_quantities,
+    generate_snapshot,
+    render_boq_xlsx,
+    totals_for,
+)
 from .config import LAYER_NAME_MAP, STAGES
 from .models import FtthProject, FtthLayer
 from .pipeline import (
@@ -499,6 +505,127 @@ class DeleteProjectView(APIView):
             "engine_deleted": engine_result.get("deleted", False),
             "engine_detail": engine_result.get("detail"),
         })
+
+
+# ======================================================================
+# GET /api/ftth/hld/results/<project_id>/boq/
+# ======================================================================
+
+class BoqView(APIView):
+    """
+    Return the computed BOQ/BOM for a completed HLD run.
+
+    GET /api/ftth/hld/results/<id>/boq/ → JSON with boq_rows, bom_rows,
+    boq_totals, bom_totals, generated_at.
+    GET /api/ftth/hld/results/<id>/boq/download/ → XLSX (BoQ + BoM sheets)
+    GET /api/ftth/hld/results/<id>/boq/regenerate/ → force recompute
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id):
+        try:
+            project = FtthProject.objects.get(pk=project_id)
+        except FtthProject.DoesNotExist:
+            return JsonResponse(
+                {"detail": "Project not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if project.status not in (FtthProject.STATUS_COMPLETED, "completed"):
+            return JsonResponse(
+                {"detail": "BOQ is only available for completed pipelines."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            snapshot = generate_snapshot(project_id)
+        except ValueError as exc:
+            return JsonResponse({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as exc:
+            return JsonResponse(
+                {"detail": f"Failed to generate BOQ: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return JsonResponse({
+            "project_id": project_id,
+            "boq_rows": snapshot.boq_json,
+            "bom_rows": snapshot.bom_json,
+            "boq_totals": snapshot.boq_totals,
+            "bom_totals": snapshot.bom_totals,
+            "generated_at": snapshot.regenerated_at or snapshot.created_at,
+        })
+
+
+class BoqRegenerateView(APIView):
+    """Force-recompute the BOQ/BOM snapshot for a project."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+        try:
+            project = FtthProject.objects.get(pk=project_id)
+        except FtthProject.DoesNotExist:
+            return JsonResponse(
+                {"detail": "Project not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if project.status not in (FtthProject.STATUS_COMPLETED, "completed"):
+            return JsonResponse(
+                {"detail": "BOQ is only available for completed pipelines."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            snapshot = generate_snapshot(project_id, force=True)
+        except Exception as exc:
+            return JsonResponse(
+                {"detail": f"Failed to regenerate BOQ: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return JsonResponse({
+            "project_id": project_id,
+            "boq_rows": snapshot.boq_json,
+            "bom_rows": snapshot.bom_json,
+            "boq_totals": snapshot.boq_totals,
+            "bom_totals": snapshot.bom_totals,
+            "generated_at": snapshot.regenerated_at or snapshot.created_at,
+        })
+
+
+class BoqDownloadView(APIView):
+    """Download the BOQ/BOM workbook as XLSX."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id):
+        try:
+            project = FtthProject.objects.get(pk=project_id)
+        except FtthProject.DoesNotExist:
+            return JsonResponse(
+                {"detail": "Project not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if project.status not in (FtthProject.STATUS_COMPLETED, "completed"):
+            return JsonResponse(
+                {"detail": "BOQ is only available for completed pipelines."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            data = render_boq_xlsx(project_id)
+        except Exception as exc:
+            return JsonResponse(
+                {"detail": f"Failed to generate BOQ workbook: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return HttpResponse(
+            data,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="{project_id}_BOQ.xlsx"',
+                "Content-Length": str(len(data)),
+            },
+        )
 
 
 # ======================================================================
