@@ -10,7 +10,7 @@ from .models import (
     RiskAssessment,
     Hazard,
     FieldEvidence,
-    SurveyChange,
+    SurveyEditLog,
     SurveyStatus,
     SyncQueueItem,
     SurveyFeature,
@@ -112,11 +112,11 @@ class FieldEvidenceSerializer(serializers.ModelSerializer):
 
 # ── Survey Changes ─────────────────────────────────────────────────────────
 
-class SurveyChangeSerializer(serializers.ModelSerializer):
+class SurveyEditLogSerializer(serializers.ModelSerializer):
     engineer_name = serializers.CharField(source='engineer.full_name', read_only=True)
 
     class Meta:
-        model = SurveyChange
+        model = SurveyEditLog
         fields = [
             'id', 'engineer', 'engineer_name', 'feature',
             'field_name', 'old_value', 'new_value',

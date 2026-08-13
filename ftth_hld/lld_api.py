@@ -56,16 +56,6 @@ _STATUS_MAP = {
     SurveyFeature.SurveyStatus.APPROVED: "approved",
     SurveyFeature.SurveyStatus.COMPLETED: "approved",
 }
-
-_ACTION_STATUS = {
-    "approve": SurveyFeature.SurveyStatus.APPROVED,
-    "reject": SurveyFeature.SurveyStatus.REJECTED,
-    "correction": SurveyFeature.SurveyStatus.NEEDS_CORRECTION,
-}
-
-# Statuses considered "resolved" for LLD readiness: approved, rejected, and
-# needs_correction (sent back for redo). Only unreviewed (NEW/MODIFIED/REMOVED/
-# PENDING_REVIEW) changes block LLD.
 _RESOLVED_STATUSES = [
     SurveyFeature.SurveyStatus.APPROVED,
     SurveyFeature.SurveyStatus.REJECTED,
@@ -83,6 +73,22 @@ def _fc(features):
     return {"type": "FeatureCollection", "features": features}
 
 
+def _normalize_layer(name):
+    """Strip GeoPackage-import artifacts from a layer name.
+
+    The GPKG import path names layers "X (Imported)" with an "imp-" layer_id
+    prefix. Normalize both so LLD output groups cleanly (no stray
+    "objects (Imported)" layer sitting next to "objects").
+    """
+    if not name:
+        return name
+    name = str(name).strip()
+    name = re.sub(r"\s*\(imported\)\s*$", "", name, flags=re.IGNORECASE)
+    if name.lower().startswith("imp-"):
+        name = name[4:]
+    return name.strip() or name
+
+
 def _hld_feature_collection(survey_copy):
     """All HLD baseline features (frozen, from the survey copy)."""
     feats = []
@@ -94,7 +100,7 @@ def _hld_feature_collection(survey_copy):
             continue
         props = dict(f.properties or {})
         props["feature_id"] = props.get("_feature_id") or str(f.id)
-        props["layer"] = f.layer_id or f.layer_name or "unknown"
+        props["layer"] = _normalize_layer(f.layer_id or f.layer_name or "unknown")
         feats.append({"type": "Feature", "geometry": f.geometry, "properties": props})
     return _fc(feats)
 
@@ -140,7 +146,7 @@ def _change_payload(sf):
     return {
         "change_id": str(sf.id),
         "feature_id": str(sf.original_hld_feature_id or sf.id),
-        "layer": sf.layer_name or sf.layer_id or "unknown",
+        "layer": _normalize_layer(sf.layer_name or sf.layer_id or "unknown"),
         "change_type": _change_type(sf),
         "status": _STATUS_MAP.get(sf.survey_status, "pending_review"),
         "original_geometry": sf.original_geometry,
@@ -181,7 +187,7 @@ def _survey_feature_collection(survey_copy):
                 removal = True
             if sf.survey_geometry:
                 geom = sf.survey_geometry
-        props = {"feature_id": str(f.id), "layer": f.layer_id or f.layer_name or "unknown"}
+        props = {"feature_id": str(f.id), "layer": _normalize_layer(f.layer_id or f.layer_name or "unknown")}
         if change_id:
             props["change_id"] = change_id
             props["status"] = survey_status
@@ -197,7 +203,7 @@ def _survey_feature_collection(survey_copy):
             "geometry": sf.survey_geometry,
             "properties": {
                 "feature_id": str(sf.id),
-                "layer": sf.layer_name or sf.layer_id or "unknown",
+                "layer": _normalize_layer(sf.layer_name or sf.layer_id or "unknown"),
                 "change_id": str(sf.id),
                 "status": _STATUS_MAP.get(sf.survey_status, "pending_review"),
                 "survey_removal": False,
@@ -214,7 +220,7 @@ def _approved_feature_collection(survey_copy):
         if f.geometry:
             props = dict(f.properties or {})
             props["feature_id"] = props.get("_feature_id") or str(f.id)
-            props["layer"] = f.layer_id or f.layer_name or "unknown"
+            props["layer"] = _normalize_layer(f.layer_id or f.layer_name or "unknown")
             keep[str(f.id)] = {"type": "Feature", "geometry": f.geometry, "properties": props}
 
     for sf in SurveyFeature.objects.filter(project=survey_copy).select_related("engineer").iterator(chunk_size=500):
@@ -239,7 +245,7 @@ def _approved_feature_collection(survey_copy):
                     "geometry": sf.survey_geometry,
                     "properties": {
                         "feature_id": str(sf.id),
-                        "layer": sf.layer_name or sf.layer_id or "unknown",
+                        "layer": _normalize_layer(sf.layer_name or sf.layer_id or "unknown"),
                         "approved": True,
                         "change_id": str(sf.id),
                     },
@@ -373,11 +379,12 @@ class LldChangeActionView(APIView):
 
         sf = get_object_or_404(SurveyFeature, id=change_id, project=copy)
         action = request.data.get("action")
-        if action not in _ACTION_STATUS:
+        new_status = SurveyFeature.status_for_decision(action)
+        if new_status is None:
             return JsonResponse({"detail": "action must be approve | reject | correction"}, status=400)
 
         was_removal = sf.survey_status == SurveyFeature.SurveyStatus.REMOVED
-        sf.survey_status = _ACTION_STATUS[action]
+        sf.survey_status = new_status
         if was_removal:
             sf.is_removal = True
         comment = (request.data.get("comment") or "").strip()

@@ -9,7 +9,7 @@ from .models import (
     RiskAssessment,
     Hazard,
     FieldEvidence,
-    SurveyChange,
+    SurveyEditLog,
     SurveyStatus,
     SyncQueueItem,
     SurveyFeature,
@@ -61,8 +61,8 @@ class FieldEvidenceAdmin(admin.ModelAdmin):
     list_filter = ['evidence_type']
 
 
-@admin.register(SurveyChange)
-class SurveyChangeAdmin(admin.ModelAdmin):
+@admin.register(SurveyEditLog)
+class SurveyEditLogAdmin(admin.ModelAdmin):
     list_display = ['id', 'engineer', 'feature', 'field_name', 'created_at']
     search_fields = ['field_name', 'feature__id']
 

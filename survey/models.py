@@ -361,18 +361,18 @@ class FieldEvidence(models.Model):
 
 # ── Survey Change / Version Control ────────────────────────────────────────
 
-class SurveyChange(models.Model):
+class SurveyEditLog(models.Model):
     """Audit trail of every edit made during survey."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     engineer = models.ForeignKey(
         'users.User',
         on_delete=models.CASCADE,
-        related_name='survey_changes',
+        related_name='survey_edit_logs',
     )
     feature = models.ForeignKey(
         'projects.Feature',
         on_delete=models.CASCADE,
-        related_name='survey_changes',
+        related_name='survey_edit_logs',
     )
     field_name = models.CharField(max_length=100)
     old_value = models.JSONField(null=True, blank=True)
@@ -384,11 +384,11 @@ class SurveyChange(models.Model):
 
     class Meta:
         ordering = ['-created_at']
-        verbose_name = 'Survey Change'
-        verbose_name_plural = 'Survey Changes'
+        verbose_name = 'Survey Edit Log'
+        verbose_name_plural = 'Survey Edit Logs'
 
     def __str__(self):
-        return f"Change: {self.field_name} — {self.created_at.strftime('%Y-%m-%d %H:%M')}"
+        return f"Edit: {self.field_name} — {self.created_at.strftime('%Y-%m-%d %H:%M')}"
 
 
 # ── Survey Status Tracking ─────────────────────────────────────────────────
@@ -499,6 +499,26 @@ class SurveyFeature(models.Model):
         REJECTED = 'rejected', 'Rejected'
         APPROVED = 'approved', 'Approved'
         COMPLETED = 'completed', 'Completed'
+
+    # Canonical decision → status mapping. Shared by the survey-app approval
+    # endpoint (/api/survey/survey-features/<id>/approval/) and the LLD review
+    # endpoint (/api/ftth/lld/.../action/). "redo" (mobile) and "correction"
+    # (LLD) both mean "send back for correction" → NEEDS_CORRECTION, NOT a
+    # rejection. Keeping one map here prevents the two endpoints diverging.
+    DECISION_STATUS = {
+        "approve": "APPROVED",
+        "reject": "REJECTED",
+        "correction": "NEEDS_CORRECTION",
+        "redo": "NEEDS_CORRECTION",
+        "request_correction": "NEEDS_CORRECTION",
+    }
+
+    @classmethod
+    def status_for_decision(cls, decision):
+        """Return the SurveyStatus value for a review decision, or None."""
+        key = (decision or "").strip().lower()
+        member = cls.DECISION_STATUS.get(key)
+        return getattr(cls.SurveyStatus, member) if member else None
 
     class SyncState(models.TextChoices):
         PENDING = 'pending', 'Pending'

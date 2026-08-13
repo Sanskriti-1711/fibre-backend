@@ -15,7 +15,7 @@ from .models import (
     RiskAssessment,
     Hazard,
     FieldEvidence,
-    SurveyChange,
+    SurveyEditLog,
     SurveyStatus,
     SyncQueueItem,
     SurveyFeature,
@@ -28,7 +28,7 @@ from .serializers import (
     RiskAssessmentSerializer,
     HazardSerializer,
     FieldEvidenceSerializer,
-    SurveyChangeSerializer,
+    SurveyEditLogSerializer,
     SurveyStatusSerializer,
     SyncQueueItemSerializer,
     SurveyFeatureSerializer,
@@ -373,12 +373,12 @@ class FieldEvidenceListCreateAPIView(APIView):
 
 # ── Survey Changes ─────────────────────────────────────────────────────────
 
-class SurveyChangeListAPIView(APIView):
+class SurveyEditLogListAPIView(APIView):
     """GET /api/survey/changes/ — list changes for a feature"""
 
     def get(self, request):
         engineer = _get_engineer(request)
-        qs = _survey_scope(request, SurveyChange.objects.all())
+        qs = _survey_scope(request, SurveyEditLog.objects.all())
         feature_id = request.GET.get('feature')
         field_name = request.GET.get('field_name')
         if feature_id:
@@ -386,11 +386,11 @@ class SurveyChangeListAPIView(APIView):
         if field_name:
             qs = qs.filter(field_name__icontains=field_name)
         qs = _apply_date_filter(qs, request)
-        return _paginate(request, qs, SurveyChangeSerializer)
+        return _paginate(request, qs, SurveyEditLogSerializer)
 
     def post(self, request):
         engineer = _get_engineer(request)
-        serializer = SurveyChangeSerializer(data=request.data)
+        serializer = SurveyEditLogSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(engineer=engineer)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -586,6 +586,7 @@ class SurveyFeatureDetailAPIView(APIView):
                     SurveyFeature.SurveyStatus.APPROVED,
                     SurveyFeature.SurveyStatus.REJECTED,
                     SurveyFeature.SurveyStatus.COMPLETED,
+                    SurveyFeature.SurveyStatus.NEEDS_CORRECTION,
                 ):
                     # Re-edit after a decision -> re-enter the approval queue
                     sf.survey_status = SurveyFeature.SurveyStatus.MODIFIED
@@ -709,9 +710,9 @@ class SurveyFeatureApprovalAPIView(APIView):
 
     Planner-only (SUBADMIN) decision endpoint.
 
-    Body: { decision: 'approve' | 'redo', notes?: str }
-    - approve -> survey_status = approved
-    - redo    -> survey_status = rejected (engineer sees the notes)
+    Body: { decision: 'approve' | 'reject' | 'redo' | 'correction', notes?: str }
+    Uses the same decision→status mapping as the LLD review endpoint:
+    approve → approved, reject → rejected, redo/correction → needs_correction.
     """
 
     def post(self, request, feature_id):
@@ -725,16 +726,14 @@ class SurveyFeatureApprovalAPIView(APIView):
         decision = request.data.get('decision')
         notes = request.data.get('notes', '') or ''
 
-        if decision == 'approve':
-            sf.survey_status = SurveyFeature.SurveyStatus.APPROVED
-        elif decision == 'redo':
-            sf.survey_status = SurveyFeature.SurveyStatus.REJECTED
-        else:
+        new_status = SurveyFeature.status_for_decision(decision)
+        if new_status is None:
             return Response(
-                {'error': "decision must be 'approve' or 'redo'"},
+                {'error': "decision must be 'approve', 'reject', 'redo' or 'correction'"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        sf.survey_status = new_status
         sf.review_notes = notes
         sf.save(update_fields=['survey_status', 'review_notes', 'updated_at'])
         serializer = SurveyFeatureSerializer(sf, context={'request': request})

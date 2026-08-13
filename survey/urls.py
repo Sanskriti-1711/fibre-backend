@@ -12,7 +12,7 @@ from .views import (
     RiskAssessmentDetailAPIView,
     HazardListCreateAPIView,
     FieldEvidenceListCreateAPIView,
-    SurveyChangeListAPIView,
+    SurveyEditLogListAPIView,
     SurveyStatusAPIView,
     SyncQueueListCreateAPIView,
     SyncQueueProcessAPIView,
@@ -47,7 +47,7 @@ urlpatterns = [
     path('evidence/', FieldEvidenceListCreateAPIView.as_view()),
 
     # Survey Changes & Status
-    path('changes/', SurveyChangeListAPIView.as_view()),
+    path('changes/', SurveyEditLogListAPIView.as_view()),
     path('status/', SurveyStatusAPIView.as_view()),
 
     # Sync Queue
