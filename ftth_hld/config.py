@@ -24,6 +24,14 @@ import os
 def _default_engine_url() -> str:
     if os.getenv("FTTH_DB", "").lower() in ("local", "dev", "docker"):
         return "http://localhost:8080"
+    # Local development (DEBUG on) defaults to the local FastAPI engine so the
+    # results map works even when the server is started without FTTH_ENGINE_URL.
+    try:
+        from django.conf import settings
+        if getattr(settings, "DEBUG", False):
+            return "http://localhost:8080"
+    except Exception:
+        pass
     return "https://ftth.zeabur.app"
 
 

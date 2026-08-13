@@ -30,7 +30,7 @@ from rest_framework.views import APIView
 
 from .assign import accept_survey_project, assign_hld_project
 from .config import LAYER_NAME_MAP, STAGES
-from .models import FtthProject
+from .models import FtthProject, FtthLayer
 from .pipeline import (
     HOST_OUTPUTS_DIR,
     delete_project,
@@ -40,7 +40,9 @@ from .pipeline import (
     get_layer_geojson,
     ftth_project_payloads,
     get_status,
+    persist_layer,
     run_pipeline,
+    sync_project_layers,
 )
 
 
@@ -229,6 +231,34 @@ class PipelineStatusView(APIView):
         except Exception:
             status_data["survey"] = None
 
+        # Persist completed layers into the GIS table (idempotent, best-effort)
+        # so the results map is backed by the database, not just the engine.
+        if status_data.get("status") == "completed":
+            try:
+                layer_names = [
+                    (l.get("name") or "").lower()
+                    for l in status_data.get("layers", [])
+                    if l.get("name")
+                ]
+                sync_project_layers(project_id, layer_names)
+            except Exception:
+                pass
+
+        # Enrich layer counts from the persisted GIS table (fast, read-only).
+        try:
+            persisted = {
+                row.name: row.feature_count
+                for row in FtthLayer.objects.filter(
+                    ftth_project__project_id=project_id
+                )
+            }
+            for layer in status_data.get("layers", []):
+                persisted_name = (layer.get("name") or "").lower()
+                if persisted_name in persisted:
+                    layer["count"] = persisted[persisted_name]
+        except Exception:
+            pass
+
         return JsonResponse(status_data)
 
 
@@ -237,19 +267,28 @@ class PipelineStatusView(APIView):
 # ======================================================================
 
 class LayerGeoJSONView(APIView):
-    """Return a pipeline layer as GeoJSON, proxied from FastAPI."""
+    """Return a pipeline layer as GeoJSON, served from the DB when available."""
 
     permission_classes = [IsAuthenticated]
 
     def get(self, request, project_id, layer_name):
-        if layer_name.lower() not in LAYER_NAME_MAP:
+        name = layer_name.lower()
+        if name not in LAYER_NAME_MAP:
             return JsonResponse(
                 {"detail": f"Unknown layer '{layer_name}'. "
                            f"Valid: {', '.join(LAYER_NAME_MAP.keys())}"},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        geojson_bytes = get_layer_geojson(project_id, layer_name)
+        # 1. Serve from the persisted GIS table if we already have it.
+        row = FtthLayer.objects.filter(
+            ftth_project__project_id=project_id, name=name
+        ).first()
+        if row is not None and row.geojson:
+            return JsonResponse(row.geojson)
+
+        # 2. Otherwise fetch from the engine and persist for next time.
+        geojson_bytes = get_layer_geojson(project_id, name)
         if geojson_bytes is None:
             return JsonResponse(
                 {"detail": f"Layer '{layer_name}' not found for this project."},
@@ -263,6 +302,11 @@ class LayerGeoJSONView(APIView):
                 {"detail": "Invalid GeoJSON received from pipeline."},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
+
+        try:
+            persist_layer(project_id, name, data)
+        except Exception:
+            pass  # persistence is best-effort; still return the layer data
 
         return JsonResponse(data)
 

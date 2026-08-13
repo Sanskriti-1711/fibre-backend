@@ -96,6 +96,37 @@ class FtthProject(models.Model):
         return self.name or self.project_id[:16]
 
 
+class FtthLayer(models.Model):
+    """Persisted HLD output layer for a pipeline run.
+
+    Stores the full GeoJSON FeatureCollection of a generated layer so the
+    results map reads from the database instead of depending on the FastAPI
+    engine being reachable. This is the GIS data store for the per-layer
+    input/output values produced by the HLD pipeline.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ftth_project = models.ForeignKey(
+        "ftth_hld.FtthProject",
+        on_delete=models.CASCADE,
+        related_name="hld_layers",
+    )
+    name = models.CharField(max_length=255)  # canonical layer name
+    geojson = models.JSONField(default=dict)  # FeatureCollection
+    feature_count = models.IntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ftth_hld_layers"
+        ordering = ["name"]
+        unique_together = [["ftth_project", "name"]]
+
+    def __str__(self):
+        return f"{self.name} ({self.ftth_project_id})"
+
+
 class ApprovedSurveyVersion(models.Model):
     """Immutable Approved Survey snapshot used as the LLD input dataset.
 

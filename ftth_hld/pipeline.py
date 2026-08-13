@@ -185,6 +185,65 @@ def get_layer_geojson(project_id: str, layer_name: str) -> bytes | None:
     return None
 
 
+def persist_layer(project_id: str, layer_name: str, geojson_data: dict) -> int:
+    """Upsert a single layer's GeoJSON into the ``FtthLayer`` table.
+
+    Returns the feature count persisted. Safely no-ops if the project is not
+    tracked by Django (e.g. the engine returned data for an unknown run).
+    """
+    from .models import FtthProject, FtthLayer
+
+    ftth = FtthProject.objects.filter(pk=project_id).first()
+    if ftth is None:
+        return 0
+    features = (
+        geojson_data.get("features", []) if isinstance(geojson_data, dict) else []
+    )
+    count = len(features)
+    FtthLayer.objects.update_or_create(
+        ftth_project=ftth,
+        name=layer_name,
+        defaults={"geojson": geojson_data, "feature_count": count},
+    )
+    return count
+
+
+def sync_project_layers(project_id: str, layer_names=None) -> dict:
+    """Fetch every HLD output layer and persist it into ``FtthLayer`` rows.
+
+    Idempotent — layers already in the DB are skipped so repeated polls stay
+    cheap. If ``layer_names`` is omitted it is derived from the engine status.
+    Returns ``{layer_name: feature_count}`` for the layers persisted.
+    """
+    from .models import FtthLayer
+
+    if layer_names is None:
+        status_data = get_status(project_id)
+        layer_names = [
+            (l.get("name") or "").lower()
+            for l in status_data.get("layers", [])
+            if l.get("name")
+        ]
+    counts = {}
+    for name in layer_names:
+        if FtthLayer.objects.filter(
+            ftth_project__project_id=project_id, name=name
+        ).exists():
+            continue
+        try:
+            raw = get_layer_geojson(project_id, name)
+        except Exception:
+            continue
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        counts[name] = persist_layer(project_id, name, data)
+    return counts
+
+
 def get_download_file(project_id: str, file_path: str) -> bytes | None:
     """
     Download an output file from the FastAPI engine.
