@@ -32,7 +32,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from ftth_hld.models import FtthProject, ApprovedSurveyVersion, LldRun, LldLayer
-from projects.models import Feature, Project
+from projects.models import Feature, Project, ProjectMember, ProjectLayer, StageEvent
 from survey.models import SurveyFeature, ApprovalRecord
 
 from .pipeline import (
@@ -67,6 +67,23 @@ _RESOLVED_STATUSES = [
 def _survey_copy(ftth_project_id):
     """The survey copy Project linked to an HLD run, or None."""
     return Project.objects.filter(source_ftth_project_id=ftth_project_id).first()
+
+
+def _record_event(project, stage, event, actor=None, entity_id="", metadata=None):
+    """Write a StageEvent to the unified project timeline (never raises)."""
+    if project is None:
+        return
+    try:
+        StageEvent.objects.create(
+            project=project,
+            stage=stage,
+            event=event,
+            actor=actor,
+            entity_id=entity_id or "",
+            metadata=metadata or {},
+        )
+    except Exception:
+        pass
 
 
 def _fc(features):
@@ -419,6 +436,123 @@ class LldRunsView(APIView):
         return JsonResponse({"runs": runs})
 
 
+class ProjectOverviewView(APIView):
+    """GET /api/ftth/lld/projects/<pid>/overview/
+
+    One aggregated endpoint for the hierarchical project view: team, business
+    & technical metadata, per-layer stats, survey approval summary, latest LLD
+    run, and the recent lifecycle events.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id):
+        ftth = get_object_or_404(FtthProject, pk=project_id)
+        copy = _survey_copy(project_id)
+
+        # ── Team ──────────────────────────────────────────────────────
+        team = []
+        if ftth.created_by:
+            team.append({"role": "planner", "user": ftth.created_by.email, "full_name": ftth.created_by.full_name or ""})
+        if ftth.assigned_engineer:
+            team.append({"role": "engineer", "user": ftth.assigned_engineer.email, "full_name": ftth.assigned_engineer.full_name or ""})
+        if copy is not None:
+            for m in ProjectMember.objects.filter(project=copy).select_related("user"):
+                team.append({"role": m.role, "user": m.user.email, "full_name": m.user.full_name or ""})
+
+        # ── Business / technical ──────────────────────────────────────
+        business = {}
+        technical = {}
+        if copy is not None:
+            business = {
+                "client_name": copy.client_name,
+                "contract_ref": copy.contract_ref,
+                "priority": copy.priority,
+                "region": copy.region,
+                "meta": copy.business_meta or {},
+            }
+            technical = dict(copy.technical_meta or {})
+
+        # ── Layers ────────────────────────────────────────────────────
+        layers = []
+        if copy is not None:
+            feature_counts = {}
+            for layer_id, layer_name, cnt in Feature.objects.filter(project=copy).values_list(
+                "layer_id", "layer_name", "id"
+            ):
+                feature_counts[layer_id] = feature_counts.get(layer_id, {"layer_name": layer_name, "count": 0})
+                feature_counts[layer_id]["count"] += 1
+
+            sf_counts = {}
+            for layer_id, status in SurveyFeature.objects.filter(project=copy).values_list(
+                "layer_id", "survey_status"
+            ):
+                entry = sf_counts.setdefault(layer_id, {"approved": 0, "total": 0})
+                entry["total"] += 1
+                if status in (SurveyFeature.SurveyStatus.APPROVED, SurveyFeature.SurveyStatus.COMPLETED):
+                    entry["approved"] += 1
+
+            for layer_id, info in feature_counts.items():
+                sfs = sf_counts.get(layer_id, {"approved": 0, "total": 0})
+                layers.append({
+                    "layer_id": layer_id,
+                    "layer_name": _normalize_layer(info["layer_name"] or layer_id),
+                    "feature_count": info["count"],
+                    "survey_changes": sfs["total"],
+                    "approved_changes": sfs["approved"],
+                })
+
+        # ── Approval summary ──────────────────────────────────────────
+        approval_summary = {"total": 0, "approved": 0, "rejected": 0, "needs_correction": 0, "pending": 0}
+        if copy is not None:
+            for status in SurveyFeature.objects.filter(project=copy).values_list("survey_status", flat=True):
+                approval_summary["total"] += 1
+                key = _STATUS_MAP.get(status, "pending_review")
+                approval_summary[key] = approval_summary.get(key, 0) + 1
+
+        # ── LLD ───────────────────────────────────────────────────────
+        run = LldRun.objects.filter(ftth_project=ftth).order_by("-run_date").first()
+        lld = None
+        if run:
+            lld = {
+                "run": run.lld_version,
+                "status": run.status,
+                "progress": run.progress,
+                "outputs": run.outputs,
+                "run_date": run.run_date.isoformat() if run.run_date else None,
+                "validation": run.validation or {},
+            }
+
+        # ── Timeline events ───────────────────────────────────────────
+        events = []
+        if copy is not None:
+            for e in StageEvent.objects.filter(project=copy).select_related("actor")[:20]:
+                events.append({
+                    "stage": e.stage,
+                    "event": e.event,
+                    "entity_id": e.entity_id,
+                    "actor": (e.actor.full_name or e.actor.email) if e.actor else None,
+                    "created_at": e.created_at.isoformat(),
+                })
+
+        return JsonResponse({
+            "project_id": project_id,
+            "name": ftth.name or project_id,
+            "hld": {
+                "status": ftth.status,
+                "progress": ftth.progress,
+                "created_at": ftth.created_at.isoformat() if ftth.created_at else None,
+                "completed_at": ftth.completed_at.isoformat() if ftth.completed_at else None,
+            },
+            "team": team,
+            "business": business,
+            "technical": technical,
+            "layers": layers,
+            "approval_summary": approval_summary,
+            "lld": lld,
+            "events": events,
+        })
+
+
 class FeatureLineageView(APIView):
     """GET /api/ftth/lld/projects/<pid>/features/<feature_id>/lineage/
 
@@ -570,6 +704,7 @@ class LldChangeActionView(APIView):
                 comment=comment,
                 reviewer=request.user if request.user.is_authenticated else None,
             )
+            _record_event(copy, "survey", f"change_{decision_value}", request.user, str(sf.id), {"comment": comment})
 
         return JsonResponse({
             "change_id": str(sf.id),
@@ -615,6 +750,7 @@ class LldApprovedVersionView(APIView):
             summary={"features": len(dataset.get("features", [])), "created_at": timezone.now().isoformat()},
             created_by=request.user if request.user.is_authenticated else None,
         )
+        _record_event(copy, "survey", "approved_survey_created", request.user, asv.version)
         return JsonResponse({
             "approved_survey_version": asv.version,
             "created_at": asv.created_at.isoformat(),
@@ -682,6 +818,7 @@ def _run_lld_job(project_id: str, run_id) -> None:
                 run.outputs = persisted
                 run.validation = status.get("validation") or {}
                 run.save()
+                _record_event(_survey_copy(project_id), "lld", "lld_completed", None, run.lld_version)
                 return
             if engine_status == "failed":
                 run.status = LldRun.STATUS_FAILED
