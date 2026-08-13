@@ -3,26 +3,12 @@ URL routing for the FTTH HLD module.
 
 All endpoints are prefixed with ``api/ftth/hld/`` and require JWT auth.
 Matches the URL structure the frontend ``ftth-api.js`` expects.
+
+The LLD review/run workflow lives in the ``ftth_lld`` app
+(``api/ftth/lld/...``).
 """
 
 from django.urls import path
-
-from .lld_api import (
-    LldApprovedVersionView,
-    LldChangeActionView,
-    LldDownloadView,
-    LldLayerView,
-    FeatureLineageView,
-    LldProjectsView,
-    ProjectMemberRemoveView,
-    ProjectMembersView,
-    ProjectOverviewView,
-    LldReviewView,
-    LldRunsView,
-    LldRunStatusView,
-    LldRunView,
-    LldVersionsView,
-)
 
 from .api import (
     DeleteProjectView,
@@ -69,40 +55,3 @@ urlpatterns = [
     path("ftth/hld/projects/<str:project_id>/assign/",
          FtthProjectAssignView.as_view(), name="ftth-assign-project"),
 ]
-
-
-# ======================================================================
-# FTTH LLD — review workflow (backed by real survey data)
-# ======================================================================
-
-lld_urlpatterns = [
-    path("ftth/lld/projects/",
-         LldProjectsView.as_view(), name="ftth-lld-projects"),
-    path("ftth/lld/runs/",
-         LldRunsView.as_view(), name="ftth-lld-runs-all"),
-    path("ftth/lld/projects/<str:project_id>/features/<str:feature_id>/lineage/",
-         FeatureLineageView.as_view(), name="ftth-lld-feature-lineage"),
-    path("ftth/lld/projects/<str:project_id>/overview/",
-         ProjectOverviewView.as_view(), name="ftth-lld-project-overview"),
-    path("ftth/lld/projects/<str:project_id>/members/",
-         ProjectMembersView.as_view(), name="ftth-lld-project-members"),
-    path("ftth/lld/projects/<str:project_id>/members/<str:member_id>/",
-         ProjectMemberRemoveView.as_view(), name="ftth-lld-project-member-remove"),
-    path("ftth/lld/projects/<str:project_id>/review/",
-         LldReviewView.as_view(), name="ftth-lld-review"),
-    path("ftth/lld/projects/<str:project_id>/changes/<str:change_id>/action/",
-         LldChangeActionView.as_view(), name="ftth-lld-action"),
-    path("ftth/lld/projects/<str:project_id>/approved-version/",
-         LldApprovedVersionView.as_view(), name="ftth-lld-approved-version"),
-    path("ftth/lld/projects/<str:project_id>/runs/",
-         LldRunView.as_view(), name="ftth-lld-runs"),
-    path("ftth/lld/projects/<str:project_id>/runs/<str:lld_version>/",
-         LldRunStatusView.as_view(), name="ftth-lld-run-status"),
-    path("ftth/lld/projects/<str:project_id>/runs/<str:lld_version>/layers/<str:layer>/",
-         LldLayerView.as_view(), name="ftth-lld-run-layer"),
-    path("ftth/lld/projects/<str:project_id>/runs/<str:lld_version>/download/",
-         LldDownloadView.as_view(), name="ftth-lld-run-download"),
-    path("ftth/lld/projects/<str:project_id>/versions/",
-         LldVersionsView.as_view(), name="ftth-lld-versions"),
-]
-urlpatterns += lld_urlpatterns
