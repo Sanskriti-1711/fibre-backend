@@ -48,6 +48,17 @@ class EngineerListAPIView(APIView):
         return Response(UserSerializer(qs, many=True).data, status=status.HTTP_200_OK)
 
 
+class UserListAPIView(APIView):
+    """List all active users (subadmins + engineers) so project members
+    can be assigned to any role (planner / engineer / reviewer / contractor)."""
+
+    permission_classes = [IsSubadmin]
+
+    def get(self, request):
+        qs = User.objects.filter(is_active=True).order_by("role", "-created_at")
+        return Response(UserSerializer(qs, many=True).data, status=status.HTTP_200_OK)
+
+
 class UserRemoveAPIView(APIView):
     permission_classes = [IsSubadmin]
 

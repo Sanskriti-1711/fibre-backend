@@ -27,13 +27,15 @@ import time
 
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from ftth_hld.models import FtthProject, ApprovedSurveyVersion, LldRun, LldLayer
 from projects.models import Feature, Project, ProjectMember, ProjectLayer, StageEvent
 from survey.models import SurveyFeature, ApprovalRecord
+from users.models import User
+from users.permissions import IsSubadmin
 
 from .pipeline import (
     lld_run as engine_lld_run,
@@ -67,6 +69,46 @@ _RESOLVED_STATUSES = [
 def _survey_copy(ftth_project_id):
     """The survey copy Project linked to an HLD run, or None."""
     return Project.objects.filter(source_ftth_project_id=ftth_project_id).first()
+
+
+def _team_members(ftth, copy):
+    """Build the team list for an HLD run.
+
+    The planner (HLD creator) and field engineer (assigned) are derived from
+    the FtthProject itself and can't be removed here. Explicit ``ProjectMember``
+    rows (reviewer / contractor / extra planner / observer, or additional
+    engineers) are managed and expose their ``member_id`` for removal.
+    """
+    members = []
+    if ftth.created_by:
+        members.append({
+            "role": "planner",
+            "user": ftth.created_by.email,
+            "full_name": ftth.created_by.full_name or "",
+            "user_id": str(ftth.created_by.id),
+            "managed": False,
+            "member_id": None,
+        })
+    if ftth.assigned_engineer:
+        members.append({
+            "role": "engineer",
+            "user": ftth.assigned_engineer.email,
+            "full_name": ftth.assigned_engineer.full_name or "",
+            "user_id": str(ftth.assigned_engineer.id),
+            "managed": False,
+            "member_id": None,
+        })
+    if copy is not None:
+        for m in ProjectMember.objects.filter(project=copy).select_related("user"):
+            members.append({
+                "role": m.role,
+                "user": m.user.email,
+                "full_name": m.user.full_name or "",
+                "user_id": str(m.user.id),
+                "managed": True,
+                "member_id": str(m.id),
+            })
+    return members
 
 
 def _record_event(project, stage, event, actor=None, entity_id="", metadata=None):
@@ -450,14 +492,7 @@ class ProjectOverviewView(APIView):
         copy = _survey_copy(project_id)
 
         # ── Team ──────────────────────────────────────────────────────
-        team = []
-        if ftth.created_by:
-            team.append({"role": "planner", "user": ftth.created_by.email, "full_name": ftth.created_by.full_name or ""})
-        if ftth.assigned_engineer:
-            team.append({"role": "engineer", "user": ftth.assigned_engineer.email, "full_name": ftth.assigned_engineer.full_name or ""})
-        if copy is not None:
-            for m in ProjectMember.objects.filter(project=copy).select_related("user"):
-                team.append({"role": m.role, "user": m.user.email, "full_name": m.user.full_name or ""})
+        team = _team_members(ftth, copy)
 
         # ── Business / technical ──────────────────────────────────────
         business = {}
@@ -551,6 +586,84 @@ class ProjectOverviewView(APIView):
             "lld": lld,
             "events": events,
         })
+
+
+class ProjectMembersView(APIView):
+    """GET/POST /api/ftth/lld/projects/<pid>/members/
+
+    List the team for an HLD run and add a managed member (reviewer,
+    contractor, observer, extra planner/engineer). Members are stored on the
+    survey copy Project, which is what links back to the HLD run.
+    """
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsSubadmin()]
+        return [IsAuthenticated()]
+
+    def get(self, request, project_id):
+        ftth = get_object_or_404(FtthProject, pk=project_id)
+        copy = _survey_copy(project_id)
+        return JsonResponse({
+            "project_id": project_id,
+            "members": _team_members(ftth, copy),
+            "roles": [{"value": v, "label": l} for v, l in ProjectMember.Role.choices],
+        })
+
+    def post(self, request, project_id):
+        ftth = get_object_or_404(FtthProject, pk=project_id)
+        copy = _survey_copy(project_id)
+        if copy is None:
+            return JsonResponse(
+                {"detail": "Assign this project to an engineer first — no survey copy exists yet."},
+                status=400,
+            )
+
+        data = request.data or {}
+        user_id = data.get("user_id")
+        role = data.get("role")
+        if not user_id or not role:
+            return JsonResponse({"detail": "user_id and role are required."}, status=400)
+        if role not in dict(ProjectMember.Role.choices):
+            return JsonResponse({"detail": f"Invalid role: {role}"}, status=400)
+
+        user = get_object_or_404(User, pk=user_id)
+        member, created = ProjectMember.objects.get_or_create(
+            project=copy,
+            user=user,
+            role=role,
+            defaults={"added_by": request.user},
+        )
+        if created:
+            _record_event(copy, "survey", "member_added", request.user, user.email, {"role": role})
+
+        return JsonResponse(
+            {
+                "member_id": str(member.id),
+                "role": role,
+                "user": user.email,
+                "full_name": user.full_name or "",
+                "created": created,
+            },
+            status=201 if created else 200,
+        )
+
+
+class ProjectMemberRemoveView(APIView):
+    """DELETE /api/ftth/lld/projects/<pid>/members/<member_id>/"""
+
+    permission_classes = [IsSubadmin]
+
+    def delete(self, request, project_id, member_id):
+        ftth = get_object_or_404(FtthProject, pk=project_id)
+        copy = _survey_copy(project_id)
+        if copy is None:
+            raise Http404("No survey copy for this project")
+        member = get_object_or_404(ProjectMember, pk=member_id, project=copy)
+        email, role = member.user.email, member.role
+        member.delete()
+        _record_event(copy, "survey", "member_removed", request.user, email, {"role": role})
+        return JsonResponse({"deleted": member_id})
 
 
 class FeatureLineageView(APIView):
