@@ -5,6 +5,8 @@ Stores metadata about each pipeline run so it can be queried
 alongside regular projects in the Django admin / API.
 """
 
+import uuid
+
 from django.db import models
 
 
@@ -92,3 +94,89 @@ class FtthProject(models.Model):
 
     def __str__(self):
         return self.name or self.project_id[:16]
+
+
+class ApprovedSurveyVersion(models.Model):
+    """Immutable Approved Survey snapshot used as the LLD input dataset.
+
+    Constructed once from HLD + approved survey changes, then never
+    modified — a new review cycle creates a new version (V1, V2, ...).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ftth_project = models.ForeignKey(
+        "ftth_hld.FtthProject",
+        on_delete=models.CASCADE,
+        related_name="approved_survey_versions",
+    )
+    version = models.CharField(max_length=32)  # AS-V01, AS-V02 ...
+    hld_version = models.CharField(max_length=32, blank=True, default="")
+
+    # Frozen dataset: approved GeoJSON features (HLD + approved changes).
+    dataset = models.JSONField(default=dict)
+    summary = models.JSONField(default=dict)  # counts per status etc.
+
+    created_by = models.ForeignKey(
+        "users.User", null=True, blank=True, on_delete=models.SET_NULL,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "ftth_approved_survey_versions"
+        ordering = ["-created_at"]
+        unique_together = [["ftth_project", "version"]]
+
+    def __str__(self):
+        return f"{self.version} ({self.ftth_project_id})"
+
+
+class LldRun(models.Model):
+    """A single LLD run and its full provenance.
+
+    Records the exact inputs (HLD version, Approved Survey version, algorithm
+    version) so any LLD output can be reproduced later.
+    """
+
+    STATUS_RUNNING = "running"
+    STATUS_COMPLETED = "completed"
+    STATUS_FAILED = "failed"
+
+    STATUS_CHOICES = [
+        (STATUS_RUNNING, "Running"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ftth_project = models.ForeignKey(
+        "ftth_hld.FtthProject",
+        on_delete=models.CASCADE,
+        related_name="lld_runs",
+    )
+    lld_version = models.CharField(max_length=32)  # LLD-V01, LLD-V02 ...
+    hld_version = models.CharField(max_length=32, blank=True, default="")
+    approved_survey_version = models.ForeignKey(
+        "ftth_hld.ApprovedSurveyVersion",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="lld_runs",
+    )
+    algorithm_version = models.CharField(max_length=64, blank=True, default="")
+    input_dataset_version = models.CharField(max_length=32, blank=True, default="")
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_RUNNING)
+    outputs = models.IntegerField(null=True, blank=True)  # number of output files
+    error_message = models.TextField(blank=True, default="")
+
+    run_by = models.ForeignKey(
+        "users.User", null=True, blank=True, on_delete=models.SET_NULL,
+    )
+    run_date = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "ftth_lld_runs"
+        ordering = ["-run_date"]
+
+    def __str__(self):
+        return f"{self.lld_version} ({self.ftth_project_id})"

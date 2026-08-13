@@ -528,12 +528,18 @@ class SurveyFeatureListCreateAPIView(APIView):
         engineer = _get_engineer(request)
         qs = _survey_scope(request, SurveyFeature.objects.all())
         project_id = request.GET.get('project')
+        project_status = request.GET.get('project_status')
         layer_id = request.GET.get('layer_id')
         survey_status = request.GET.get('survey_status')
         sync_status = request.GET.get('sync_status')
         hld_feature = request.GET.get('hld_feature')
         if project_id:
             qs = qs.filter(project_id=project_id)
+        if project_status:
+            # Comma-separated list: ?project_status=submitted,under_review
+            statuses = [s.strip() for s in project_status.split(',') if s.strip()]
+            if statuses:
+                qs = qs.filter(project__status__in=statuses)
         if layer_id:
             qs = qs.filter(layer_id=layer_id)
         if survey_status:

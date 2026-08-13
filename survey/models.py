@@ -495,6 +495,7 @@ class SurveyFeature(models.Model):
         MODIFIED = 'modified', 'Modified'
         REMOVED = 'removed', 'Removed'
         PENDING_REVIEW = 'pending_review', 'Pending Review'
+        NEEDS_CORRECTION = 'needs_correction', 'Needs Correction'
         REJECTED = 'rejected', 'Rejected'
         APPROVED = 'approved', 'Approved'
         COMPLETED = 'completed', 'Completed'
@@ -549,6 +550,10 @@ class SurveyFeature(models.Model):
         null=True,
         help_text='Evidence photo attached to this survey feature',
     )
+
+    # True once a removal has been approved — persists after the status
+    # flips to approved so the Approved Survey dataset can exclude it.
+    is_removal = models.BooleanField(default=False)
 
     # Lifecycle
     survey_status = models.CharField(

@@ -7,6 +7,14 @@ Matches the URL structure the frontend ``ftth-api.js`` expects.
 
 from django.urls import path
 
+from .lld_api import (
+    LldApprovedVersionView,
+    LldChangeActionView,
+    LldReviewView,
+    LldRunView,
+    LldVersionsView,
+)
+
 from .api import (
     DeleteProjectView,
     DesignPackageView,
@@ -52,3 +60,22 @@ urlpatterns = [
     path("ftth/hld/projects/<str:project_id>/assign/",
          FtthProjectAssignView.as_view(), name="ftth-assign-project"),
 ]
+
+
+# ======================================================================
+# FTTH LLD — review workflow (backed by real survey data)
+# ======================================================================
+
+lld_urlpatterns = [
+    path("ftth/lld/projects/<str:project_id>/review/",
+         LldReviewView.as_view(), name="ftth-lld-review"),
+    path("ftth/lld/projects/<str:project_id>/changes/<str:change_id>/action/",
+         LldChangeActionView.as_view(), name="ftth-lld-action"),
+    path("ftth/lld/projects/<str:project_id>/approved-version/",
+         LldApprovedVersionView.as_view(), name="ftth-lld-approved-version"),
+    path("ftth/lld/projects/<str:project_id>/runs/",
+         LldRunView.as_view(), name="ftth-lld-runs"),
+    path("ftth/lld/projects/<str:project_id>/versions/",
+         LldVersionsView.as_view(), name="ftth-lld-versions"),
+]
+urlpatterns += lld_urlpatterns
