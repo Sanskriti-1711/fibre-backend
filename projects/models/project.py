@@ -8,6 +8,19 @@ class Project(models.Model):
     description = models.TextField(blank=True)
     region = models.CharField(max_length=255, blank=True)
 
+    # ── Business aspects ────────────────────────────────────────────
+    client_name = models.CharField(max_length=255, blank=True, default="")
+    contract_ref = models.CharField(max_length=255, blank=True, default="")
+    priority = models.CharField(
+        max_length=10,
+        choices=[("low", "Low"), ("medium", "Medium"), ("high", "High")],
+        default="medium",
+    )
+    business_meta = models.JSONField(default=dict, blank=True)
+
+    # ── Technical aspects ───────────────────────────────────────────
+    technical_meta = models.JSONField(default=dict, blank=True)
+
     # Project lifecycle status. The engineer-facing workflow is:
     #   assigned → (engineer accepts) → active → (engineer submits) → submitted
     #   submitted → (admin) → under_review → reviewed → accepted   (final)

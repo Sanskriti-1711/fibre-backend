@@ -8,6 +8,7 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Q
 
 from .models import (
+    ApprovalRecord,
     GPSTrace,
     GPSPoint,
     TrenchSurvey,
@@ -831,5 +832,16 @@ class SurveyFeatureApprovalAPIView(APIView):
         sf.survey_status = new_status
         sf.review_notes = notes
         sf.save(update_fields=['survey_status', 'review_notes', 'updated_at'])
+
+        # First-class approval history — one record per decision.
+        decision_value = getattr(new_status, 'value', str(new_status))
+        if decision_value in ('approved', 'rejected', 'needs_correction'):
+            ApprovalRecord.objects.create(
+                survey_feature=sf,
+                decision=decision_value,
+                comment=notes,
+                reviewer=request.user if request.user.is_authenticated else None,
+            )
+
         serializer = SurveyFeatureSerializer(sf, context={'request': request})
         return Response(serializer.data)

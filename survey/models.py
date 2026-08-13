@@ -607,3 +607,41 @@ class SurveyFeature(models.Model):
     def __str__(self):
         hld = str(self.original_hld_feature_id) if self.original_hld_feature_id else 'new'
         return f"SurveyFeature {self.id} — HLD:{hld} — {self.get_survey_status_display()}"
+
+
+class ApprovalRecord(models.Model):
+    """First-class approval decision history for a survey change.
+
+    Every approve / reject / request-correction writes one of these, so a
+    change keeps a full audit trail of who decided what, when, and why —
+    rather than just flipping the ``SurveyFeature.survey_status`` flag.
+    """
+
+    class Decision(models.TextChoices):
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+        NEEDS_CORRECTION = 'needs_correction', 'Needs Correction'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    survey_feature = models.ForeignKey(
+        SurveyFeature,
+        on_delete=models.CASCADE,
+        related_name='approval_records',
+    )
+    decision = models.CharField(max_length=20, choices=Decision.choices)
+    comment = models.TextField(blank=True, default='')
+    reviewer = models.ForeignKey(
+        'users.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Approval Record'
+        verbose_name_plural = 'Approval Records'
+
+    def __str__(self):
+        return f"{self.survey_feature_id} — {self.get_decision_display()}"

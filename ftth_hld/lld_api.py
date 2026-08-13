@@ -33,7 +33,7 @@ from rest_framework.views import APIView
 
 from ftth_hld.models import FtthProject, ApprovedSurveyVersion, LldRun, LldLayer
 from projects.models import Feature, Project
-from survey.models import SurveyFeature
+from survey.models import SurveyFeature, ApprovalRecord
 
 from .pipeline import (
     lld_run as engine_lld_run,
@@ -163,6 +163,18 @@ def _change_payload(sf):
         "timestamp": (sf.updated_at or sf.created_at or timezone.now()).isoformat(),
         "evidence": {"photos": 1 if sf.photo else 0, "notes": ""},
         "comments": comments,
+        "approval_history": [
+            {
+                "decision": a.decision,
+                "comment": a.comment,
+                "reviewer": (
+                    (a.reviewer.full_name or a.reviewer.email)
+                    if a.reviewer else None
+                ),
+                "created_at": a.created_at.isoformat(),
+            }
+            for a in sf.approval_records.all()
+        ],
     }
 
 
@@ -460,14 +472,28 @@ class FeatureLineageView(APIView):
             )
             if sf:
                 lineage["survey"] = _change_payload(sf)
+                records = list(sf.approval_records.all())
+                latest = records[-1] if records else None
                 lineage["approval"] = {
                     "status": _STATUS_MAP.get(sf.survey_status, "pending_review"),
                     "review_notes": sf.review_notes or "",
-                    "reviewed_at": (
-                        sf.updated_at.isoformat() if sf.review_notes else None
+                    "reviewed_at": latest.created_at.isoformat() if latest else None,
+                    "reviewed_by": (
+                        (latest.reviewer.full_name or latest.reviewer.email)
+                        if latest and latest.reviewer else None
                     ),
-                    # Reviewer identity is captured in Phase 3 (ApprovalRecord).
-                    "reviewed_by": None,
+                    "history": [
+                        {
+                            "decision": r.decision,
+                            "comment": r.comment,
+                            "reviewer": (
+                                (r.reviewer.full_name or r.reviewer.email)
+                                if r.reviewer else None
+                            ),
+                            "created_at": r.created_at.isoformat(),
+                        }
+                        for r in records
+                    ],
                 }
 
         # ── LLD final output ───────────────────────────────────────────
@@ -534,6 +560,16 @@ class LldChangeActionView(APIView):
         if comment:
             sf.review_notes = comment
         sf.save(update_fields=["survey_status", "is_removal", "review_notes", "updated_at"])
+
+        # First-class approval history — one record per decision.
+        decision_value = getattr(new_status, "value", str(new_status))
+        if decision_value in ("approved", "rejected", "needs_correction"):
+            ApprovalRecord.objects.create(
+                survey_feature=sf,
+                decision=decision_value,
+                comment=comment,
+                reviewer=request.user if request.user.is_authenticated else None,
+            )
 
         return JsonResponse({
             "change_id": str(sf.id),
