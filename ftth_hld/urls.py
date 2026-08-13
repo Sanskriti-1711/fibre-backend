@@ -14,6 +14,7 @@ from .lld_api import (
     LldLayerView,
     LldProjectsView,
     LldReviewView,
+    LldRunsView,
     LldRunStatusView,
     LldRunView,
     LldVersionsView,
@@ -73,6 +74,8 @@ urlpatterns = [
 lld_urlpatterns = [
     path("ftth/lld/projects/",
          LldProjectsView.as_view(), name="ftth-lld-projects"),
+    path("ftth/lld/runs/",
+         LldRunsView.as_view(), name="ftth-lld-runs-all"),
     path("ftth/lld/projects/<str:project_id>/review/",
          LldReviewView.as_view(), name="ftth-lld-review"),
     path("ftth/lld/projects/<str:project_id>/changes/<str:change_id>/action/",

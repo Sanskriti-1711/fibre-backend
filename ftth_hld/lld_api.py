@@ -361,6 +361,50 @@ class LldProjectsView(APIView):
         return JsonResponse({"projects": projects})
 
 
+class LldRunsView(APIView):
+    """GET /api/ftth/lld/runs/ — every LLD run across all projects.
+
+    Feeds the LLD Outputs page (a cross-project view of the final LLD design
+    runs, mirroring the HLD Outputs page). Each entry carries its provenance
+    (HLD + Approved Survey versions), status, progress and layer list so the
+    frontend can render View Output / Download actions.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        runs = []
+        qs = LldRun.objects.select_related(
+            "ftth_project", "approved_survey_version", "run_by"
+        ).order_by("-run_date")
+        for r in qs:
+            layers = [
+                {"name": l.name, "feature_count": l.feature_count}
+                for l in LldLayer.objects.filter(lld_run=r)
+            ]
+            runs.append({
+                "project_id": r.ftth_project_id,
+                "project_name": (r.ftth_project.name or r.ftth_project_id),
+                "lld_version": r.lld_version,
+                "approved_survey_version": (
+                    r.approved_survey_version.version
+                    if r.approved_survey_version else None
+                ),
+                "hld_version": r.hld_version or HLD_VERSION,
+                "run_date": r.run_date.isoformat() if r.run_date else None,
+                "run_by": (
+                    r.run_by.full_name
+                    if r.run_by and r.run_by.full_name
+                    else (r.run_by.email if r.run_by else "LLD Pipeline (auto)")
+                ),
+                "status": r.status,
+                "outputs": r.outputs,
+                "progress": r.progress,
+                "validation": r.validation or {},
+                "layers": layers,
+            })
+        return JsonResponse({"runs": runs})
+
+
 class LldChangeActionView(APIView):
     """POST /api/ftth/lld/projects/<pid>/changes/<cid>/action/"""
     permission_classes = [IsAuthenticated]
