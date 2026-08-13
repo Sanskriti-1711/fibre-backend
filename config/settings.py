@@ -179,7 +179,9 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "http://localhost:8081",
+    "http://localhost:8123",
     "http://127.0.0.1:8081",
+    "http://127.0.0.1:8123",
 ]
 
 # Allow any https *.zeabur.app subdomain (future frontend/other services on
@@ -197,7 +199,9 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "http://localhost:8081",
+    "http://localhost:8123",
     "http://127.0.0.1:8081",
+    "http://127.0.0.1:8123",
 ]
 
 # REST Framework + JWT Config
