@@ -20,15 +20,27 @@ zero changes are still pending review (a change sent back for correction is
 considered resolved and does not block LLD).
 """
 
+import json
+import re
+import threading
+import time
+
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from ftth_hld.models import FtthProject, ApprovedSurveyVersion, LldRun
+from ftth_hld.models import FtthProject, ApprovedSurveyVersion, LldRun, LldLayer
 from projects.models import Feature, Project
 from survey.models import SurveyFeature
+
+from .pipeline import (
+    lld_run as engine_lld_run,
+    lld_status as engine_lld_status,
+    lld_layer_geojson as engine_lld_layer,
+    lld_download_zip as engine_lld_download,
+)
 
 
 HLD_VERSION = "HLD-V1"
@@ -249,13 +261,12 @@ def _project_payload(ftth):
 def _next_version(qs, prefix):
     """Compute the next AS-Vxx / LLD-Vxx label for a project."""
     field = "version" if qs.model is ApprovedSurveyVersion else "lld_version"
-    n = 1
+    n = 0
     for v in qs.values_list(field, flat=True):
-        try:
-            n = max(n, int(str(v).rsplit("-", 1)[-1]) + 1)
-        except ValueError:
-            pass
-    return "%s-V%02d" % (prefix, n)
+        m = re.search(r"(\d+)\s*$", str(v))
+        if m:
+            n = max(n, int(m.group(1)))
+    return "%s-V%02d" % (prefix, n + 1)
 
 
 
@@ -425,6 +436,88 @@ class LldApprovedVersionView(APIView):
         })
 
 
+def _run_lld_job(project_id: str, run_id) -> None:
+    """Background job: submit the LLD run to the engine, poll it, and persist
+    the final output layers. Runs on a daemon thread so the POST returns
+    immediately and the frontend polls progress via the run status.
+    """
+    from django.db import close_old_connections
+
+    try:
+        run = LldRun.objects.get(pk=run_id)
+    except LldRun.DoesNotExist:
+        return
+
+    try:
+        asv = run.approved_survey_version
+        dataset = (
+            asv.dataset if asv and isinstance(asv.dataset, dict)
+            else {"type": "FeatureCollection", "features": []}
+        )
+
+        # 1. Submit to the engine (returns immediately).
+        engine_lld_run(project_id, run.lld_version, dataset)
+
+        # 2. Poll the engine until it completes/fails (bounded).
+        deadline = time.time() + 300
+        while time.time() < deadline:
+            status = engine_lld_status(project_id, run.lld_version)
+            if status is None:
+                time.sleep(1)
+                continue
+            engine_status = status.get("status")
+            progress = int(status.get("progress") or 0)
+            if progress != run.progress:
+                run.progress = progress
+                run.save(update_fields=["progress"])
+            if engine_status == "completed":
+                layer_list = status.get("layers") or []
+                persisted = 0
+                for meta in layer_list:
+                    name = meta.get("name")
+                    if not name:
+                        continue
+                    raw = engine_lld_layer(project_id, run.lld_version, name)
+                    if raw is None:
+                        continue
+                    try:
+                        data = json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    feats = data.get("features", []) if isinstance(data, dict) else []
+                    LldLayer.objects.update_or_create(
+                        lld_run=run,
+                        name=name,
+                        defaults={"geojson": data, "feature_count": len(feats)},
+                    )
+                    persisted += 1
+                run.status = LldRun.STATUS_COMPLETED
+                run.progress = 100
+                run.outputs = persisted
+                run.validation = status.get("validation") or {}
+                run.save()
+                return
+            if engine_status == "failed":
+                run.status = LldRun.STATUS_FAILED
+                run.error_message = status.get("error") or "LLD engine failed"
+                run.save()
+                return
+            time.sleep(1)
+
+        run.status = LldRun.STATUS_FAILED
+        run.error_message = "LLD run timed out"
+        run.save()
+    except Exception as exc:
+        try:
+            run.status = LldRun.STATUS_FAILED
+            run.error_message = str(exc)
+            run.save(update_fields=["status", "error_message"])
+        except Exception:
+            pass
+    finally:
+        close_old_connections()
+
+
 class LldRunView(APIView):
     """POST /api/ftth/lld/projects/<pid>/runs/"""
     permission_classes = [IsAuthenticated]
@@ -455,11 +548,23 @@ class LldRunView(APIView):
             approved_survey_version=asv,
             algorithm_version=ALGORITHM_VERSION,
             input_dataset_version=asv.version,
-            status=LldRun.STATUS_COMPLETED,
-            outputs=len(asv.dataset.get("features", [])) if isinstance(asv.dataset, dict) else 0,
+            status=LldRun.STATUS_RUNNING,
+            progress=0,
             run_by=request.user if request.user.is_authenticated else None,
         )
-        return JsonResponse({"lld_version": run.lld_version, "status": run.status, "project_id": run.ftth_project_id})
+
+        # Orchestrate the engine asynchronously; the frontend polls progress.
+        threading.Thread(
+            target=_run_lld_job,
+            args=(project_id, run.id),
+            daemon=True,
+        ).start()
+
+        return JsonResponse({
+            "lld_version": run.lld_version,
+            "status": run.status,
+            "project_id": run.ftth_project_id,
+        })
 
 
 class LldVersionsView(APIView):
@@ -471,6 +576,10 @@ class LldVersionsView(APIView):
         asv = ApprovedSurveyVersion.objects.filter(ftth_project=ftth).first()
         runs = []
         for r in LldRun.objects.filter(ftth_project=ftth).select_related("approved_survey_version", "run_by"):
+            run_layers = [
+                {"name": l.name, "feature_count": l.feature_count}
+                for l in LldLayer.objects.filter(lld_run=r)
+            ]
             runs.append({
                 "lld_version": r.lld_version,
                 "project_id": r.ftth_project_id,
@@ -482,6 +591,9 @@ class LldVersionsView(APIView):
                 "input_dataset_version": r.input_dataset_version or (asv.version if asv else ""),
                 "status": r.status,
                 "outputs": r.outputs,
+                "progress": r.progress,
+                "validation": r.validation or {},
+                "layers": run_layers,
             })
 
         proj = _project_payload(ftth)
@@ -500,3 +612,76 @@ class LldVersionsView(APIView):
             },
             "runs": runs,
         })
+
+
+class LldRunStatusView(APIView):
+    """GET /api/ftth/lld/projects/<pid>/runs/<lld_version>/"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id, lld_version):
+        ftth = get_object_or_404(FtthProject, pk=project_id)
+        run = LldRun.objects.filter(ftth_project=ftth, lld_version=lld_version).order_by("-run_date").first()
+        if run is None:
+            return JsonResponse({"detail": "LLD run not found."}, status=404)
+        layers = [
+            {"name": l.name, "feature_count": l.feature_count}
+            for l in LldLayer.objects.filter(lld_run=run)
+        ]
+        return JsonResponse({
+            "lld_version": run.lld_version,
+            "project_id": run.ftth_project_id,
+            "status": run.status,
+            "progress": run.progress,
+            "outputs": run.outputs,
+            "validation": run.validation or {},
+            "error_message": run.error_message,
+            "layers": layers,
+            "run_date": run.run_date.isoformat() if run.run_date else None,
+        })
+
+
+class LldLayerView(APIView):
+    """GET /api/ftth/lld/projects/<pid>/runs/<lld_version>/layers/<layer>/"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id, lld_version, layer):
+        ftth = get_object_or_404(FtthProject, pk=project_id)
+        run = LldRun.objects.filter(ftth_project=ftth, lld_version=lld_version).order_by("-run_date").first()
+        if run is None:
+            return JsonResponse({"detail": "LLD run not found."}, status=404)
+        row = LldLayer.objects.filter(lld_run=run, name=layer).first()
+        if row is None:
+            return JsonResponse(
+                {"detail": f"Layer '{layer}' not found for this LLD run."},
+                status=404,
+            )
+        return JsonResponse(row.geojson)
+
+
+class LldDownloadView(APIView):
+    """GET /api/ftth/lld/projects/<pid>/runs/<lld_version>/download/"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id, lld_version):
+        ftth = get_object_or_404(FtthProject, pk=project_id)
+        run = LldRun.objects.filter(ftth_project=ftth, lld_version=lld_version).order_by("-run_date").first()
+        if run is None:
+            return JsonResponse({"detail": "LLD run not found."}, status=404)
+        if run.status != LldRun.STATUS_COMPLETED:
+            return JsonResponse(
+                {"detail": "LLD run is not completed yet."},
+                status=400,
+            )
+        data = engine_lld_download(project_id, lld_version)
+        if data is None:
+            return JsonResponse({"detail": "LLD zip not found."}, status=404)
+        return HttpResponse(
+            data,
+            content_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{project_id}_{lld_version}_lld.zip"'
+                ),
+                "Content-Length": str(len(data)),
+            },
+        )

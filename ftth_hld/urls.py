@@ -10,8 +10,11 @@ from django.urls import path
 from .lld_api import (
     LldApprovedVersionView,
     LldChangeActionView,
+    LldDownloadView,
+    LldLayerView,
     LldProjectsView,
     LldReviewView,
+    LldRunStatusView,
     LldRunView,
     LldVersionsView,
 )
@@ -78,6 +81,12 @@ lld_urlpatterns = [
          LldApprovedVersionView.as_view(), name="ftth-lld-approved-version"),
     path("ftth/lld/projects/<str:project_id>/runs/",
          LldRunView.as_view(), name="ftth-lld-runs"),
+    path("ftth/lld/projects/<str:project_id>/runs/<str:lld_version>/",
+         LldRunStatusView.as_view(), name="ftth-lld-run-status"),
+    path("ftth/lld/projects/<str:project_id>/runs/<str:lld_version>/layers/<str:layer>/",
+         LldLayerView.as_view(), name="ftth-lld-run-layer"),
+    path("ftth/lld/projects/<str:project_id>/runs/<str:lld_version>/download/",
+         LldDownloadView.as_view(), name="ftth-lld-run-download"),
     path("ftth/lld/projects/<str:project_id>/versions/",
          LldVersionsView.as_view(), name="ftth-lld-versions"),
 ]

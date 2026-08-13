@@ -200,6 +200,10 @@ class LldRun(models.Model):
     outputs = models.IntegerField(null=True, blank=True)  # number of output files
     error_message = models.TextField(blank=True, default="")
 
+    # LLD engine progress (0-100) + the continuity/attribute validation summary.
+    progress = models.IntegerField(default=0)
+    validation = models.JSONField(default=dict)
+
     run_by = models.ForeignKey(
         "users.User", null=True, blank=True, on_delete=models.SET_NULL,
     )
@@ -211,3 +215,33 @@ class LldRun(models.Model):
 
     def __str__(self):
         return f"{self.lld_version} ({self.ftth_project_id})"
+
+
+class LldLayer(models.Model):
+    """A single LLD output layer (GeoJSON FeatureCollection) for a run.
+
+    The final LLD design is the HLD layer set with the approved survey
+    changes applied — persisted per layer so the LLD results map reads from
+    the database and the output can be downloaded as a zip.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    lld_run = models.ForeignKey(
+        "ftth_hld.LldRun",
+        on_delete=models.CASCADE,
+        related_name="layers",
+    )
+    name = models.CharField(max_length=255)
+    geojson = models.JSONField(default=dict)
+    feature_count = models.IntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ftth_lld_layers"
+        ordering = ["name"]
+        unique_together = [["lld_run", "name"]]
+
+    def __str__(self):
+        return f"{self.name} ({self.lld_run_id})"
