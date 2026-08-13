@@ -16,7 +16,8 @@ and attributes).  Statuses follow the frontend contract:
 pending_review / approved / rejected / needs_correction.
 
 LLD is only runnable once an immutable Approved Survey Version exists and
-zero changes are unresolved (pending + needs_correction == 0).
+zero changes are still pending review (a change sent back for correction is
+considered resolved and does not block LLD).
 """
 
 from django.utils import timezone
@@ -49,6 +50,16 @@ _ACTION_STATUS = {
     "reject": SurveyFeature.SurveyStatus.REJECTED,
     "correction": SurveyFeature.SurveyStatus.NEEDS_CORRECTION,
 }
+
+# Statuses considered "resolved" for LLD readiness: approved, rejected, and
+# needs_correction (sent back for redo). Only unreviewed (NEW/MODIFIED/REMOVED/
+# PENDING_REVIEW) changes block LLD.
+_RESOLVED_STATUSES = [
+    SurveyFeature.SurveyStatus.APPROVED,
+    SurveyFeature.SurveyStatus.REJECTED,
+    SurveyFeature.SurveyStatus.COMPLETED,
+    SurveyFeature.SurveyStatus.NEEDS_CORRECTION,
+]
 
 
 def _survey_copy(ftth_project_id):
@@ -289,6 +300,50 @@ class LldReviewView(APIView):
         })
 
 
+class LldProjectsView(APIView):
+    """GET /api/ftth/lld/projects/ — survey changes clubbed by project.
+
+    Returns every HLD run that has a survey copy, with its survey-change
+    queue (change payloads) and a per-project LLD readiness summary so the
+    frontend can render one block per project and enable Run LLD only when
+    zero changes remain unresolved.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        projects = []
+        for ftth in FtthProject.objects.all().order_by("-created_at"):
+            copy = _survey_copy(ftth.project_id)
+            if copy is None:
+                continue
+            changes = [
+                _change_payload(sf)
+                for sf in SurveyFeature.objects.filter(project=copy)
+                .select_related("engineer")
+                .iterator(chunk_size=500)
+            ]
+            if not changes:
+                continue
+            statuses = [c["status"] for c in changes]
+            pending = statuses.count("pending_review")
+            correction = statuses.count("needs_correction")
+            asv = ApprovedSurveyVersion.objects.filter(ftth_project=ftth).first()
+            projects.append({
+                "project_id": ftth.project_id,
+                "name": ftth.name or ftth.project_id,
+                "hld_version": HLD_VERSION,
+                "total": len(changes),
+                "pending": pending,
+                "approved": statuses.count("approved"),
+                "rejected": statuses.count("rejected"),
+                "needs_correction": correction,
+                "ready": pending == 0,
+                "approved_survey_version": asv.version if asv else None,
+                "changes": changes,
+            })
+        return JsonResponse({"projects": projects})
+
+
 class LldChangeActionView(APIView):
     """POST /api/ftth/lld/projects/<pid>/changes/<cid>/action/"""
     permission_classes = [IsAuthenticated]
@@ -348,11 +403,7 @@ class LldApprovedVersionView(APIView):
             })
 
         unresolved = SurveyFeature.objects.filter(project=copy).exclude(
-            survey_status__in=[
-                SurveyFeature.SurveyStatus.APPROVED,
-                SurveyFeature.SurveyStatus.REJECTED,
-                SurveyFeature.SurveyStatus.COMPLETED,
-            ]
+            survey_status__in=_RESOLVED_STATUSES
         ).count()
         if unresolved:
             return JsonResponse({"detail": "Cannot create Approved Survey Version while %d change(s) are unresolved." % unresolved}, status=400)
@@ -391,11 +442,7 @@ class LldRunView(APIView):
         unresolved = 0
         if copy is not None:
             unresolved = SurveyFeature.objects.filter(project=copy).exclude(
-                survey_status__in=[
-                    SurveyFeature.SurveyStatus.APPROVED,
-                    SurveyFeature.SurveyStatus.REJECTED,
-                    SurveyFeature.SurveyStatus.COMPLETED,
-                ]
+                survey_status__in=_RESOLVED_STATUSES
             ).count()
         if unresolved:
             return JsonResponse({"detail": "LLD not ready - %d change(s) unresolved." % unresolved}, status=400)
