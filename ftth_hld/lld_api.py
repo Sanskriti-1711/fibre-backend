@@ -407,6 +407,103 @@ class LldRunsView(APIView):
         return JsonResponse({"runs": runs})
 
 
+class FeatureLineageView(APIView):
+    """GET /api/ftth/lld/projects/<pid>/features/<feature_id>/lineage/
+
+    Returns the full lifecycle of a single feature across every stage:
+
+        HLD      -> baseline geometry + attributes (projects.Feature)
+        Survey   -> the engineer's change (why, original vs survey, who/when)
+        Approval -> decision status + reviewer notes
+        LLD      -> final output layer(s) + geometry + attributes
+
+    Links are resolved through the stable ``feature_id`` that the LLD engine
+    carries through from the HLD Feature id, so a reviewer can trace exactly
+    what happened to this feature at each stage.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id, feature_id):
+        ftth = get_object_or_404(FtthProject, pk=project_id)
+        copy = _survey_copy(project_id)
+
+        lineage = {
+            "project_id": project_id,
+            "feature_id": feature_id,
+            "hld": None,
+            "survey": None,
+            "approval": None,
+            "lld": None,
+        }
+
+        # ── HLD baseline ───────────────────────────────────────────────
+        if copy is not None:
+            feature = Feature.objects.filter(project=copy, id=feature_id).first()
+            if feature:
+                lineage["hld"] = {
+                    "feature_id": str(feature.id),
+                    "layer": _normalize_layer(feature.layer_id or feature.layer_name or "unknown"),
+                    "layer_id": feature.layer_id,
+                    "layer_name": feature.layer_name,
+                    "geometry": feature.geometry,
+                    "attributes": feature.properties or {},
+                }
+
+            # ── Survey change + approval ───────────────────────────────
+            sf = (
+                SurveyFeature.objects.filter(
+                    project=copy, original_hld_feature_id=feature_id
+                )
+                .select_related("engineer")
+                .order_by("-updated_at")
+                .first()
+            )
+            if sf:
+                lineage["survey"] = _change_payload(sf)
+                lineage["approval"] = {
+                    "status": _STATUS_MAP.get(sf.survey_status, "pending_review"),
+                    "review_notes": sf.review_notes or "",
+                    "reviewed_at": (
+                        sf.updated_at.isoformat() if sf.review_notes else None
+                    ),
+                    # Reviewer identity is captured in Phase 3 (ApprovalRecord).
+                    "reviewed_by": None,
+                }
+
+        # ── LLD final output ───────────────────────────────────────────
+        run = (
+            LldRun.objects.filter(ftth_project=ftth, status=LldRun.STATUS_COMPLETED)
+            .order_by("-run_date")
+            .first()
+        )
+        if run:
+            layers = []
+            final = None
+            for l in LldLayer.objects.filter(lld_run=run):
+                for f in l.geojson.get("features", []):
+                    props = f.get("properties", {}) or {}
+                    if props.get("feature_id") == feature_id:
+                        final = {
+                            "layer": l.name,
+                            "geometry": f.get("geometry"),
+                            "attributes": props,
+                        }
+                        layers.append(l.name)
+            lineage["lld"] = {
+                "run": run.lld_version,
+                "approved_survey_version": (
+                    run.approved_survey_version.version
+                    if run.approved_survey_version else None
+                ),
+                "status": run.status,
+                "run_date": run.run_date.isoformat() if run.run_date else None,
+                "layers": layers,
+                "final": final,
+            }
+
+        return JsonResponse(lineage)
+
+
 class LldChangeActionView(APIView):
     """POST /api/ftth/lld/projects/<pid>/changes/<cid>/action/"""
     permission_classes = [IsAuthenticated]
