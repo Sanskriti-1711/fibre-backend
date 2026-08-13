@@ -34,6 +34,8 @@ from .serializers import (
     SurveyFeatureSerializer,
 )
 
+from projects.models import Feature
+
 # ── Pagination Defaults ───────────────────────────────────────────────────
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
@@ -518,6 +520,94 @@ def _process_sync_item(item):
         serializer.save(engineer=item.engineer)
 
 
+def _persist_survey_domain_data(engineer, data, hld_feature_id):
+    """Persist typed survey-domain data carried in a survey-feature write.
+
+    The mobile app can attach optional typed keys alongside geometry/attributes
+    so a single upsert also records the typed field-survey data:
+
+        trench:   { trench_type, construction_method, depth_mm, ... }
+        risks:    [ { category, severity, probability, ... } ]
+        hazards:  [ { hazard_type, mitigation_template, ... } ]
+        evidence: [ { evidence_type, description, latitude, longitude, ... } ]
+
+    Each is persisted to its dedicated table, linked to the HLD Feature when
+    available. Attribute diffs are also written to SurveyEditLog for the audit
+    trail. Errors on individual typed rows are swallowed so they never block
+    the core SurveyFeature write.
+    """
+    if not isinstance(data, dict):
+        return {}
+
+    feature = None
+    if hld_feature_id:
+        try:
+            feature = Feature.objects.filter(id=hld_feature_id).first()
+        except Exception:
+            feature = None
+
+    counts = {"trench": 0, "risks": 0, "hazards": 0, "evidence": 0, "edits": 0}
+
+    def _save(serializer_cls, payload):
+        ser = serializer_cls(data=payload)
+        if ser.is_valid():
+            ser.save(engineer=engineer)
+            return True
+        return False
+
+    def _clean(payload):
+        return {
+            k: v for k, v in payload.items()
+            if k not in ("id", "engineer", "engineer_name", "created_at", "updated_at", "file")
+        }
+
+    trench = data.get("trench")
+    if isinstance(trench, dict) and feature is not None:
+        tdata = _clean(trench)
+        tdata["feature"] = str(feature.id)
+        if _save(TrenchSurveySerializer, tdata):
+            counts["trench"] += 1
+
+    for key, serializer_cls, count_key in (
+        ("risks", RiskAssessmentSerializer, "risks"),
+        ("hazards", HazardSerializer, "hazards"),
+        ("evidence", FieldEvidenceSerializer, "evidence"),
+    ):
+        items = data.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            payload = _clean(item)
+            if feature is not None:
+                payload.setdefault("feature", str(feature.id))
+            if _save(serializer_cls, payload):
+                counts[count_key] += 1
+
+    # Audit trail — one SurveyEditLog row per changed attribute.
+    orig = data.get("original_attributes") or {}
+    surv = data.get("survey_attributes") or {}
+    if isinstance(orig, dict) and isinstance(surv, dict):
+        for field_name in sorted(set(list(orig.keys()) + list(surv.keys()))):
+            old = orig.get(field_name)
+            new = surv.get(field_name)
+            if old == new:
+                continue
+            payload = {
+                "field_name": str(field_name),
+                "old_value": old,
+                "new_value": new,
+                "reason": data.get("change_reason", ""),
+            }
+            if feature is not None:
+                payload["feature"] = str(feature.id)
+            if _save(SurveyEditLogSerializer, payload):
+                counts["edits"] += 1
+
+    return counts
+
+
 # ── Survey Features (HLD/Survey Separation) ───────────────────────────────
 
 class SurveyFeatureListCreateAPIView(APIView):
@@ -556,6 +646,9 @@ class SurveyFeatureListCreateAPIView(APIView):
         serializer = SurveyFeatureSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(engineer=engineer)
+            _persist_survey_domain_data(
+                engineer, request.data, request.data.get('original_hld_feature')
+            )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -594,6 +687,7 @@ class SurveyFeatureDetailAPIView(APIView):
             serializer.save(version_number=sf.version_number,
                             survey_status=sf.survey_status,
                             sync_status=sf.sync_status)
+            _persist_survey_domain_data(engineer, request.data, sf.original_hld_feature_id)
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -651,6 +745,7 @@ class SurveyFeatureUpsertAPIView(APIView):
                         extra['survey_status'] = SurveyFeature.SurveyStatus.MODIFIED
                     extra['sync_status'] = SurveyFeature.SyncState.PENDING
             serializer.save(engineer=engineer, **extra)
+            _persist_survey_domain_data(engineer, request.data, hld_feature_id)
             return Response(serializer.data, status=status.HTTP_200_OK if sf else status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

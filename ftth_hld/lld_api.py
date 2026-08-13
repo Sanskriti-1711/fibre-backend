@@ -151,6 +151,8 @@ def _change_payload(sf):
         "status": _STATUS_MAP.get(sf.survey_status, "pending_review"),
         "original_geometry": sf.original_geometry,
         "survey_geometry": sf.survey_geometry,
+        "original_attributes": sf.original_attributes or {},
+        "survey_attributes": sf.survey_attributes or {},
         "attributes": _attr_diff(sf),
         "reason": sf.change_reason or "",
         "engineer": (
