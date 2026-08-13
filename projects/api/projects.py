@@ -17,6 +17,10 @@ from .serializers import ProjectSerializer
 
 MICROSERVICE_BASE_URL = "https://fiber-import.zeabur.app"
 
+# Survey statuses that mark the transition from field survey into the LLD
+# (review + detailed design) stage.
+LLD_STATUSES = {"submitted", "under_review", "reviewed", "accepted", "completed"}
+
 
 class ProjectListCreateAPIView(APIView):
     """
@@ -55,13 +59,15 @@ class ProjectListCreateAPIView(APIView):
         # approval queues) never see HLD run ids; the projects page opts into
         # 'all' for the unified view.
         kind = request.GET.get("kind", "survey").lower()
+        stage = request.GET.get("stage", "").lower()
 
         survey = ProjectSerializer(qs, many=True).data
 
         # Attach the engineers assigned to each survey copy (project-scope
         # AssignmentJob), mirroring the shape HLD rows get from
         # ftth_project_payloads() so the UI can show "Assigned To" on both.
-        # Only needed when survey rows are actually part of the response.
+        # Also stamp each row with its stage: 'survey' while in the field,
+        # 'lld' once the engineer submits for review.
         if survey and kind in ("survey", "all"):
             from assignments.models import AssignmentJob
             jobs = AssignmentJob.objects.filter(
@@ -75,6 +81,9 @@ class ProjectListCreateAPIView(APIView):
             for item in survey:
                 item["type"] = "survey"
                 item["kind"] = "survey"
+                item["stage"] = (
+                    "lld" if (item.get("status") or "") in LLD_STATUSES else "survey"
+                )
                 engs = []
                 for job in by_project.get(str(item["id"]), []):
                     engs.append({
@@ -84,6 +93,12 @@ class ProjectListCreateAPIView(APIView):
                     })
                 item["assigned_engineer"] = engs[0] if engs else None
                 item["assigned_engineers"] = engs
+
+        # Optional stage filter (additive — only affects survey copies, never
+        # HLD rows, and defaults to no filtering so downstream consumers that
+        # don't pass `stage` keep the full survey list).
+        if stage in ("survey", "lld") and survey:
+            survey = [s for s in survey if s.get("stage") == stage]
 
         hld = []
         if kind in ("hld", "all"):
@@ -98,6 +113,7 @@ class ProjectListCreateAPIView(APIView):
             for item in hld:
                 item["type"] = "hld"
                 item["kind"] = "hld"
+                item["stage"] = "hld"
 
         if kind == "hld":
             return Response(hld)
