@@ -287,10 +287,13 @@ class LayerGeoJSONView(APIView):
             )
 
         # 1. Serve from the persisted GIS table if we already have it.
+        #    A row persisted mid-run (before ingestion) can hold an empty
+        #    FeatureCollection — treat that as stale and refresh from the
+        #    engine instead of serving an empty layer forever.
         row = FtthLayer.objects.filter(
             ftth_project__project_id=project_id, name=name
         ).first()
-        if row is not None and row.geojson:
+        if row is not None and row.geojson and row.geojson.get("features"):
             return JsonResponse(row.geojson)
 
         # 2. Otherwise fetch from the engine and persist for next time.
