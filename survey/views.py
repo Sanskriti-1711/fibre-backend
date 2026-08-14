@@ -35,7 +35,13 @@ from .serializers import (
     SurveyFeatureSerializer,
 )
 
-from projects.models import Feature
+from projects.models import Feature, Project
+
+# Project statuses that mean "sent for review / approved" — if the engineer
+# makes a new edit while the survey is in one of these, the project returns
+# to `active` so they can resubmit (a new LLD review cycle, which produces a
+# new Approved Survey Version instead of modifying the frozen one).
+_REVIEW_DONE_STATUSES = {"submitted", "under_review", "reviewed", "accepted", "completed"}
 
 # ── Pagination Defaults ───────────────────────────────────────────────────
 DEFAULT_PAGE_SIZE = 20
@@ -46,6 +52,22 @@ MAX_PAGE_SIZE = 100
 def _get_engineer(request):
     """Get the authenticated engineer from request."""
     return request.user
+
+
+def _reopen_project_after_edit(sf):
+    """When the engineer edits a feature after the survey was submitted,
+    return the survey copy to `active` so they can resubmit.
+
+    The Approved Survey Version (if any) is never modified — the next
+    review cycle produces a new version (AS-V02) instead.
+    """
+    try:
+        project = Project.objects.filter(id=sf.project_id).first()
+        if project and project.status in _REVIEW_DONE_STATUSES:
+            project.status = "active"
+            project.save(update_fields=["status", "updated_at", "last_activity_at"])
+    except Exception:
+        pass
 
 
 def _survey_scope(request, qs):
@@ -689,6 +711,9 @@ class SurveyFeatureDetailAPIView(APIView):
                             survey_status=sf.survey_status,
                             sync_status=sf.sync_status)
             _persist_survey_domain_data(engineer, request.data, sf.original_hld_feature_id)
+            # Engineer edited after submission -> reopen the survey so they can
+            # resubmit (new review cycle, new ASV version — never modify V1).
+            _reopen_project_after_edit(sf)
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -747,6 +772,10 @@ class SurveyFeatureUpsertAPIView(APIView):
                     extra['sync_status'] = SurveyFeature.SyncState.PENDING
             serializer.save(engineer=engineer, **extra)
             _persist_survey_domain_data(engineer, request.data, hld_feature_id)
+            if sf:
+                # Engineer edited after submission -> reopen the survey so they
+                # can resubmit (new review cycle, new ASV version).
+                _reopen_project_after_edit(sf)
             return Response(serializer.data, status=status.HTTP_200_OK if sf else status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

@@ -63,7 +63,10 @@ _RESOLVED_STATUSES = [
     SurveyFeature.SurveyStatus.APPROVED,
     SurveyFeature.SurveyStatus.REJECTED,
     SurveyFeature.SurveyStatus.COMPLETED,
-    SurveyFeature.SurveyStatus.NEEDS_CORRECTION,
+    # NOTE: NEEDS_CORRECTION is intentionally NOT resolved — per the LLD
+    # spec, LLD must not run while corrections are outstanding. A correction
+    # only becomes resolved when the engineer re-edits the feature (which
+    # flips it back to MODIFIED / pending_review) and the reviewer approves.
 ]
 
 
@@ -428,7 +431,7 @@ class LldProjectsView(APIView):
                 "approved": statuses.count("approved"),
                 "rejected": statuses.count("rejected"),
                 "needs_correction": correction,
-                "ready": pending == 0,
+                "ready": pending == 0 and correction == 0,
                 "approved_survey_version": asv.version if asv else None,
                 "changes": changes,
             })
@@ -791,10 +794,27 @@ class LldChangeActionView(APIView):
         if copy is None:
             return JsonResponse({"detail": "No survey copy for this project."}, status=400)
 
-        if ApprovedSurveyVersion.objects.filter(ftth_project=ftth).exists():
-            return JsonResponse({"detail": "Review is locked - the Approved Survey Version is immutable."}, status=400)
-
         sf = get_object_or_404(SurveyFeature, id=change_id, project=copy)
+
+        # Immutability rule: the frozen Approved Survey Version dataset is
+        # never modified. A NEW review cycle (engineer re-edits after a
+        # version was created) is allowed — it produces a NEW version
+        # (AS-V02) when complete. Only changes that are already resolved
+        # (approved / rejected / completed) are locked, because flipping
+        # them would silently contradict the frozen version.
+        asv = ApprovedSurveyVersion.objects.filter(ftth_project=ftth).order_by("-created_at").first()
+        if asv is not None and sf.survey_status in (
+            SurveyFeature.SurveyStatus.APPROVED,
+            SurveyFeature.SurveyStatus.REJECTED,
+            SurveyFeature.SurveyStatus.COMPLETED,
+        ):
+            return JsonResponse({
+                "detail": (
+                    "This change is already resolved in Approved Survey Version %s. "
+                    "The engineer must re-edit the feature to start a new review cycle."
+                ) % asv.version,
+            }, status=400)
+
         action = request.data.get("action")
         new_status = SurveyFeature.status_for_decision(action)
         if new_status is None:
@@ -840,13 +860,22 @@ class LldApprovedVersionView(APIView):
         if copy is None:
             return JsonResponse({"detail": "No survey copy for this project."}, status=400)
 
-        existing = ApprovedSurveyVersion.objects.filter(ftth_project=ftth).first()
+        existing = ApprovedSurveyVersion.objects.filter(ftth_project=ftth).order_by("-created_at").first()
         if existing:
-            return JsonResponse({
-                "approved_survey_version": existing.version,
-                "created_at": existing.created_at.isoformat(),
-                "features": _approved_feature_collection(copy),
-            })
+            # New review cycle? Any survey feature edited after the last
+            # version was frozen means the approved dataset changed.
+            newer = SurveyFeature.objects.filter(
+                project=copy, updated_at__gt=existing.created_at
+            ).exists()
+            if not newer:
+                return JsonResponse({
+                    "approved_survey_version": existing.version,
+                    "created_at": existing.created_at.isoformat(),
+                    "features": _approved_feature_collection(copy),
+                })
+            # else: fall through and create the NEXT version (AS-V02) — the
+            # frozen V1 is never modified, exactly as the immutability rule
+            # requires.
 
         unresolved = SurveyFeature.objects.filter(project=copy).exclude(
             survey_status__in=_RESOLVED_STATUSES
