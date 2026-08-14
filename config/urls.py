@@ -10,6 +10,7 @@ urlpatterns = [
     path("api/", include("assignments.api.urls")),
     path("api/", include("ftth_hld.urls")),
     path("api/", include("ftth_lld.urls")),
+    path("api/", include("permits.urls")),
     path("api/survey/", include("survey.urls")),
 ]
 

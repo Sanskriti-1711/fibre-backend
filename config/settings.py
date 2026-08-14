@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'assignments',
     'ftth_hld',
     'ftth_lld',
+    'permits',
     'survey',
 ]
 
