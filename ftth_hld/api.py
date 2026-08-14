@@ -184,13 +184,20 @@ class PipelineStatusView(APIView):
         status_data = get_status(project_id)
 
         if status_data.get("status") == "unknown":
+            # A non-completed run must never advertise a finished progress
+            # bar, even when the engine is unreachable and we fall back to
+            # the last persisted Django row.
+            fallback_status = project.status
+            fallback_progress = int(project.progress or 0)
+            if fallback_status != "completed":
+                fallback_progress = min(fallback_progress, 99)
             return JsonResponse({
                 "project_id": project_id,
-                "status": project.status,
+                "status": fallback_status,
                 "stage": project.stage_name,
                 "stage_index": project.stage_index,
                 "stage_count": project.stage_count,
-                "progress": project.progress,
+                "progress": fallback_progress,
                 "messages": [],
                 "layers": [],
                 "downloads": [],
@@ -201,9 +208,14 @@ class PipelineStatusView(APIView):
 
         engine_status = status_data.get("status")
         if engine_status and engine_status != project.status:
+            # Persist the engine progress, but never record 100% for a run
+            # that has not actually completed (guards stale DB rows).
+            persisted_progress = int(status_data.get("progress", 0) or 0)
+            if engine_status != "completed":
+                persisted_progress = min(persisted_progress, 99)
             FtthProject.objects.filter(pk=project_id).update(
                 status=engine_status,
-                progress=status_data.get("progress", 0),
+                progress=persisted_progress,
                 stage_name=status_data.get("stage_name", ""),
                 stage_index=status_data.get("stage_index", 0),
                 error_message=status_data.get("error", ""),
@@ -264,6 +276,17 @@ class PipelineStatusView(APIView):
                     layer["count"] = persisted[persisted_name]
         except Exception:
             pass
+
+        # Final guard: cap the progress we serve at 99% unless the run is
+        # actually completed, so a buggy/stale backend can never drive the
+        # UI progress bar to 100% mid-run.
+        if status_data.get("status") != "completed":
+            try:
+                status_data["progress"] = min(
+                    int(status_data.get("progress") or 0), 99
+                )
+            except (TypeError, ValueError):
+                status_data["progress"] = 0
 
         return JsonResponse(status_data)
 
