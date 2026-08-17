@@ -21,9 +21,12 @@ considered resolved and does not block LLD).
 """
 
 import json
+import logging
 import re
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -33,6 +36,7 @@ from rest_framework.views import APIView
 
 from ftth_hld.models import FtthProject
 from ftth_lld.models import ApprovedSurveyVersion, LldLayer, LldRun
+from permits.rules.engine import run_analysis as run_permit_analysis
 from projects.models import Feature, Project, ProjectMember, ProjectLayer, StageEvent
 from survey.models import SurveyFeature, ApprovalRecord
 from users.models import User
@@ -962,6 +966,20 @@ def _run_lld_job(project_id: str, run_id) -> None:
                 run.validation = status.get("validation") or {}
                 run.save()
                 _record_event(_survey_copy(project_id), "lld", "lld_completed", None, run.lld_version)
+
+                # Permit auto-analysis: keep the permit matrix (and the LLD
+                # map's permit-status colours) in sync with the freshly
+                # completed run. Never let a permit-engine failure break the
+                # LLD completion path.
+                try:
+                    summary = run_permit_analysis(project_id)
+                    logger.info(
+                        "Permit analysis auto-run after %s/%s: %s rules fired, %s rows",
+                        project_id, run.lld_version,
+                        len(summary.get("rules_fired", [])), summary.get("rows_created", 0),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Permit auto-analysis failed for %s: %s", project_id, exc)
                 return
             if engine_status == "failed":
                 run.status = LldRun.STATUS_FAILED
