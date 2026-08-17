@@ -72,6 +72,14 @@ class RunPipelineView(APIView):
         name = request.POST.get("name", "")
         poly_method = int(request.POST.get("poly_method", 3))
 
+        # Optional OSM reference layers (stored with the project; the design
+        # algorithm does not consume them yet — they will feed routing
+        # constraints / permits in a later phase).
+        osm_layers = {
+            key: request.FILES.get(key)
+            for key in ("railways", "waterways", "water", "landuse", "natural")
+        }
+
         if not excel or not roads:
             return JsonResponse(
                 {"detail": "Both 'excel' and 'roads' files are required."},
@@ -117,6 +125,17 @@ class RunPipelineView(APIView):
                 for chunk in brownfield.chunks():
                     f.write(chunk)
 
+        # Optional OSM reference layers — write to inputs/ (stored, not used
+        # by the current algorithm).
+        osm_paths = {}
+        for key, upload in osm_layers.items():
+            if upload:
+                path = host_input_dir / (upload.name or f"{key}.zip")
+                with open(path, "wb") as f:
+                    for chunk in upload.chunks():
+                        f.write(chunk)
+                osm_paths[key] = str(path)
+
         FtthProject.objects.create(
             project_id=project_id,
             name=name,
@@ -134,6 +153,7 @@ class RunPipelineView(APIView):
                 name=name,
                 poly_method=poly_method,
                 brownfield_path=str(brownfield_path) if brownfield_path else None,
+                osm_layer_paths=osm_paths or None,
             )
         except RuntimeError as exc:
             return JsonResponse(

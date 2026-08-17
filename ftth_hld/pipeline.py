@@ -77,13 +77,19 @@ def _write_status(data):
 
 def run_pipeline(excel_path: str, roads_path: str,
                  project_id: str = None, name: str = "",
-                 poly_method: int = 3, brownfield_path: str = None) -> dict:
+                 poly_method: int = 3, brownfield_path: str = None,
+                 osm_layer_paths: dict = None) -> dict:
     """
     Upload files to the FastAPI engine and start a pipeline run.
 
     ``brownfield_path`` is optional: a ZIP (or single vector file) of
     existing infrastructure layers that the engine unzips and feeds to
     the pipeline's BF_* parameters (USE_BROWNFIELD=true).
+
+    ``osm_layer_paths`` is optional: {railways, waterways, water, landuse,
+    natural: path} — OSM reference layers stored with the project for
+    future routing-constraint / permit use. Forwarded to the engine, which
+    stores them in inputs/; the design algorithm does not consume them yet.
 
     Returns the JSON response from the engine (which includes
     ``project_id``, ``status``, etc.).
@@ -101,6 +107,11 @@ def run_pipeline(excel_path: str, roads_path: str,
                 open(brownfield_path, "rb"),
                 "application/octet-stream",
             )
+        _osm_open = []
+        for key, path in (osm_layer_paths or {}).items():
+            if path:
+                files[key] = (Path(path).name, open(path, "rb"), "application/octet-stream")
+                _osm_open.append(key)
         data = {"poly_method": str(poly_method)}
         if name:
             data["name"] = name
@@ -110,6 +121,8 @@ def run_pipeline(excel_path: str, roads_path: str,
         resp = requests.post(url, files=files, data=data, timeout=120)
         if "brownfield" in files:
             files["brownfield"][1].close()
+        for key in _osm_open:
+            files[key][1].close()
 
     if resp.status_code not in (200, 201, 202):
         detail = "Unknown error"
