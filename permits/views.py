@@ -1,22 +1,26 @@
-"""API views for the FTTH Permit system (Phase 1).
+"""API views for the FTTH Permit system.
 
 Endpoints (all under ``/api/ftth/permits/``, JWT-authenticated):
 
-* ``GET  /projects/<pid>/permits/``      — permit matrix for a project
+* ``GET  /projects/<pid>/permits/``        — permit matrix for a project
 * ``POST /projects/<pid>/permits/analyze/`` — (re)run the rule engine
-* ``PATCH /permits/<permit_id>/``         — status/dates/conditions/comments
-* ``GET  /summary/``                      — cross-project dashboard KPI
+* ``PATCH /permits/<permit_id>/``           — status/dates/conditions/comments
+* ``GET  /summary/``                        — cross-project dashboard KPI
+* ``POST /projects/<pid>/package/``         — generate the permit package
+* ``GET  /projects/<pid>/package/``         — list generated package documents
+* ``GET  /projects/<pid>/package/download/``— download the package zip
 """
 
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from django.db import models as dj_models
-from django.http import JsonResponse
+from django.http import FileResponse, HttpResponse, JsonResponse
 from django.utils import timezone
 
 from ftth_hld.models import FtthProject
 
-from .models import PermitEvent, PermitMatrix
+from .generators.package import generate_package
+from .models import PermitDocument, PermitEvent, PermitMatrix
 from .rules.engine import project_summary, run_analysis
 
 
@@ -191,3 +195,89 @@ class PermitSummaryView(APIView):
                 for pid, n in per_project.items()
             ],
         })
+
+
+class PermitPackageView(APIView):
+    """Permit package for a project (Phase 2).
+
+    * ``POST /projects/<pid>/package/``  — generate (drawings, cross-sections,
+      forms, TMPs, reports) as a versioned zip + PermitDocument rows, then
+      promote document evidence (readiness checker).
+    * ``GET  /projects/<pid>/package/``  — list the generated package files.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id):
+        if not FtthProject.objects.filter(pk=project_id).exists():
+            return JsonResponse({"detail": "Project not found."}, status=404)
+        docs = (
+            PermitDocument.objects.filter(permit__project_id=project_id)
+            .order_by("-version", "kind", "name")
+        )
+        files = [
+            {
+                "document_id": str(d.id),
+                "name": d.name,
+                "kind": d.kind,
+                "version": d.version,
+                "filename": (d.file.name or "").split("/")[-1],
+                "url": d.file.url if d.file else "",
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+            }
+            for d in docs
+        ]
+        versions = sorted({d.version for d in docs})
+        return JsonResponse({
+            "project_id": project_id,
+            "versions": versions,
+            "total_files": len(files),
+            "files": files,
+        })
+
+    def post(self, request, project_id):
+        ftth = FtthProject.objects.filter(pk=project_id).first()
+        if ftth is None:
+            return JsonResponse({"detail": "Project not found."}, status=404)
+        try:
+            summary = generate_package(project_id, ftth.name or project_id)
+        except ValueError as exc:
+            return JsonResponse({"detail": str(exc)}, status=400)
+        except Exception as exc:  # noqa: BLE001
+            return JsonResponse({"detail": f"Package generation failed: {exc}"}, status=500)
+        return JsonResponse(summary, status=201)
+
+
+class PermitPackageDownloadView(APIView):
+    """GET /api/ftth/permits/projects/<pid>/package/download/ — the package zip.
+
+    Serves the most recent zip document for the project.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id):
+        if not FtthProject.objects.filter(pk=project_id).exists():
+            return JsonResponse({"detail": "Project not found."}, status=404)
+        docs = (
+            PermitDocument.objects.filter(
+                permit__project_id=project_id, name__startswith="permit_package_v"
+            )
+            .order_by("-version")
+        )
+        doc = docs.first()
+        if doc is None or not doc.file:
+            return JsonResponse(
+                {"detail": "No permit package generated yet — POST …/package/ first."},
+                status=404,
+            )
+        try:
+            response = FileResponse(
+                doc.file.open("rb"),
+                content_type="application/zip",
+                as_attachment=True,
+                filename=f"permit_package_v{doc.version}_{project_id}.zip",
+            )
+            return response
+        except FileNotFoundError:
+            return JsonResponse({"detail": "Package file missing on disk."}, status=404)

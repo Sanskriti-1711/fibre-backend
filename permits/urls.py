@@ -12,6 +12,8 @@ from .views import (
     PermitAnalyzeView,
     PermitDetailView,
     PermitMatrixView,
+    PermitPackageDownloadView,
+    PermitPackageView,
     PermitSummaryView,
 )
 
@@ -24,6 +26,10 @@ urlpatterns = [
          PermitMatrixView.as_view(), name="ftth-permits-matrix"),
     path("ftth/permits/projects/<str:project_id>/permits/analyze/",
          PermitAnalyzeView.as_view(), name="ftth-permits-analyze"),
+    path("ftth/permits/projects/<str:project_id>/package/",
+         PermitPackageView.as_view(), name="ftth-permits-package"),
+    path("ftth/permits/projects/<str:project_id>/package/download/",
+         PermitPackageDownloadView.as_view(), name="ftth-permits-package-download"),
     path("ftth/permits/permits/<str:permit_id>/",
          PermitDetailView.as_view(), name="ftth-permits-detail"),
 ]

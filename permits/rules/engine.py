@@ -261,16 +261,20 @@ def run_analysis(project_id: str, user=None) -> dict:
 
 
 def _refresh_readiness(project_id: str) -> None:
-    """Recompute readiness_pct for a project's permit rows from evidence."""
-    rows = PermitMatrix.objects.filter(project_id=project_id)
-    updated = 0
+    """Recompute readiness_pct for a project's permit rows from evidence.
+
+    Bulk-updates only the rows whose pct changed (avoids N individual
+    UPDATEs over a remote DB — the permit matrix can be thousands of rows).
+    """
+    rows = list(
+        PermitMatrix.objects.filter(project_id=project_id).select_related("rule")
+    )
+    changed: list[PermitMatrix] = []
     for pm in rows:
-        if not pm.rule:
+        rule = pm.rule
+        if not rule:
             continue
-        try:
-            required_keys = pm.rule.evidence_required or []
-        except Exception:
-            required_keys = []
+        required_keys = rule.evidence_required or []
         if not required_keys:
             pct = 100
         else:
@@ -281,8 +285,9 @@ def _refresh_readiness(project_id: str) -> None:
             pct = round(present / len(required_keys) * 100)
         if pct != pm.readiness_pct:
             pm.readiness_pct = pct
-            pm.save(update_fields=["readiness_pct", "updated_at"])
-            updated += 1
+            changed.append(pm)
+    if changed:
+        PermitMatrix.objects.bulk_update(changed, ["readiness_pct"], batch_size=500)
 
 
 def project_summary(project_id: str) -> dict:
