@@ -262,6 +262,48 @@ class PipelineStatusView(APIView):
             except Exception:
                 pass
 
+            # HLD-stage permit analysis: attribute the road classification
+            # from the project's roads input onto the trench segments, then
+            # run the permit rule engine (authority mapping + spatial rules).
+            # Guarded so it only runs once per project — never on later polls,
+            # and never allowed to break the HLD completion path.
+            try:
+                from permits.analysis.road_class import (
+                    ensure_road_class,
+                )
+                from permits.rules.engine import run_analysis as run_permit_analysis
+
+                from django.db import connection
+                with connection.cursor() as cur:
+                    cur.execute(
+                        "SELECT 1 FROM gis.trench_layer WHERE project_id = %s "
+                        "AND properties->>'fclass' IS NULL LIMIT 1",
+                        [project_id],
+                    )
+                    needs_fclass = cur.fetchone() is not None
+                if needs_fclass:
+                    summary = ensure_road_class(project_id)
+                    logger.info(
+                        "HLD fclass attribution for %s: %s",
+                        project_id, summary,
+                    )
+                # Only re-run the (potentially expensive) analysis once per
+                # completed project — later polls skip it.
+                from permits.models import PermitMatrix
+                already = PermitMatrix.objects.filter(project_id=project_id).exists()
+                if not already:
+                    permit_summary = run_permit_analysis(project_id)
+                    logger.info(
+                        "Permit analysis auto-run after HLD completion %s: %s rules, %s rows",
+                        project_id,
+                        len(permit_summary.get("rules_fired", [])),
+                        permit_summary.get("rows_created", 0),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "HLD permit auto-analysis failed for %s: %s", project_id, exc
+                )
+
         # Enrich layer counts from the persisted GIS table (fast, read-only).
         try:
             persisted = {
@@ -295,6 +337,53 @@ class PipelineStatusView(APIView):
 # GET /api/ftth/hld/results/<project_id>/layers/<layer_name>/
 # ======================================================================
 
+# The five trench sub-layers (feeder/distribution/garden/drill/final) merge
+# into gis.trench_layer with colliding fids — the unique key is the gis row
+# ``id``. This helper injects that id (+ fclass from the roads attribution)
+# into the served layer so the frontend can match permit-matrix rows.
+
+def _enrich_trench_layer(project_id: str, geojson: dict) -> dict:
+    """Rebuild the trenches layer from the live gis.trench_layer table.
+
+    The five trench sub-layers (feeder/distribution/garden/drill/final) merge
+    into gis.trench_layer with colliding fids, so the permit matrix keys on
+    the unique gis row ``id`` (bigserial). The persisted FtthLayer snapshot
+    can be stale or built from the disk-merge fallback (no fclass), so this
+    rebuilds the FeatureCollection straight from the gis table and stamps
+    ``properties.feature_id`` = gis id — the exact key the frontend matches
+    against the permit matrix for segment colouring.
+    """
+    from django.db import connection
+
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT id, ST_AsGeoJSON(geom), properties "
+            "FROM gis.trench_layer WHERE project_id = %s AND geom IS NOT NULL "
+            "ORDER BY id",
+            [project_id],
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return geojson
+
+    features = []
+    for gid, geom_json, props in rows:
+        if isinstance(props, str):
+            try:
+                props = json.loads(props)
+            except (TypeError, ValueError):
+                props = {}
+        props = dict(props or {})
+        props["feature_id"] = str(gid)
+        features.append({
+            "type": "Feature",
+            "id": gid,
+            "geometry": json.loads(geom_json) if geom_json else None,
+            "properties": props,
+        })
+    return {"type": "FeatureCollection", "features": features}
+
+
 class LayerGeoJSONView(APIView):
     """Return a pipeline layer as GeoJSON, served from the DB when available."""
 
@@ -317,7 +406,17 @@ class LayerGeoJSONView(APIView):
             ftth_project__project_id=project_id, name=name
         ).first()
         if row is not None and row.geojson and row.geojson.get("features"):
-            return JsonResponse(row.geojson)
+            geojson = row.geojson
+            # The trench layer is the union of five sub-layers whose fids
+            # collide; the permit matrix keys on the unique gis row ``id``.
+            # Enrich the served features with that id (+ fclass) so the map
+            # can colour segments by permit status.
+            if name in ("trenches", "trench_layer"):
+                try:
+                    geojson = _enrich_trench_layer(project_id, geojson)
+                except Exception:
+                    pass
+            return JsonResponse(geojson)
 
         # 2. Otherwise fetch from the engine and persist for next time.
         geojson_bytes = get_layer_geojson(project_id, name)

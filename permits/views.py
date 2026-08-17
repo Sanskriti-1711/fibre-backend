@@ -10,6 +10,7 @@ Endpoints (all under ``/api/ftth/permits/``, JWT-authenticated):
 
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
+from django.db import models as dj_models
 from django.http import JsonResponse
 from django.utils import timezone
 
@@ -65,7 +66,9 @@ class PermitMatrixView(APIView):
         )
         if status_filter:
             qs = qs.filter(status=status_filter)
-        permits = [_serialize(pm) for pm in qs[:500]]
+        # A project's matrix can hold thousands of rows (one per route feature
+        # per rule) — the HLD/LLD maps colour every segment, so don't truncate.
+        permits = [_serialize(pm) for pm in qs[:20000]]
         return JsonResponse({
             **project_summary(project_id),
             "permits": permits,
@@ -126,6 +129,38 @@ class PermitDetailView(APIView):
                 detail={"fields": updated, "by": request.user.email if request.user else None},
             )
         return JsonResponse(_serialize(permit))
+
+
+class PermitAllView(APIView):
+    """GET /api/ftth/permits/ — every permit across projects (tracker feed).
+
+    Optionally filtered: ``?status=``, ``?project_id=``, ``?q=`` (permit type
+    / route section substring). Cap at 1000 rows.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = PermitMatrix.objects.select_related("authority", "rule", "project").all()
+        status_filter = request.GET.get("status")
+        project_filter = request.GET.get("project_id")
+        q = (request.GET.get("q") or "").strip().lower()
+
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        if project_filter:
+            qs = qs.filter(project_id=project_filter)
+        if q:
+            qs = qs.filter(
+                dj_models.Q(permit_type__icontains=q) | dj_models.Q(route_section__icontains=q)
+            )
+
+        permits = []
+        for pm in qs[:1000]:
+            item = _serialize(pm)
+            item["project_name"] = pm.project.name or pm.project_id
+            permits.append(item)
+        return JsonResponse({"total": len(permits), "permits": permits})
 
 
 class PermitSummaryView(APIView):

@@ -872,5 +872,18 @@ class SurveyFeatureApprovalAPIView(APIView):
                 reviewer=request.user if request.user.is_authenticated else None,
             )
 
+        # Survey-stage permit hook: an approved change feeds the permit
+        # matrix evidence for this route section. The SurveyFeature lives on
+        # the survey copy Project, whose source_ftth_project_id maps back to
+        # the HLD run the permits are keyed on. Never breaks the review flow.
+        if decision_value == 'approved':
+            try:
+                from permits.rules.survey_hook import ensure_survey_evidence
+                ftth_id = getattr(sf.project, 'source_ftth_project_id', None)
+                if ftth_id:
+                    ensure_survey_evidence(str(ftth_id))
+            except Exception:
+                pass
+
         serializer = SurveyFeatureSerializer(sf, context={'request': request})
         return Response(serializer.data)

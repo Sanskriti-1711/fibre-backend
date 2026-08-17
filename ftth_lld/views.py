@@ -844,6 +844,16 @@ class LldChangeActionView(APIView):
             )
             _record_event(copy, "survey", f"change_{decision_value}", request.user, str(sf.id), {"comment": comment})
 
+        # Survey-stage permit hook: an approved change feeds the permit
+        # matrix evidence for this route section (crossings, surface,
+        # utility reuse, photos). Never allowed to break the review flow.
+        if decision_value == "approved":
+            try:
+                from permits.rules.survey_hook import ensure_survey_evidence
+                ensure_survey_evidence(project_id)
+            except Exception:
+                pass
+
         return JsonResponse({
             "change_id": str(sf.id),
             "status": _STATUS_MAP.get(sf.survey_status, "pending_review"),

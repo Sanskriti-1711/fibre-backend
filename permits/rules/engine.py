@@ -165,31 +165,48 @@ def run_analysis(project_id: str, user=None) -> dict:
                     "not present — no permit identified until the layer exists"
                 )
                 continue
-            hits = intersections_with(rule_def.layer_a, project_id, rule_def.layer_b)
-            if not hits:
-                summary["notes"].append(f"{rule_def.rule_id}: no intersections found")
+            # Route layers to evaluate: the rule's declared layer when it is a
+            # real gis table (e.g. final_trenches once persisted), plus the
+            # HLD output trench_layer so HLD-stage permits fire today.
+            route_tables = []
+            if gis_table_exists(rule_def.layer_a) and rule_def.layer_a != "trench_layer":
+                route_tables.append(rule_def.layer_a)
+            if gis_table_exists("trench_layer"):
+                route_tables.append("trench_layer")
+            if not route_tables:
+                summary["gaps"].append(
+                    f"{rule_def.rule_id}: no route layer (gis.trench_layer / "
+                    f"gis.{rule_def.layer_a}) present"
+                )
                 continue
             fired = 0
-            for hit in hits:
-                evidence = {
-                    "crossing_coordinate": {
-                        "present": hit.get("crossing_lng") is not None,
-                        "value": (
-                            [hit.get("crossing_lng"), hit.get("crossing_lat")]
-                            if hit.get("crossing_lng") is not None else None
-                        ),
-                    },
-                }
-                if rule_def.rule_id == "RAILWAY_CROSSING_001":
-                    evidence.update({
-                        "hdd_design": {"present": False, "value": None},
-                        "profile_drawing": {"present": False, "value": None},
-                    })
-                _upsert_permit(
-                    project_id, rule, str(hit["route_id"]),
-                    layer=rule_def.layer_a, evidence=evidence,
-                )
-                fired += 1
+            for route_table in route_tables:
+                hits = intersections_with(route_table, project_id, rule_def.layer_b)
+                if not hits:
+                    continue
+                for hit in hits:
+                    evidence = {
+                        "crossing_coordinate": {
+                            "present": hit.get("crossing_lng") is not None,
+                            "value": (
+                                [hit.get("crossing_lng"), hit.get("crossing_lat")]
+                                if hit.get("crossing_lng") is not None else None
+                            ),
+                        },
+                    }
+                    if rule_def.rule_id == "RAILWAY_CROSSING_001":
+                        evidence.update({
+                            "hdd_design": {"present": False, "value": None},
+                            "profile_drawing": {"present": False, "value": None},
+                        })
+                    _upsert_permit(
+                        project_id, rule, str(hit["route_id"]),
+                        layer=route_table, evidence=evidence,
+                    )
+                    fired += 1
+            if not fired:
+                summary["notes"].append(f"{rule_def.rule_id}: no intersections found")
+                continue
             summary["rules_fired"].append({"rule_id": rule_def.rule_id, "rows": fired})
             summary["rows_created"] += fired
             continue
@@ -202,14 +219,18 @@ def run_analysis(project_id: str, user=None) -> dict:
                 )
                 continue
             with connection.cursor() as cur:
+                # Key on the gis row ``id`` (bigserial) — NOT fid: the five
+                # trench sub-layers (feeder/distribution/garden/drill/final)
+                # merge into trench_layer with colliding fids, so fid is not
+                # unique per feature.
                 cur.execute(
                     """
-                    SELECT properties->>'id' AS route_id,
-                           properties->>'fclass' AS fclass
+                    SELECT id, properties->>'fclass' AS fclass
                     FROM gis.trench_layer
                     WHERE project_id = %s
                       AND properties->>'fclass' IS NOT NULL
-                    LIMIT 300
+                      AND properties->>'fclass' <> ''
+                    LIMIT 3000
                     """,
                     [project_id],
                 )

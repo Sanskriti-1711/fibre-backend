@@ -58,7 +58,7 @@ def intersections_with(
 
     sql = f"""
         SELECT r.id::text,
-               r.properties->>'id' AS route_id,
+               r.fid::text AS route_id,
                ref.id::text AS ref_id,
                ref.properties->>'type' AS ref_type,
                ST_X(ST_Centroid(ST_Intersection(r.{geom_col}, ref.{ref_geom}))) AS x,
@@ -73,6 +73,8 @@ def intersections_with(
         cur.execute(sql, [project_id, limit])
         return [
             {
+                # route_id is the per-project fid, matching the ``id`` the
+                # layer GeoJSON endpoints serve to the map frontends.
                 "route_id": row[1] or row[0],
                 "ref_id": row[2],
                 "ref_type": row[3],
@@ -115,11 +117,14 @@ def route_features_with(
 
 
 def _geometry_column(table: str) -> str | None:
+    # PostGIS geometry columns report data_type='USER-DEFINED' with
+    # udt_name='geometry' — filtering on data_type='geometry' silently
+    # disabled every spatial rule.
     with connection.cursor() as cur:
         cur.execute(
             "SELECT column_name FROM information_schema.columns "
             "WHERE table_schema = 'gis' AND table_name = %s "
-            "AND data_type = 'geometry' LIMIT 1",
+            "AND udt_name = 'geometry' LIMIT 1",
             [table],
         )
         row = cur.fetchone()

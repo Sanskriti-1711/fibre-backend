@@ -8,6 +8,7 @@ their outputs), matching the separation rule in ``docs/subprojects/permit-engine
 from django.urls import path
 
 from .views import (
+    PermitAllView,
     PermitAnalyzeView,
     PermitDetailView,
     PermitMatrixView,
@@ -15,6 +16,8 @@ from .views import (
 )
 
 urlpatterns = [
+    path("ftth/permits/",
+         PermitAllView.as_view(), name="ftth-permits-all"),
     path("ftth/permits/summary/",
          PermitSummaryView.as_view(), name="ftth-permits-summary"),
     path("ftth/permits/projects/<str:project_id>/permits/",
