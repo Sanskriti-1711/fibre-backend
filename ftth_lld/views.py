@@ -990,6 +990,23 @@ def _run_lld_job(project_id: str, run_id) -> None:
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Permit auto-analysis failed for %s: %s", project_id, exc)
+
+                # Permit package auto-generation (Phase 2): bundle drawings,
+                # cross-sections, forms, TMPs and reports for the freshly
+                # completed run so the package is ready the moment the LLD
+                # finishes. Fire-and-forget like the analysis above.
+                try:
+                    from permits.generators.package import generate_package
+
+                    pkg = generate_package(project_id, run.ftth_project.name or project_id)
+                    logger.info(
+                        "Permit package auto-generated after %s/%s: v%s, %s files, %s zip KB",
+                        project_id, run.lld_version,
+                        pkg.get("version"), len(pkg.get("files", [])),
+                        round((pkg.get("zip_size") or 0) / 1024),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Permit package auto-generation failed for %s: %s", project_id, exc)
                 return
             if engine_status == "failed":
                 run.status = LldRun.STATUS_FAILED
