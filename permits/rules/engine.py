@@ -12,6 +12,7 @@ import json
 
 from django.db import connection
 
+from ..analysis.road_authority import resolve_road_authority
 from ..analysis.spatial_intersection import (
     gis_table_exists,
     intersections_with,
@@ -73,16 +74,22 @@ def _ensure_rule(rule_def: RuleDef) -> tuple[PermitRule, int]:
 
 def _upsert_permit(project_id: str, rule: PermitRule, route_section: str,
                    layer: str, evidence: dict, notes: str = "",
-                   required: bool | None = None) -> PermitMatrix:
-    """Create (or update-in-place) a matrix row for one route section."""
+                   required: bool | None = None,
+                   authority: PermitAuthority | None = None) -> PermitMatrix:
+    """Create (or update-in-place) a matrix row for one route section.
+
+    ``authority`` overrides the rule-level authority per row (e.g. the
+    road authority resolved from the segment's fclass).
+    """
     required = rule.required_level == "REQUIRED" if required is None else required
+    row_authority = authority or rule.authority
     obj, created = PermitMatrix.objects.get_or_create(
         project_id=project_id,
         rule=rule,
         route_section=route_section[:128],
         defaults={
             "layer": layer,
-            "authority": rule.authority,
+            "authority": row_authority,
             "permit_type": rule.name,
             "rule_version": str(rule.version),
             "required": required,
@@ -98,7 +105,11 @@ def _upsert_permit(project_id: str, rule: PermitRule, route_section: str,
         obj.evidence = {**obj.evidence, **evidence}
         if notes:
             obj.analysis_notes = notes
-        obj.save(update_fields=["evidence", "analysis_notes", "updated_at"])
+        if authority:
+            obj.authority = authority
+            obj.save(update_fields=["evidence", "analysis_notes", "authority", "updated_at"])
+        else:
+            obj.save(update_fields=["evidence", "analysis_notes", "updated_at"])
     PermitEvent.objects.get_or_create(
         permit=obj,
         event="IDENTIFIED",
@@ -242,14 +253,28 @@ def run_analysis(project_id: str, user=None) -> dict:
                 )
                 continue
             fired = 0
+            # Resolve the Straßenbaulastträger per fclass ONCE (the class set
+            # is small) — avoids N lookups for the same class.
+            authority_cache: dict[str, tuple[PermitAuthority | None, str]] = {}
             for route_id, fclass in hits:
+                code, owner_label = resolve_road_authority(fclass)
+                if code not in authority_cache:
+                    authority_cache[code] = (
+                        PermitAuthority.objects.filter(code=code).first(),
+                        owner_label,
+                    )
+                authority, label = authority_cache[code]
                 evidence = {
                     "road_class": {"present": True, "value": fclass},
-                    "road_owner": {"present": False, "value": None},
+                    "road_owner": {
+                        "present": authority is not None,
+                        "value": label if authority is not None else None,
+                    },
                 }
                 _upsert_permit(
                     project_id, rule, str(route_id),
                     layer="trench_layer", evidence=evidence,
+                    authority=authority,
                 )
                 fired += 1
             summary["rules_fired"].append({"rule_id": rule_def.rule_id, "rows": fired})
