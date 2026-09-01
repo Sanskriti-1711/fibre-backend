@@ -17,19 +17,23 @@ import os
 #   1. FTTH_ENGINE_URL env var (always wins — set this on Zeabur if the
 #      production engine moves).
 #   2. Local development (FTTH_DB=local|dev|docker — same flag settings.py
-#      uses) → http://localhost:8080 (the FastAPI engine started from
+#      uses) → http://127.0.0.1:8080 (the FastAPI engine started from
 #      HLD_Planning_01/web/backend).
+#      NOTE: 127.0.0.1 is used instead of localhost on purpose — on Windows
+#      ``localhost`` resolves to IPv6 ::1 first, and every HTTP request burns
+#      ~2s waiting for the IPv6 connect to fail before falling back to IPv4.
+#      With ~40 file fetches per design-package download that added ~80s.
 #   3. Production default → https://ftth.zeabur.app (live engine built from
 #      the sanskriti17/ftth_planning Docker image).
 def _default_engine_url() -> str:
     if os.getenv("FTTH_DB", "").lower() in ("local", "dev", "docker"):
-        return "http://localhost:8080"
+        return "http://127.0.0.1:8080"
     # Local development (DEBUG on) defaults to the local FastAPI engine so the
     # results map works even when the server is started without FTTH_ENGINE_URL.
     try:
         from django.conf import settings
         if getattr(settings, "DEBUG", False):
-            return "http://localhost:8080"
+            return "http://127.0.0.1:8080"
     except Exception:
         pass
     return "https://ftth.zeabur.app"
