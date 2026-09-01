@@ -20,6 +20,7 @@ zero changes are still pending review (a change sent back for correction is
 considered resolved and does not block LLD).
 """
 
+import copy
 import json
 import logging
 import re
@@ -44,6 +45,7 @@ from users.permissions import IsSubadmin
 
 from .engine import (
     lld_run as engine_lld_run,
+    lld_replan as engine_lld_replan,
     lld_status as engine_lld_status,
     lld_layer_geojson as engine_lld_layer,
     lld_download_zip as engine_lld_download,
@@ -294,7 +296,25 @@ def _survey_feature_collection(survey_copy):
 
 
 def _approved_feature_collection(survey_copy):
-    """Approved Survey dataset = HLD + approved changes - approved removals."""
+    """Approved Survey dataset — the LLD's sole input (survey as ground truth).
+
+    This is a SELF-CONTAINED snapshot of the surveyed, planner-approved field
+    reality: the project's full layer set (HLD geometry stands in for features
+    the engineer did not touch — "full area + approved deltas") with every
+    approved survey change overlaid. It is what LLD Mode A runs on directly
+    and what LLD Mode B feeds back as brownfield; the LLD engine NEVER reads
+    HLD layers, routing or topology separately.
+
+    Composition:
+        approved dataset = full layer set + approved changes - approved removals
+
+    Each approved change carries its own before/after pair:
+        - current geometry  = the engineer's survey geometry (ground truth)
+        - original_geometry = the survey change's own frozen pre-edit record
+          (== the HLD geometry as captured on the SurveyFeature at edit time),
+          used ONLY by the engine's relay/purge passes to re-lay dependents
+          onto the new path — it is surveyed data, never a live HLD lookup.
+    """
     keep = {}
     qs = Feature.objects.filter(project=survey_copy).only("id", "layer_id", "layer_name", "geometry", "properties")
     for f in qs.iterator(chunk_size=500):
@@ -314,6 +334,17 @@ def _approved_feature_collection(survey_copy):
             if sf.is_removal or not sf.survey_geometry:
                 keep.pop(key, None)
             else:
+                # Before/after pair FOR THE ENGINE'S WITHIN-DATASET RELAY:
+                # the engineer's survey geometry is the new path; the survey
+                # change's own frozen original_geometry (captured from HLD at
+                # edit time, i.e. surveyed data) is the old path. The relay
+                # pass needs both sides of the reroute to re-lay dependents
+                # onto the new path and purge the old one. Sourced from the
+                # SurveyFeature record — no live HLD reference at LLD time.
+                if keep[key]["geometry"] != sf.survey_geometry:
+                    keep[key]["properties"].setdefault(
+                        "original_geometry", sf.original_geometry or keep[key]["geometry"]
+                    )
                 keep[key]["geometry"] = sf.survey_geometry
                 keep[key]["properties"]["approved"] = True
                 keep[key]["properties"]["change_id"] = str(sf.id)
@@ -466,6 +497,7 @@ class LldRunsView(APIView):
                 "project_id": r.ftth_project_id,
                 "project_name": (r.ftth_project.name or r.ftth_project_id),
                 "lld_version": r.lld_version,
+                "mode": r.mode,
                 "approved_survey_version": (
                     r.approved_survey_version.version
                     if r.approved_survey_version else None
@@ -844,10 +876,20 @@ class LldChangeActionView(APIView):
             )
             _record_event(copy, "survey", f"change_{decision_value}", request.user, str(sf.id), {"comment": comment})
 
-        # Survey-stage permit hook: an approved change feeds the permit
-        # matrix evidence for this route section (crossings, surface,
-        # utility reuse, photos). Never allowed to break the review flow.
+        # Survey-stage permit hooks (fire-and-forget — never allowed to
+        # break the review flow):
+        # 1. Variation permits: an approved route change supersedes any
+        #    APPROVED/CLOSED permit on the affected route section — the
+        #    permit is re-opened as a new revision. Runs BEFORE the evidence
+        #    hook so the re-fed evidence re-readies the variation.
+        # 2. Evidence: feed the permit matrix evidence for this route
+        #    section (crossings, surface, utility reuse, photos).
         if decision_value == "approved":
+            try:
+                from permits.rules.variation import create_variations
+                create_variations(project_id, sf, user=request.user)
+            except Exception:
+                pass
             try:
                 from permits.rules.survey_hook import ensure_survey_evidence
                 ensure_survey_evidence(project_id)
@@ -899,6 +941,34 @@ class LldApprovedVersionView(APIView):
 
         version = _next_version(ApprovedSurveyVersion.objects.filter(ftth_project=ftth), "AS")
         dataset = _approved_feature_collection(copy)
+
+        # A reroute is only valid LLD input when both sides of the change are
+        # present: the engineer's approved geometry and the frozen HLD
+        # geometry it replaces. Without the original path, the LLD engine
+        # cannot relay dependent trench/duct/cable layers or purge the old
+        # route safely. Fail the version creation instead of silently freezing
+        # an incomplete transfer.
+        missing_reroute_baseline = []
+        for feature in dataset.get("features", []):
+            props = feature.get("properties") or {}
+            if not props.get("approved") or not props.get("change_id"):
+                continue
+            original = props.get("original_geometry")
+            current = feature.get("geometry")
+            if original and current and original != current:
+                continue
+            sf = SurveyFeature.objects.filter(pk=props.get("change_id"), project=copy).first()
+            if sf and sf.original_geometry and sf.survey_geometry and sf.original_geometry != sf.survey_geometry:
+                missing_reroute_baseline.append(str(sf.id))
+        if missing_reroute_baseline:
+            return JsonResponse({
+                "detail": (
+                    "Cannot create Approved Survey Version: approved reroute "
+                    "geometry is missing its original HLD baseline for feature(s): "
+                    + ", ".join(missing_reroute_baseline[:10])
+                )
+            }, status=400)
+
         asv = ApprovedSurveyVersion.objects.create(
             ftth_project=ftth,
             version=version,
@@ -915,10 +985,14 @@ class LldApprovedVersionView(APIView):
         })
 
 
-def _run_lld_job(project_id: str, run_id) -> None:
+def _run_lld_job(project_id: str, run_id, submit: bool = True) -> None:
     """Background job: submit the LLD run to the engine, poll it, and persist
     the final output layers. Runs on a daemon thread so the POST returns
     immediately and the frontend polls progress via the run status.
+
+    ``submit=False`` attaches a poller to an engine task that is ALREADY
+    running (e.g. after a Django restart or after the previous poller died
+    on the short verify-only deadline) without re-submitting it.
     """
     from django.db import close_old_connections
 
@@ -929,16 +1003,55 @@ def _run_lld_job(project_id: str, run_id) -> None:
 
     try:
         asv = run.approved_survey_version
-        dataset = (
+        # IMMUTABILITY: never mutate the frozen Approved Survey dataset in
+        # place. Deep-copy it here — the enrichment below adds per-change
+        # before/after metadata for the engine's within-dataset relay.
+        dataset = copy.deepcopy(
             asv.dataset if asv and isinstance(asv.dataset, dict)
             else {"type": "FeatureCollection", "features": []}
         )
 
-        # 1. Submit to the engine (returns immediately).
-        engine_lld_run(project_id, run.lld_version, dataset)
+        # Enrich the working copy with each approved change's before/after
+        # pair (the survey change's own frozen original geometry). The engine
+        # needs the old path to detect a reroute and re-lay the duct/cable
+        # onto the new one. Only the working copy is touched — the stored AS
+        # version is never modified.
+        try:
+            copy = _survey_copy(project_id)
+            if copy is not None:
+                fresh = _approved_feature_collection(copy)
+                by_change = {
+                    (f.get("properties") or {}).get("change_id"): f
+                    for f in fresh.get("features", [])
+                    if (f.get("properties") or {}).get("change_id")
+                }
+                for feat in dataset.get("features", []):
+                    props = feat.get("properties") or {}
+                    cid = props.get("change_id")
+                    if not cid:
+                        continue
+                    fresh_feat = by_change.get(cid)
+                    if fresh_feat and not props.get("original_geometry"):
+                        props["original_geometry"] = (fresh_feat.get("properties") or {}).get("original_geometry")
+        except Exception as exc:
+            logger.warning("LLD dataset enrichment failed for %s: %s", project_id, exc)
 
-        # 2. Poll the engine until it completes/fails (bounded).
-        deadline = time.time() + 300
+        # 1. Submit to the engine (returns immediately). Mode B (replan)
+        #    re-runs the full design algorithm with the ASV as brownfield;
+        #    Mode A (verify) applies the survey changes to the HLD design.
+        #    Skip submission when resuming an engine task already in flight.
+        if submit:
+            if run.mode == LldRun.MODE_REPLAN:
+                engine_lld_replan(project_id, run.lld_version, dataset)
+            else:
+                engine_lld_run(project_id, run.lld_version, dataset)
+
+        # 2. Poll the engine until it completes/fails (bounded). Mode B
+        #    (replan) re-runs the full QGIS design pipeline and legitimately
+        #    takes 10-40 minutes — far longer than the ~1 min Mode A verify.
+        #    Give replan runs a 60-minute budget, keep verify at 5.
+        poll_budget = 3600 if run.mode == LldRun.MODE_REPLAN else 300
+        deadline = time.time() + poll_budget
         while time.time() < deadline:
             status = engine_lld_status(project_id, run.lld_version)
             if status is None:
@@ -976,6 +1089,20 @@ def _run_lld_job(project_id: str, run_id) -> None:
                 run.validation = status.get("validation") or {}
                 run.save()
                 _record_event(_survey_copy(project_id), "lld", "lld_completed", None, run.lld_version)
+
+                # BOQ/BOM regeneration: recompute quantities from the LLD
+                # layers so the BOQ reflects the final (survey-corrected)
+                # design, including reuse savings and rerouted lengths.
+                try:
+                    from ftth_hld.boq import generate_snapshot, clear_lld_cache
+                    clear_lld_cache(project_id)
+                    generate_snapshot(project_id, force=True)
+                    logger.info(
+                        "BOQ/BOM regenerated after %s/%s (LLD layers)",
+                        project_id, run.lld_version,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("BOQ/BOM regeneration failed for %s: %s", project_id, exc)
 
                 # Permit auto-analysis: keep the permit matrix (and the LLD
                 # map's permit-status colours) in sync with the freshly
@@ -1051,6 +1178,10 @@ class LldRunView(APIView):
         if unresolved:
             return JsonResponse({"detail": "LLD not ready - %d change(s) unresolved." % unresolved}, status=400)
 
+        mode = (request.data or {}).get("mode") or LldRun.MODE_VERIFY
+        if mode not in (LldRun.MODE_VERIFY, LldRun.MODE_REPLAN):
+            return JsonResponse({"detail": "mode must be verify | replan"}, status=400)
+
         version = _next_version(LldRun.objects.filter(ftth_project=ftth), "LLD")
         run = LldRun.objects.create(
             ftth_project=ftth,
@@ -1059,6 +1190,7 @@ class LldRunView(APIView):
             approved_survey_version=asv,
             algorithm_version=ALGORITHM_VERSION,
             input_dataset_version=asv.version,
+            mode=mode,
             status=LldRun.STATUS_RUNNING,
             progress=0,
             run_by=request.user if request.user.is_authenticated else None,
@@ -1074,6 +1206,7 @@ class LldRunView(APIView):
         return JsonResponse({
             "lld_version": run.lld_version,
             "status": run.status,
+            "mode": run.mode,
             "project_id": run.ftth_project_id,
         })
 
@@ -1094,6 +1227,7 @@ class LldVersionsView(APIView):
             runs.append({
                 "lld_version": r.lld_version,
                 "project_id": r.ftth_project_id,
+                "mode": r.mode,
                 "hld_version": r.hld_version or HLD_VERSION,
                 "approved_survey_version": r.approved_survey_version.version if r.approved_survey_version else None,
                 "run_date": r.run_date.isoformat() if r.run_date else None,
