@@ -409,7 +409,11 @@ class LldReviewView(APIView):
                 for sf in SurveyFeature.objects.filter(project=copy).select_related("engineer").iterator(chunk_size=500)
             ]
 
-        asv = ApprovedSurveyVersion.objects.filter(ftth_project=ftth).first()
+        asv = (
+            ApprovedSurveyVersion.objects.filter(ftth_project=ftth)
+            .order_by("-created_at")
+            .first()
+        )
         proj = _project_payload(ftth)
         return JsonResponse({
             "demo": False,
@@ -456,7 +460,11 @@ class LldProjectsView(APIView):
             statuses = [c["status"] for c in changes]
             pending = statuses.count("pending_review")
             correction = statuses.count("needs_correction")
-            asv = ApprovedSurveyVersion.objects.filter(ftth_project=ftth).first()
+            asv = (
+                ApprovedSurveyVersion.objects.filter(ftth_project=ftth)
+                .order_by("-created_at")
+                .first()
+            )
             projects.append({
                 "project_id": ftth.project_id,
                 "name": ftth.name or ftth.project_id,
@@ -1017,9 +1025,12 @@ def _run_lld_job(project_id: str, run_id, submit: bool = True) -> None:
         # onto the new one. Only the working copy is touched — the stored AS
         # version is never modified.
         try:
-            copy = _survey_copy(project_id)
-            if copy is not None:
-                fresh = _approved_feature_collection(copy)
+            # NOTE: never assign a local named ``copy`` here — it shadows the
+            # module-level ``import copy`` used above for deepcopy, making
+            # ``copy`` local for the whole function (UnboundLocalError).
+            copy_project = _survey_copy(project_id)
+            if copy_project is not None:
+                fresh = _approved_feature_collection(copy_project)
                 by_change = {
                     (f.get("properties") or {}).get("change_id"): f
                     for f in fresh.get("features", [])
@@ -1147,8 +1158,9 @@ def _run_lld_job(project_id: str, run_id, submit: bool = True) -> None:
         run.save()
     except Exception as exc:
         try:
+            import traceback
             run.status = LldRun.STATUS_FAILED
-            run.error_message = str(exc)
+            run.error_message = str(exc) + "\n" + traceback.format_exc()
             run.save(update_fields=["status", "error_message"])
         except Exception:
             pass
@@ -1165,7 +1177,11 @@ class LldRunView(APIView):
             return JsonResponse({"detail": "Only planners (SUBADMIN) can run LLD."}, status=403)
 
         ftth = get_object_or_404(FtthProject, pk=project_id)
-        asv = ApprovedSurveyVersion.objects.filter(ftth_project=ftth).first()
+        asv = (
+            ApprovedSurveyVersion.objects.filter(ftth_project=ftth)
+            .order_by("-created_at")
+            .first()
+        )
         if asv is None:
             return JsonResponse({"detail": "Create an Approved Survey Version before running LLD."}, status=400)
 
@@ -1217,7 +1233,11 @@ class LldVersionsView(APIView):
 
     def get(self, request, project_id):
         ftth = get_object_or_404(FtthProject, pk=project_id)
-        asv = ApprovedSurveyVersion.objects.filter(ftth_project=ftth).first()
+        asv = (
+            ApprovedSurveyVersion.objects.filter(ftth_project=ftth)
+            .order_by("-created_at")
+            .first()
+        )
         runs = []
         for r in LldRun.objects.filter(ftth_project=ftth).select_related("approved_survey_version", "run_by"):
             run_layers = [
