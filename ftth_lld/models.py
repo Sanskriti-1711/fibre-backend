@@ -66,6 +66,13 @@ class LldRun(models.Model):
         (STATUS_FAILED, "Failed"),
     ]
 
+    MODE_VERIFY = "verify"
+    MODE_REPLAN = "replan"
+    MODE_CHOICES = [
+        (MODE_VERIFY, "Verify (apply survey changes)"),
+        (MODE_REPLAN, "Full re-plan (re-run design algorithm)"),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     ftth_project = models.ForeignKey(
         "ftth_hld.FtthProject",
@@ -84,6 +91,7 @@ class LldRun(models.Model):
     algorithm_version = models.CharField(max_length=64, blank=True, default="")
     input_dataset_version = models.CharField(max_length=32, blank=True, default="")
 
+    mode = models.CharField(max_length=20, choices=MODE_CHOICES, default=MODE_VERIFY)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_RUNNING)
     outputs = models.IntegerField(null=True, blank=True)  # number of output files
     error_message = models.TextField(blank=True, default="")

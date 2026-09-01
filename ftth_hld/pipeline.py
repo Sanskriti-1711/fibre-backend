@@ -202,6 +202,11 @@ def get_layer_geojson(project_id: str, layer_name: str) -> bytes | None:
 def persist_layer(project_id: str, layer_name: str, geojson_data: dict) -> int:
     """Upsert a single layer's GeoJSON into the ``FtthLayer`` table.
 
+    Every feature gets a human-readable ``feature_id`` (``<layer>-001``,
+    ``<layer>-002``, …) if one is not already present.  This ensures every
+    feature across all layers can be uniquely referenced by the survey app,
+    permit engine, and LLD.
+
     Returns the feature count persisted. Safely no-ops if the project is not
     tracked by Django (e.g. the engine returned data for an unknown run).
     """
@@ -213,6 +218,12 @@ def persist_layer(project_id: str, layer_name: str, geojson_data: dict) -> int:
     features = (
         geojson_data.get("features", []) if isinstance(geojson_data, dict) else []
     )
+    # ── Assign human-readable feature_id: <layer>-001, <layer>-002, … ──
+    for idx, feat in enumerate(features, start=1):
+        props = feat.get("properties") or {}
+        if not props.get("feature_id"):
+            props["feature_id"] = "%s-%03d" % (layer_name, idx)
+            feat["properties"] = props
     count = len(features)
     FtthLayer.objects.update_or_create(
         ftth_project=ftth,
@@ -220,6 +231,40 @@ def persist_layer(project_id: str, layer_name: str, geojson_data: dict) -> int:
         defaults={"geojson": geojson_data, "feature_count": count},
     )
     return count
+
+
+def backfill_feature_ids(project_id: str) -> int:
+    """Add ``feature_id`` to every feature in every layer that lacks one.
+
+    Called once per project to retrofit the unique ID onto features that
+    were persisted before the feature_id assignment was added.
+    Returns the total number of features updated.
+    """
+    from .models import FtthLayer, FtthProject
+
+    ftth = FtthProject.objects.filter(pk=project_id).first()
+    if ftth is None:
+        return 0
+
+    total_updated = 0
+    for layer_obj in FtthLayer.objects.filter(ftth_project=ftth):
+        fc = layer_obj.geojson
+        if not isinstance(fc, dict):
+            continue
+        features = fc.get("features", [])
+        updated = False
+        for idx, feat in enumerate(features, start=1):
+            props = feat.get("properties") or {}
+            if not props.get("feature_id"):
+                props["feature_id"] = "%s-%03d" % (layer_obj.name, idx)
+                feat["properties"] = props
+                total_updated += 1
+                updated = True
+        if updated:
+            layer_obj.geojson = fc
+            layer_obj.save(update_fields=["geojson"])
+
+    return total_updated
 
 
 def sync_project_layers(project_id: str, layer_names=None) -> dict:

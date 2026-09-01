@@ -98,7 +98,7 @@ def _load_tmp_roads(project_id: str, features: list[dict]) -> int:
         cur.execute(
             f'CREATE TABLE gis.{TMP_TABLE} ('
             "  id BIGSERIAL PRIMARY KEY,"
-            "  fclass TEXT, highway TEXT,"
+            "  fclass TEXT, highway TEXT, name TEXT,"
             "  geom GEOMETRY(Geometry, 4326))"
         )
         rows = []
@@ -106,10 +106,11 @@ def _load_tmp_roads(project_id: str, features: list[dict]) -> int:
             props = feat.get("properties") or {}
             fclass = props.get("fclass") or props.get("highway") or props.get("class")
             highway = props.get("highway")
+            name = props.get("name")
             geom = feat.get("geometry")
             if not geom:
                 continue
-            rows.append((fclass, highway, json.dumps(geom)))
+            rows.append((fclass, highway, name, json.dumps(geom)))
         if rows:
             # executemany over a remote connection is 50k network round trips;
             # batched execute_values is ~100x faster for bulk geometry loads.
@@ -117,18 +118,18 @@ def _load_tmp_roads(project_id: str, features: list[dict]) -> int:
                 from psycopg2.extras import execute_values
                 execute_values(
                     cur,
-                    f"INSERT INTO gis.{TMP_TABLE} (fclass, highway, geom) "
+                    f"INSERT INTO gis.{TMP_TABLE} (fclass, highway, name, geom) "
                     "VALUES %s",
                     rows,
                     template=(
-                        "(%s, %s, ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326))"
+                        "(%s, %s, %s, ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326))"
                     ),
                     page_size=500,
                 )
             except ImportError:  # pragma: no cover - psycopg2 always present
                 cur.executemany(
-                    f"INSERT INTO gis.{TMP_TABLE} (fclass, highway, geom) "
-                    "VALUES (%s, %s, ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326))",
+                    f"INSERT INTO gis.{TMP_TABLE} (fclass, highway, name, geom) "
+                    "VALUES (%s, %s, %s, ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326))",
                     rows,
                 )
         cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{TMP_TABLE}_geom ON gis.{TMP_TABLE} USING GIST (geom)")
@@ -176,10 +177,10 @@ def attribute_road_class(project_id: str, roads_path: Path | None = None) -> dic
             f"""
             DROP TABLE IF EXISTS gis.{map_table};
             CREATE TABLE gis.{map_table} AS
-            SELECT t.id, r.fclass, r.highway
+            SELECT t.id, r.fclass, r.highway, r.name
             FROM gis.trench_layer t
             CROSS JOIN LATERAL (
-                SELECT r.fclass, r.highway
+                SELECT r.fclass, r.highway, r.name
                 FROM gis.{TMP_TABLE} r
                 WHERE r.geom && ST_Expand(t.geom, 0.0015)
                   AND ST_DWithin(t.geom::geography, r.geom::geography, %s)
@@ -187,7 +188,8 @@ def attribute_road_class(project_id: str, roads_path: Path | None = None) -> dic
                 LIMIT 1
             ) r
             WHERE t.project_id = %s
-              AND (t.properties->>'fclass') IS NULL
+              AND ((t.properties->>'fclass') IS NULL
+                   OR (t.properties->>'street_name') IS NULL)
             """,
             [SNAP_METERS, project_id],
         )
@@ -197,7 +199,8 @@ def attribute_road_class(project_id: str, roads_path: Path | None = None) -> dic
             SET properties = t.properties
                 || jsonb_build_object(
                        'fclass', COALESCE(m.fclass, ''),
-                       'highway', COALESCE(m.highway, '')
+                       'highway', COALESCE(m.highway, ''),
+                       'street_name', COALESCE(m.name, '')
                    )
             FROM gis.{map_table} m
             WHERE t.id = m.id

@@ -872,18 +872,29 @@ class SurveyFeatureApprovalAPIView(APIView):
                 reviewer=request.user if request.user.is_authenticated else None,
             )
 
-        # Survey-stage permit hook: an approved change feeds the permit
-        # matrix evidence for this route section. The SurveyFeature lives on
-        # the survey copy Project, whose source_ftth_project_id maps back to
-        # the HLD run the permits are keyed on. Never breaks the review flow.
+        # Survey-stage permit hooks (fire-and-forget — never allowed to
+        # break the review flow):
+        # 1. Variation permits: an approved route change supersedes any
+        #    APPROVED/CLOSED permit on the affected route section — the
+        #    permit is re-opened as a new revision. Runs BEFORE the evidence
+        #    hook so the re-fed evidence re-readies the variation.
+        # 2. Evidence: feed the permit matrix evidence for this route
+        #    section. The SurveyFeature lives on the survey copy Project,
+        #    whose source_ftth_project_id maps back to the HLD run the
+        #    permits are keyed on.
         if decision_value == 'approved':
-            try:
-                from permits.rules.survey_hook import ensure_survey_evidence
-                ftth_id = getattr(sf.project, 'source_ftth_project_id', None)
-                if ftth_id:
+            ftth_id = getattr(sf.project, 'source_ftth_project_id', None)
+            if ftth_id:
+                try:
+                    from permits.rules.variation import create_variations
+                    create_variations(str(ftth_id), sf, user=request.user)
+                except Exception:
+                    pass
+                try:
+                    from permits.rules.survey_hook import ensure_survey_evidence
                     ensure_survey_evidence(str(ftth_id))
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
         serializer = SurveyFeatureSerializer(sf, context={'request': request})
         return Response(serializer.data)

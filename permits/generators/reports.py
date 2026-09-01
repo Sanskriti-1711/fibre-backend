@@ -155,6 +155,26 @@ def boq_reference_report(project_id: str) -> dict[str, Any]:
     duct = data.duct_stats(project_id)
     chambers = len(data.chamber_schedule(project_id))
     pdps = len(data.pdp_schedule(project_id))
+
+    # Reuse summary from the BOQ snapshot (metres riding existing infra).
+    reuse_rows = ""
+    try:
+        from ftth_hld.models import BoqSnapshot
+        snap = BoqSnapshot.objects.filter(ftth_project__project_id=project_id).first()
+        reuse = ((snap.boq_totals or {}).get("reuse") or {}) if snap else {}
+        if reuse:
+            cells = "".join(
+                f"<tr><th style='text-align:left;padding:6px 8px;border:1px solid #E5E7EB;background:#F9FAFB;'>{k}</th>"
+                f"<td style='padding:6px 8px;border:1px solid #E5E7EB;'>{v:,.1f} m reused</td></tr>"
+                for k, v in sorted(reuse.items())
+            )
+            reuse_rows = (
+                "<tr><th colspan='2' style='text-align:left;padding:6px 8px;border:1px solid #E5E7EB;background:#ECFDF5;color:#047857;'>"
+                "♻️ Reused existing infrastructure — not billed as new material</th></tr>" + cells
+            )
+    except Exception:
+        pass
+
     body = f"""
       <p style="font-size:12px;">Quantities below are computed from the LLD design layers; the authoritative
       priced BOQ/BOM is downloadable from the project's design package.</p>
@@ -171,6 +191,7 @@ def boq_reference_report(project_id: str) -> dict[str, Any]:
             <td style="padding:6px 8px;border:1px solid #E5E7EB;">{chambers}</td></tr>
         <tr><th style="text-align:left;padding:6px 8px;border:1px solid #E5E7EB;background:#F9FAFB;">PDPs / cabinets</th>
             <td style="padding:6px 8px;border:1px solid #E5E7EB;">{pdps}</td></tr>
+        {reuse_rows}
       </table>
     """
     return {

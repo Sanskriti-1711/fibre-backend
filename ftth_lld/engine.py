@@ -40,6 +40,29 @@ def lld_run(project_id: str, lld_version: str, dataset: dict) -> dict:
     return resp.json()
 
 
+def lld_replan(project_id: str, lld_version: str, dataset: dict) -> dict:
+    """Submit a Mode B (full re-plan) LLD run to the engine.
+
+    Same request shape as ``lld_run`` — the engine re-runs the HLD oneclick
+    pipeline with the approved survey dataset as brownfield input.
+    """
+    url = _engine_url("/ftth/lld/replan")
+    resp = requests.post(
+        url,
+        json={"project_id": project_id, "lld_version": lld_version, "dataset": dataset},
+        timeout=30,
+    )
+    if resp.status_code not in (200, 201, 202):
+        detail = "Unknown error"
+        try:
+            body = resp.json()
+            detail = body.get("detail") or str(body)
+        except Exception:
+            detail = resp.text[:500]
+        raise RuntimeError(f"LLD replan engine returned {resp.status_code}: {detail}")
+    return resp.json()
+
+
 def lld_status(project_id: str, lld_version: str) -> dict | None:
     """Poll the engine for an LLD run's status. Returns None if unreachable."""
     url = _engine_url(f"/ftth/lld/results/{project_id}/{lld_version}")

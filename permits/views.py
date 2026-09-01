@@ -20,8 +20,10 @@ from django.utils import timezone
 from ftth_hld.models import FtthProject
 
 from .generators.package import generate_package
-from .models import PermitDocument, PermitEvent, PermitMatrix
+from .generators.hld_package import generate_hld_package
+from .models import PermitDocument, PermitEvent, PermitMatrix, PermitSubmission
 from .rules.engine import project_summary, run_analysis
+from .submissions import create_submissions, transition_submission
 
 
 def _serialize(permit: PermitMatrix) -> dict:
@@ -32,6 +34,7 @@ def _serialize(permit: PermitMatrix) -> dict:
         "layer": permit.layer,
         "permit_type": permit.permit_type,
         "municipality": permit.municipality,
+        "permit_group": permit.permit_group,
         "authority": {
             "code": permit.authority.code if permit.authority else None,
             "name": permit.authority.name if permit.authority else None,
@@ -135,11 +138,156 @@ class PermitDetailView(APIView):
         return JsonResponse(_serialize(permit))
 
 
+def _serialize_submission(sub: PermitSubmission) -> dict:
+    """Serialize a submission with its application-level state + row info."""
+    rows = list(sub.permit_rows.all())
+    row_statuses: dict[str, int] = {}
+    for r in rows:
+        row_statuses[r.status] = row_statuses.get(r.status, 0) + 1
+    return {
+        "submission_id": str(sub.id),
+        "project_id": sub.project_id,
+        "project_name": sub.project.name if sub.project_id else None,
+        "authority": {
+            "code": sub.authority.code if sub.authority else None,
+            "name": sub.authority.name if sub.authority else None,
+            "type": sub.authority.authority_type if sub.authority else None,
+        },
+        "permit_type": sub.permit_type,
+        "permit_group": sub.permit_group,
+        "label": sub.label,
+        "status": sub.status,
+        "submission_date": sub.submission_date.isoformat() if sub.submission_date else None,
+        "reference": sub.reference,
+        "notes": sub.notes,
+        "conditions": sub.conditions,
+        "approval_date": sub.approval_date.isoformat() if sub.approval_date else None,
+        "expiry_date": sub.expiry_date.isoformat() if sub.expiry_date else None,
+        "revision": sub.revision,
+        "package_version": sub.package_version,
+        "sync_source": sub.sync_source,
+        "section_count": len(rows),
+        "row_statuses": row_statuses,
+        "permit_ids": [str(r.permit_id) for r in rows],
+        "created_at": sub.created_at.isoformat() if sub.created_at else None,
+    }
+
+
+class PermitSubmissionListView(APIView):
+    """Phase-3 submissions — the application records sent to authorities.
+
+    * ``GET  /api/ftth/permits/submissions/`` — list (filter: ``project_id``,
+      ``status``, ``authority``).
+    * ``POST /api/ftth/permits/submissions/`` — submit READY permits as one
+      submission per (project × authority × type × street). Body:
+      ``{permit_ids: [...], reference?, notes?, package_version?}``.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = PermitSubmission.objects.select_related("project", "authority").all()
+        if request.GET.get("project_id"):
+            qs = qs.filter(project_id=request.GET["project_id"])
+        if request.GET.get("status"):
+            qs = qs.filter(status=request.GET["status"])
+        if request.GET.get("authority"):
+            qs = qs.filter(authority__code=request.GET["authority"])
+        submissions = [_serialize_submission(s) for s in qs[:2000]]
+        return JsonResponse({"total": len(submissions), "submissions": submissions})
+
+    def post(self, request):
+        data = request.data or {}
+        permit_ids = data.get("permit_ids") or []
+        if not permit_ids:
+            return JsonResponse(
+                {"detail": "permit_ids is required — the READY permits to submit."},
+                status=400,
+            )
+        try:
+            submissions = create_submissions(
+                [str(pid) for pid in permit_ids],
+                user=request.user,
+                reference=(data.get("reference") or "").strip(),
+                notes=(data.get("notes") or "").strip(),
+                package_version=data.get("package_version"),
+                sync_source=(data.get("sync_source") or "manual"),
+            )
+        except ValueError as exc:
+            return JsonResponse({"detail": str(exc)}, status=400)
+        return JsonResponse(
+            {
+                "created": len(submissions),
+                "submissions": [_serialize_submission(s) for s in submissions],
+            },
+            status=201,
+        )
+
+
+class PermitSubmissionDetailView(APIView):
+    """GET /api/ftth/permits/submissions/<id>/ — one submission + its rows."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, submission_id):
+        sub = PermitSubmission.objects.select_related(
+            "project", "authority"
+        ).filter(pk=submission_id).first()
+        if sub is None:
+            return JsonResponse({"detail": "Submission not found."}, status=404)
+        return JsonResponse(_serialize_submission(sub))
+
+
+class PermitSubmissionTransitionView(APIView):
+    """POST /api/ftth/permits/submissions/<id>/transition/ — review action.
+
+    Body: ``{status, reference?, notes?, conditions?, expiry_date?,
+    sync_source?}``. Allowed edges:
+
+    * ``submitted → under_review``   (authority acknowledged)
+    * ``under_review → approved``    (capture conditions / expiry_date)
+    * ``under_review → rejected``    (notes = rejection reason)
+    * ``rejected → submitted``       (re-submission — revision + 1)
+    * ``approved → closed``
+
+    ``sync_source`` lets a future portal/API poller reuse this endpoint for
+    automated status sync while keeping the audit trail honest.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, submission_id):
+        sub = PermitSubmission.objects.filter(pk=submission_id).first()
+        if sub is None:
+            return JsonResponse({"detail": "Submission not found."}, status=404)
+        data = request.data or {}
+        to_status = data.get("status")
+        if not to_status:
+            return JsonResponse({"detail": "status is required."}, status=400)
+        try:
+            transition_submission(
+                sub,
+                to_status,
+                user=request.user,
+                reference=data.get("reference"),
+                notes=data.get("notes"),
+                conditions=data.get("conditions"),
+                expiry_date=data.get("expiry_date"),
+                sync_source=(data.get("sync_source") or "manual"),
+            )
+        except ValueError as exc:
+            return JsonResponse({"detail": str(exc)}, status=400)
+        sub.refresh_from_db()
+        return JsonResponse(_serialize_submission(sub))
+
+
 class PermitAllView(APIView):
     """GET /api/ftth/permits/ — every permit across projects (tracker feed).
 
     Optionally filtered: ``?status=``, ``?project_id=``, ``?q=`` (permit type
-    / route section substring). Cap at 1000 rows.
+    / route section substring). Cap at 20000 rows — the tracker page renders
+    every row and its KPIs count from the feed, so truncating (as the old
+    1000-row cap did) silently hid permits and under-counted stats.
     """
 
     permission_classes = [IsAuthenticated]
@@ -160,26 +308,64 @@ class PermitAllView(APIView):
             )
 
         permits = []
-        for pm in qs[:1000]:
+        for pm in qs[:20000]:
             item = _serialize(pm)
             item["project_name"] = pm.project.name or pm.project_id
             permits.append(item)
         return JsonResponse({"total": len(permits), "permits": permits})
 
 
+# Worst-first status priority — used to aggregate a street group's status
+# to its least-favourable member (matches the tracker page's grouping).
+_GROUP_STATUS_PRIORITY = {
+    "rejected": 9,
+    "under_review": 8,
+    "submitted": 7,
+    "evidence_required": 6,
+    "identified": 5,
+    "ready": 4,
+    "approved": 3,
+    "closed": 2,
+    "not_required": 1,
+}
+
+
 class PermitSummaryView(APIView):
-    """GET /api/ftth/permits/summary/ — cross-project KPI for the dashboard."""
+    """GET /api/ftth/permits/summary/ — cross-project KPI for the dashboard.
+
+    Returns both raw segment counts (``total``) and the clubbed street-level
+    group counts (``total_groups``, per-project ``groups``) so the dashboard
+    can surface one permit per street instead of one per segment.
+    """
 
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        rows = PermitMatrix.objects.select_related("project").all()
+        rows = PermitMatrix.objects.select_related("project", "rule").all()
         counts: dict[str, int] = {}
         per_project: dict[str, int] = {}
+        per_project_groups: dict[str, int] = {}
+        group_status: dict[tuple, tuple[int, str]] = {}  # key -> (priority, status)
         for pm in rows:
             counts[pm.status] = counts.get(pm.status, 0) + 1
             per_project[pm.project_id] = per_project.get(pm.project_id, 0) + 1
-        ready = counts.get(PermitMatrix.STATUS_READY, 0) + counts.get(
+            key = (
+                str(pm.project_id),
+                pm.rule.rule_id if pm.rule else "",
+                pm.permit_group or pm.route_section,
+            )
+            if key not in group_status:
+                group_status[key] = (0, pm.status)
+                per_project_groups[str(pm.project_id)] = per_project_groups.get(
+                    str(pm.project_id), 0
+                ) + 1
+            prio = _GROUP_STATUS_PRIORITY.get(pm.status, 0)
+            if prio > group_status[key][0]:
+                group_status[key] = (prio, pm.status)
+        group_counts: dict[str, int] = {}
+        for (_key, (prio, status)) in group_status.items():
+            group_counts[status] = group_counts.get(status, 0) + 1
+        ready = group_counts.get(PermitMatrix.STATUS_READY, 0) + group_counts.get(
             PermitMatrix.STATUS_APPROVED, 0
         )
         names = {
@@ -187,14 +373,54 @@ class PermitSummaryView(APIView):
         }
         return JsonResponse({
             "total": len(rows),
+            "total_groups": len(group_status),
             "by_status": counts,
+            "group_by_status": group_counts,
             "ready": ready,
             "projects_with_permits": len(per_project),
             "projects": [
-                {"project_id": pid, "name": names.get(pid, pid), "permits": n}
+                {
+                    "project_id": pid,
+                    "name": names.get(pid, pid),
+                    "permits": n,
+                    "groups": per_project_groups.get(pid, 0),
+                }
                 for pid, n in per_project.items()
             ],
         })
+
+
+class HldPermitPackageView(APIView):
+    """Generate/list the preliminary HLD permit-planning package."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id):
+        if not FtthProject.objects.filter(pk=project_id).exists():
+            return JsonResponse({"detail": "Project not found."}, status=404)
+        latest_version = PermitDocument.objects.filter(
+            permit__project_id=project_id,
+            name__startswith="HLD detailed preliminary permit package",
+        ).order_by("-version").values_list("version", flat=True).first()
+        docs = PermitDocument.objects.filter(
+            permit__project_id=project_id,
+            version=latest_version,
+        ).order_by("kind", "name") if latest_version is not None else PermitDocument.objects.none()
+        return JsonResponse({"project_id": project_id, "package_type": "HLD_PRELIMINARY", "latest_version": latest_version, "total_files": docs.count(), "files": [
+            {"document_id": str(d.id), "name": d.name, "kind": d.kind, "version": d.version, "filename": (d.file.name or "").split("/")[-1], "url": d.file.url if d.file else ""}
+            for d in docs
+        ]})
+
+    def post(self, request, project_id):
+        ftth = FtthProject.objects.filter(pk=project_id).first()
+        if ftth is None:
+            return JsonResponse({"detail": "Project not found."}, status=404)
+        try:
+            return JsonResponse(generate_hld_package(project_id, ftth.name or project_id), status=201)
+        except ValueError as exc:
+            return JsonResponse({"detail": str(exc)}, status=400)
+        except Exception as exc:
+            return JsonResponse({"detail": f"HLD preliminary package generation failed: {exc}"}, status=500)
 
 
 class PermitPackageView(APIView):
@@ -246,6 +472,31 @@ class PermitPackageView(APIView):
         except Exception as exc:  # noqa: BLE001
             return JsonResponse({"detail": f"Package generation failed: {exc}"}, status=500)
         return JsonResponse(summary, status=201)
+
+
+class HldPermitPackageDownloadView(APIView):
+    """Download the latest HLD preliminary planning package."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id):
+        if not FtthProject.objects.filter(pk=project_id).exists():
+            return JsonResponse({"detail": "Project not found."}, status=404)
+        doc = PermitDocument.objects.filter(
+            permit__project_id=project_id,
+            name__startswith="HLD detailed preliminary permit package",
+        ).order_by("-version").first()
+        if doc is None or not doc.file:
+            return JsonResponse({"detail": "No HLD preliminary package generated yet."}, status=404)
+        try:
+            return FileResponse(
+                doc.file.open("rb"),
+                content_type="application/zip",
+                as_attachment=True,
+                filename=f"hld_preliminary_permit_package_v{doc.version}_{project_id}.zip",
+            )
+        except FileNotFoundError:
+            return JsonResponse({"detail": "Package file missing on disk."}, status=404)
 
 
 class PermitPackageDownloadView(APIView):

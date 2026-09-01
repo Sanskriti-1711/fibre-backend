@@ -21,7 +21,7 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 
 from ..models import PermitDocument, PermitEvent, PermitMatrix
-from . import data, drawings, permit_forms, reports, traffic_plan
+from . import data, drawings, lld_summary, permit_forms, reports, traffic_plan
 
 
 def _latest_package_version(project_id: str) -> int:
@@ -122,6 +122,7 @@ def generate_package(
         (drawings.cross_sections, {}),
         (traffic_plan.traffic_plans, {}),
         (permit_forms.application_forms, {"project_name": project_name}),
+        (permit_forms.german_street_opening_form, {"project_name": project_name}),
         (reports.all_reports, {}),
     ):
         try:
@@ -129,6 +130,20 @@ def generate_package(
             generated.extend(items)
         except Exception as exc:  # noqa: BLE001 — generator errors must not kill the package
             errors.append(f"{fn.__name__}: {exc}")
+
+    # HLD overview is a single document (not a list).
+    try:
+        overview = permit_forms.hld_permit_overview(project_id, project_name)
+        generated.append(overview)
+    except Exception as exc:
+        errors.append(f"hld_permit_overview: {exc}")
+
+    # LLD street-wise summary is a single document (not a list).
+    try:
+        lld_sum = lld_summary.lld_street_summary(project_id, project_name)
+        generated.append(lld_sum)
+    except Exception as exc:
+        errors.append(f"lld_street_summary: {exc}")
 
     if not generated:
         raise ValueError("No permit-package documents could be generated.")
@@ -169,14 +184,13 @@ def generate_package(
         zip_doc.file.save(f"permit_package_v{version}.zip", ContentFile(zip_bytes), save=True)
 
         # Persist the meaningful artifacts as rows (drawings, cross-sections,
-        # TMPs, schedules, reports) so the package list exposes individual
-        # documents. Application forms stay inside the zip only — one row per
-        # permit would be ~1500 rows of identical templates over a remote DB
-        # (the generation would take minutes instead of seconds).
+        # TMPs, schedules, reports, application forms) so the package list
+        # exposes individual documents. Forms were originally kept inside the
+        # zip only because they numbered ~1500 identical templates; since
+        # street-level grouping they are one per (rule, street) group (~21 on
+        # the primary project), so each form now gets its own downloadable row.
         saved = []
         for g in generated:
-            if g["kind"] == "FORM":
-                continue
             doc = PermitDocument.objects.create(
                 permit=anchor,
                 name=g["name"],

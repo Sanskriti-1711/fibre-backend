@@ -12,6 +12,8 @@ import json
 
 from django.db import connection
 
+from ..analysis.grouping import assign_groups
+from ..analysis.municipality import attribute_municipality
 from ..analysis.road_authority import resolve_road_authority
 from ..analysis.spatial_intersection import (
     gis_table_exists,
@@ -55,7 +57,7 @@ def _ensure_rule(rule_def: RuleDef) -> tuple[PermitRule, int]:
     authority = None
     if rule_def.authority_code:
         authority = PermitAuthority.objects.filter(code=rule_def.authority_code).first()
-    rule, _ = PermitRule.objects.get_or_create(
+    rule, created = PermitRule.objects.get_or_create(
         rule_id=rule_def.rule_id,
         defaults={
             "name": rule_def.name,
@@ -69,6 +71,29 @@ def _ensure_rule(rule_def: RuleDef) -> tuple[PermitRule, int]:
             "blocks_construction": rule_def.blocks_construction,
         },
     )
+    if not created:
+        # Sync catalogue drift into the DB snapshot (the registry is the
+        # source of truth — e.g. the environmental split repointed layer_b
+        # from the combined osm_environmental to per-category tables).
+        changed = []
+        for field, value in (
+            ("name", rule_def.name),
+            ("description", rule_def.description),
+            ("layer_a", rule_def.layer_a),
+            ("layer_b", rule_def.layer_b),
+            ("operator", rule_def.operator),
+            ("required_level", rule_def.required_level),
+            ("evidence_required", rule_def.evidence_required),
+            ("blocks_construction", rule_def.blocks_construction),
+        ):
+            if getattr(rule, field) != value:
+                setattr(rule, field, value)
+                changed.append(field)
+        if authority and rule.authority_id != authority.id:
+            rule.authority = authority
+            changed.append("authority")
+        if changed:
+            rule.save(update_fields=changed + ["updated_at"])
     return rule, rule.version
 
 
@@ -127,6 +152,35 @@ def run_analysis(project_id: str, user=None) -> dict:
         "notes": [],
         "gaps": [],
     }
+
+    # Municipality auto-derivation — Gemeinde from the OSM admin boundary
+    # reference layer (best-effort: a missing layer records a gap, manual
+    # overrides on the matrix are never overwritten).
+    muni = attribute_municipality(project_id)
+    if muni.get("layer_missing"):
+        summary["gaps"].append(
+            "osm_admin_boundary: reference layer gis.osm_admin_boundary not "
+            "present — municipality stays manual until the layer is loaded "
+            "(load_osm_reference_layers --layer osm_admin_boundary)"
+        )
+    elif muni.get("resolved"):
+        summary["notes"].append(
+            f"municipality resolved for {muni['resolved']} trenches "
+            f"({muni['rows_updated']} matrix rows filled)"
+        )
+
+    # Street-level grouping (permit_group) — one permit per street per rule
+    # (segment rows stay for map colouring / variation / traceability).
+    grp = assign_groups(project_id)
+    if grp.get("no_roads"):
+        summary["gaps"].append(
+            "permit_group: no roads input file — street grouping skipped"
+        )
+    elif grp["trench_rows"] or grp["lld_rows"]:
+        summary["notes"].append(
+            f"street grouping: {grp['trench_rows']} trench rows, "
+            f"{grp['lld_rows']} LLD rows assigned to streets"
+        )
 
     for rule_def in RULE_CATALOGUE:
         rule, version = _ensure_rule(rule_def)
@@ -210,6 +264,26 @@ def run_analysis(project_id: str, user=None) -> dict:
                             "hdd_design": {"present": False, "value": None},
                             "profile_drawing": {"present": False, "value": None},
                         })
+                    elif rule_def.rule_id in ("ENVIRONMENTAL_001", "ENVIRONMENTAL_002"):
+                        # zone_type is known from the reference feature itself;
+                        # impact_assessment stays open until a reviewer attaches it.
+                        evidence.update({
+                            "zone_type": {
+                                "present": bool(hit.get("ref_type")),
+                                "value": hit.get("ref_type"),
+                            },
+                            "impact_assessment": {"present": False, "value": None},
+                        })
+                    elif rule_def.rule_id == "ENVIRONMENTAL_003":
+                        # tree_id from the OSM reference node; root protection
+                        # measures are the reviewer's input.
+                        evidence.update({
+                            "tree_id": {
+                                "present": bool(hit.get("ref_id")),
+                                "value": hit.get("ref_id"),
+                            },
+                            "root_protection": {"present": False, "value": None},
+                        })
                     _upsert_permit(
                         project_id, rule, str(hit["route_id"]),
                         layer=route_table, evidence=evidence,
@@ -286,15 +360,22 @@ def run_analysis(project_id: str, user=None) -> dict:
 
 
 def _refresh_readiness(project_id: str) -> None:
-    """Recompute readiness_pct for a project's permit rows from evidence.
+    """Recompute readiness_pct for a project's permit rows and auto-manage
+    the pre-submission statuses (identified → evidence_required → ready).
 
-    Bulk-updates only the rows whose pct changed (avoids N individual
-    UPDATEs over a remote DB — the permit matrix can be thousands of rows).
+    A row becomes READY as soon as its rule's evidence checklist is
+    satisfied and falls back to EVIDENCE_REQUIRED / IDENTIFIED when evidence
+    is missing again (design status flow). Rows past the auto-managed stage
+    (submitted / under_review / approved / rejected / closed) are never
+    touched — the review flow owns them. Bulk-updates only the rows whose
+    pct/status changed (avoids N individual UPDATEs over a remote DB — the
+    permit matrix can be thousands of rows).
     """
     rows = list(
         PermitMatrix.objects.filter(project_id=project_id).select_related("rule")
     )
     changed: list[PermitMatrix] = []
+    events: list[PermitEvent] = []
     for pm in rows:
         rule = pm.rule
         if not rule:
@@ -308,23 +389,50 @@ def _refresh_readiness(project_id: str) -> None:
                 if (pm.evidence.get(k) or {}).get("present")
             )
             pct = round(present / len(required_keys) * 100)
-        if pct != pm.readiness_pct:
-            pm.readiness_pct = pct
-            changed.append(pm)
+        new_status = pm.status_for_readiness(pct)
+        if pct == pm.readiness_pct and new_status == pm.status:
+            continue
+        pm.readiness_pct = pct
+        if new_status and new_status != pm.status:
+            events.append(PermitEvent(
+                permit=pm,
+                event="STATUS_UPDATE",
+                detail={
+                    "auto": True,
+                    "from": pm.status,
+                    "to": new_status,
+                    "readiness_pct": pct,
+                    "by": "readiness_refresh",
+                },
+            ))
+            pm.status = new_status
+        changed.append(pm)
     if changed:
-        PermitMatrix.objects.bulk_update(changed, ["readiness_pct"], batch_size=500)
+        PermitMatrix.objects.bulk_update(
+            changed, ["readiness_pct", "status"], batch_size=500
+        )
+    if events:
+        PermitEvent.objects.bulk_create(events, batch_size=500)
 
 
 def project_summary(project_id: str) -> dict:
-    """Aggregate the permit matrix for one project (status counts + readiness)."""
+    """Aggregate the permit matrix for one project (status counts + readiness).
+
+    ``total`` counts segment rows; ``total_groups`` counts street-level permit
+    groups (rule × ``permit_group``, falling back to the route section for
+    ungrouped rows) — the clubbed number the UI surfaces as "permits".
+    """
     rows = list(PermitMatrix.objects.filter(project_id=project_id))
     counts: dict[str, int] = {}
+    groups: set[tuple] = set()
     for pm in rows:
         counts[pm.status] = counts.get(pm.status, 0) + 1
+        groups.add((pm.rule.rule_id if pm.rule else "", pm.permit_group or pm.route_section))
     avg = round(sum(pm.readiness_pct for pm in rows) / len(rows)) if rows else 0
     return {
         "project_id": project_id,
         "total": len(rows),
+        "total_groups": len(groups),
         "by_status": counts,
         "readiness_pct": avg,
         "blocks_construction": any(pm.blocks_construction and pm.required for pm in rows),

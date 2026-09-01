@@ -134,6 +134,35 @@ class Command(BaseCommand):
             else:
                 updated += 1
 
+        # Catalogue extensions beyond the template: the design deploys 1:16
+        # and 1:64 splitters (per-PDP SPL_16 / SPL_64 attributes), which the
+        # template's 1:32 / 1:8 splitter items cannot represent. Appended at
+        # the end of PLANT ELEMENTS so the template layout stays intact.
+        for code, name in (
+            ("6.11", "1:16 Splitter on site"),
+            ("6.12", "1:64 Splitter on site"),
+        ):
+            if opts["dry_run"]:
+                self.stdout.write(f"  {code:6} {name:60} ea       (catalogue extension)")
+                created += 1
+                continue
+            rate, was_created = BoqRate.objects.update_or_create(
+                item_code=code,
+                defaults={
+                    "section": "PLANT ELEMENTS",
+                    "item_name": name,
+                    "unit": "ea",
+                    "material_rate": 0.0,
+                    "labour_rate": 0.0,
+                    "rent_rate": 0.0,
+                    "active": True,
+                },
+            )
+            if was_created:
+                created += 1
+            else:
+                updated += 1
+
         verb = "would create" if opts["dry_run"] else "created"
         self.stdout.write(self.style.SUCCESS(
             f"Done: {verb} {created} rate rows ({updated} updated, {skipped} skipped)."

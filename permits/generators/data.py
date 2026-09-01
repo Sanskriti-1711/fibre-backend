@@ -1,8 +1,8 @@
-"""Data access for the permit package generators.
+"""Data access for permit package generators.
 
-Reads the project's LLD output layers (``business.ftth_lld_layers``) and
-the permit matrix without touching the HLD/Survey engines — the permit
-module only consumes their outputs (separation rule from the design doc).
+LLD generators consume ``business.ftth_lld_layers``. HLD preliminary
+packaging consumes the persisted ``ftth_hld_layers`` attribute tables through
+``hld_layer_features`` so it is never accidentally based on LLD output.
 """
 
 from __future__ import annotations
@@ -45,6 +45,18 @@ def latest_lld_run_id(project_id: str) -> Optional[str]:
         )
         row = cur.fetchone()
         return str(row[0]) if row else None
+
+
+def hld_layer_features(project_id: str, layer_name: str) -> list[dict[str, Any]]:
+    """Return persisted HLD features and their original attribute columns."""
+    from ftth_hld.models import FtthLayer
+
+    row = FtthLayer.objects.filter(
+        ftth_project__project_id=project_id, name=layer_name
+    ).first()
+    if not row:
+        return []
+    return list((row.geojson or {}).get("features", []))
 
 
 def lld_layer_features(

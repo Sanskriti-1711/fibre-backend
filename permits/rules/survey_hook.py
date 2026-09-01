@@ -241,19 +241,21 @@ def apply_survey_evidence(ftth_project_id: str) -> dict:
                 f"{facts.get('construction_method', '')} "
                 f"{facts.get('surface_type', '')}".strip()
             ).strip()
-            # Recompute readiness from the rule's evidence checklist.
-            pct = 0
-            if pm.rule_id and pm.rule.evidence_required:
+            # Recompute readiness from the rule's evidence checklist and let
+            # the shared promotion rule decide the status (same semantics as
+            # the engine's refresh — guarded so a later review status like
+            # submitted/approved is never overwritten by a survey re-run).
+            required_keys = pm.rule.evidence_required if pm.rule_id and pm.rule else []
+            if not required_keys:
+                pct = 100
+            else:
                 present = sum(
-                    1 for k in pm.rule.evidence_required
+                    1 for k in required_keys
                     if (merged.get(k) or {}).get("present")
                 )
-                pct = round(present / len(pm.rule.evidence_required) * 100)
+                pct = round(present / len(required_keys) * 100)
             pm.readiness_pct = pct
-            if pct == 100:
-                pm.status = PermitMatrix.STATUS_READY
-            elif pct > 0:
-                pm.status = PermitMatrix.STATUS_EVIDENCE_REQUIRED
+            pm.status = pm.status_for_readiness(pct) or pm.status
             pm.save(update_fields=[
                 "evidence", "analysis_notes", "readiness_pct", "status",
                 "updated_at",

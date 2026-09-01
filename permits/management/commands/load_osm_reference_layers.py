@@ -26,12 +26,19 @@ from django.db import connection
 # Default: Berlin administrative extent (covers the Mariendorf projects).
 DEFAULT_BBOX = (13.088, 52.338, 13.761, 52.675)
 
-# kumi.systems mirror is more reliable for the larger environmental queries
-# (the main overpass-api.de endpoint 504s on them).
-OVERPASS_URL = "https://overpass.kumi.systems/api/interpreter"
+# Try mirrors in order — the public endpoints are flaky and which one
+# responds varies over time.
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+]
 OVERPASS_TIMEOUT = 180
 
 # Each entry: (table, overpass query body, property used for ref_type)
+# Environmental is split into three categories so ENVIRONMENTAL_* rules fire
+# per zone type with a precise ref_type (landuse habitat / legally protected
+# area / individual tree for root-protection review).
 REFERENCE_LAYERS = {
     "osm_railway": (
         'way["railway"~"^(rail|tram|subway|light_rail|narrow_gauge|monorail)$"]',
@@ -41,12 +48,28 @@ REFERENCE_LAYERS = {
         'way["waterway"~"^(river|stream|canal|ditch|drain|riverbank)$"]',
         "waterway",
     ),
-    "osm_environmental": (
-        'way["landuse"~"^(forest|meadow|nature_reserve|grass|allotments|recreation_ground)$"];'
-        'way["leisure"~"^(nature_reserve|park)$"];'
-        'way["boundary"="protected_area"];'
-        'way["natural"~"^(wood|wetland|heath|scrub|grassland)$"]',
+    "osm_landuse": (
+        'way["landuse"~"^(forest|meadow|grass|allotments|recreation_ground|orchard|vineyard|cemetery)$"];'
+        'way["natural"~"^(wood|wetland|heath|scrub|grassland|moor|fell)$"]',
         "type",
+    ),
+    "osm_protected_area": (
+        'way["boundary"="protected_area"];'
+        'way["leisure"~"^(nature_reserve|park)$"];'
+        'way["landuse"="nature_reserve"]',
+        "type",
+    ),
+    "osm_tree": (
+        'node["natural"="tree"];'
+        'node["landuse"="tree"]',
+        "type",
+    ),
+    "osm_admin_boundary": (
+        # Gemeinde/Bezirk polygons (admin_level 6-9: Kreis, Verbandsgemeinde,
+        # Gemeinde, Ortsteil/Bezirk). ``out geom`` on relations returns the
+        # merged member geometry as a closed ring → Polygon per relation.
+        'rel["boundary"="administrative"]["admin_level"~"^(6|7|8|9)$"]',
+        "name",
     ),
 }
 
@@ -66,13 +89,14 @@ def _count(table: str) -> int:
         return int(cur.fetchone()[0])
 
 
+import re
 import time
 
 
 def _element_props(el: dict) -> dict:
     tags = el.get("tags") or {}
     props: dict = {}
-    for k in ("name", "railway", "waterway", "landuse", "leisure", "boundary", "natural"):
+    for k in ("name", "railway", "waterway", "landuse", "leisure", "boundary", "natural", "admin_level"):
         if tags.get(k):
             props[k] = tags[k]
     props["type"] = (
@@ -84,7 +108,43 @@ def _element_props(el: dict) -> dict:
 
 
 def _to_geojson(el: dict) -> dict | None:
-    """Convert an Overpass ``out geom`` way to a GeoJSON geometry."""
+    """Convert an Overpass ``out geom`` element to a GeoJSON geometry.
+
+    Handles nodes (single point — e.g. individual trees), closed ways
+    (Polygon) and open ways (LineString). Relations (e.g. admin boundaries)
+    carry their geometry on the members (``out geom`` puts a ``geometry``
+    array on each member way), so the outer-role member rings are
+    concatenated into a closed Polygon ring.
+    """
+    if el.get("type") == "node":
+        lon, lat = el.get("lon"), el.get("lat")
+        if lon is None or lat is None:
+            return None
+        return {"type": "Point", "coordinates": [lon, lat]}
+
+    if el.get("type") == "relation":
+        rings = []
+        for m in el.get("members") or []:
+            if m.get("type") != "way" or not m.get("geometry"):
+                continue
+            if m.get("role") not in (None, "", "outer"):
+                continue  # inner holes are not needed for containment checks
+            ring = [[g["lon"], g["lat"]] for g in m["geometry"]]
+            if len(ring) >= 2:
+                rings.append(ring)
+        if not rings:
+            return None
+        # Concatenate member rings into a single closed outer ring.
+        outer = rings[0][:-1] if rings[0][0] == rings[0][-1] else rings[0]
+        for ring in rings[1:]:
+            seg = ring[:-1] if ring[0] == ring[-1] else ring
+            outer.extend(seg)
+        if outer[0] != outer[-1]:
+            outer.append(outer[0])
+        if len(outer) < 4:
+            return None
+        return {"type": "Polygon", "coordinates": [outer]}
+
     geom = el.get("geometry")
     if not geom or len(geom) < 2:
         return None
@@ -100,36 +160,60 @@ def _matches(table: str, tags: dict) -> bool:
         return bool(tags.get("railway"))
     if table == "osm_waterway":
         return bool(tags.get("waterway"))
-    return bool(tags.get("landuse") or tags.get("leisure")
-                 or tags.get("boundary") or tags.get("natural"))
+    if table == "osm_landuse":
+        return bool(tags.get("landuse") or tags.get("natural"))
+    if table == "osm_protected_area":
+        return bool(
+            tags.get("boundary") == "protected_area"
+            or tags.get("leisure") in ("nature_reserve", "park")
+            or tags.get("landuse") == "nature_reserve"
+        )
+    if table == "osm_tree":
+        return tags.get("natural") == "tree" or tags.get("landuse") == "tree"
+    if table == "osm_admin_boundary":
+        return tags.get("boundary") == "administrative"
+    return False
 
 
 def _fetch_layer(bbox: tuple, body: str) -> list[dict]:
-    """Fetch one layer's elements from Overpass (with retries)."""
+    """Fetch one layer's elements from Overpass (with retries).
+
+    The bbox is applied to EACH statement in the body, placed immediately
+    after the element keyword — ``rel(bbox)[tags]`` not ``rel[tags](bbox)``.
+    Tag-first scoping forces Overpass to scan relations planet-wide (504 on
+    admin boundaries); bbox-first lets it use the spatial index. Node/way
+    results are identical either way (verified for the tree layer).
+    """
     west, south, east, north = bbox
+    bbox_arg = f"({south},{west},{north},{east})"
+    statements = [s.strip() for s in body.split(";") if s.strip()]
+    scoped = ";".join(
+        re.sub(r"^(node|way|rel)", rf"\1{bbox_arg}", s) for s in statements
+    )
     query = (
         f"[out:json][timeout:90];"
-        f"({body}({south},{west},{north},{east}););"
+        f"({scoped};);"
         "out geom;"
     ).encode("utf-8")
-    req = urllib.request.Request(
-        OVERPASS_URL,
-        data=query,
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "fiber-ftth-permits/1.0 (permits load command)",
-        },
-    )
     last_exc = None
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(req, timeout=OVERPASS_TIMEOUT) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-            return payload.get("elements", [])
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-            time.sleep(5 * (attempt + 1))
-    raise CommandError(f"Overpass request failed: {last_exc}") from last_exc
+    for url in OVERPASS_URLS:
+        req = urllib.request.Request(
+            url,
+            data=query,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "fiber-ftth-permits/1.0 (permits load command)",
+            },
+        )
+        for attempt in range(2):
+            try:
+                with urllib.request.urlopen(req, timeout=OVERPASS_TIMEOUT) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+                return payload.get("elements", [])
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                time.sleep(3 * (attempt + 1))
+    raise CommandError(f"Overpass request failed on all mirrors: {last_exc}") from last_exc
 
 
 def load_categories(bbox: tuple, categories: list[str], force: bool = False) -> dict:
@@ -169,7 +253,7 @@ def load_categories(bbox: tuple, categories: list[str], force: bool = False) -> 
 
 
 class Command(BaseCommand):
-    help = "Load OSM reference layers (railway/waterway/environmental) into gis.osm_* tables."
+    help = "Load OSM reference layers (railway/waterway/environmental/tree/admin boundary) into gis.osm_* tables."
 
     def add_arguments(self, parser):
         parser.add_argument("--bbox", nargs=4, type=float, metavar=("W", "S", "E", "N"),

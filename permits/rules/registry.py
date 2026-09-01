@@ -80,22 +80,59 @@ WATERWAY_CROSSING_RULE = RuleDef(
     evidence_required=["crossing_coordinate", "crossing_drawing"],
 )
 
-# ── Environmental — route intersects protected habitat / nature reserve ──
-ENVIRONMENTAL_RULE = RuleDef(
+# ── Environmental — split by zone category (landuse / protected area / tree) ─
+# Each fires on its own reference table so a route segment gets a precise
+# zone_type instead of a generic "environmental" hit.
+ENVIRONMENTAL_LANDUSE_RULE = RuleDef(
     rule_id="ENVIRONMENTAL_001",
-    name="Environmental review",
+    name="Environmental review — habitat zone",
     description=(
-        "FTTH route intersects protected habitat, nature reserve, forest or "
-        "environmental zone — environmental review and tree/root protection "
-        "where applicable."
+        "FTTH route intersects a habitat/vegetation zone (forest, meadow, "
+        "wetland, heath, scrub, grassland…) — environmental review of the "
+        "affected habitat."
     ),
     layer_a="final_trenches",
-    layer_b="osm_environmental",
+    layer_b="osm_landuse",
     operator="INTERSECTS",
     permit_type="Environmental Review",
     required_level="POTENTIAL",
     authority_code="DE-ENV-BERLIN",
     evidence_required=["zone_type", "impact_assessment"],
+)
+
+ENVIRONMENTAL_PROTECTED_AREA_RULE = RuleDef(
+    rule_id="ENVIRONMENTAL_002",
+    name="Environmental review — protected area",
+    description=(
+        "FTTH route intersects a legally protected area (nature reserve, "
+        "protected area boundary, park) — environmental review with protection "
+        "conditions before construction."
+    ),
+    layer_a="final_trenches",
+    layer_b="osm_protected_area",
+    operator="INTERSECTS",
+    permit_type="Environmental Review",
+    required_level="REQUIRED",
+    authority_code="DE-ENV-BERLIN",
+    evidence_required=["zone_type", "impact_assessment"],
+    blocks_construction=True,
+)
+
+ENVIRONMENTAL_TREE_RULE = RuleDef(
+    rule_id="ENVIRONMENTAL_003",
+    name="Tree / root protection review",
+    description=(
+        "FTTH route runs near an individual OSM-mapped tree — tree and root "
+        "protection measures required (root-protection trenching / HDD where "
+        "necessary)."
+    ),
+    layer_a="final_trenches",
+    layer_b="osm_tree",
+    operator="INTERSECTS",
+    permit_type="Tree Protection",
+    required_level="POTENTIAL",
+    authority_code="DE-ENV-BERLIN",
+    evidence_required=["tree_id", "root_protection"],
 )
 
 # ── Traffic management — every construction segment on a surfaced route ──
@@ -139,7 +176,9 @@ RULE_CATALOGUE: list[RuleDef] = [
     ROAD_AUTHORITY_RULE,
     RAILWAY_CROSSING_RULE,
     WATERWAY_CROSSING_RULE,
-    ENVIRONMENTAL_RULE,
+    ENVIRONMENTAL_LANDUSE_RULE,
+    ENVIRONMENTAL_PROTECTED_AREA_RULE,
+    ENVIRONMENTAL_TREE_RULE,
     TRAFFIC_RULE,
     UTILITY_REUSE_RULE,
 ]

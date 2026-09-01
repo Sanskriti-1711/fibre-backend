@@ -19,6 +19,7 @@ All endpoints require JWT authentication.
 
 import json
 import uuid
+import logging
 from pathlib import Path
 
 from django.http import JsonResponse, HttpResponse
@@ -37,6 +38,8 @@ from .boq import (
 )
 from .config import LAYER_NAME_MAP, STAGES
 from .models import FtthProject, FtthLayer
+logger = logging.getLogger(__name__)
+
 from .pipeline import (
     HOST_OUTPUTS_DIR,
     delete_project,
@@ -202,6 +205,42 @@ class PipelineStatusView(APIView):
             )
 
         status_data = get_status(project_id)
+        engine_status_raw = status_data.get("status")
+
+        # When the engine restarts it loses its in-memory task registry,
+        # so it may report "queued" or "unknown" even though the run
+        # completed long ago.  Fall back to the persisted DB status in
+        # that case so the frontend still sees the correct layer list.
+        # Also handle the case where the DB status was never updated to
+        # "completed" (engine died mid-poll) but layers exist in the DB.
+        db_has_layers = FtthLayer.objects.filter(
+            ftth_project__project_id=project_id
+        ).exists()
+        if engine_status_raw in ("unknown", "queued") and (
+            project.status == "completed" or db_has_layers
+        ):
+            # Mark as completed if layers exist (even if DB status was stale)
+            if db_has_layers and project.status != "completed":
+                FtthProject.objects.filter(pk=project_id).update(
+                    status="completed", progress=100
+                )
+
+            status_data = {
+                "project_id": project_id,
+                "status": "completed",
+                "progress": 100,
+                "stage_name": "Complete",
+                "messages": [],
+                "layers": [
+                    {"name": l.name, "count": l.feature_count}
+                    for l in FtthLayer.objects.filter(
+                        ftth_project__project_id=project_id
+                    )
+                ],
+                "downloads": [],
+                "created_at": project.created_at.isoformat() if project.created_at else "",
+                "updated_at": project.updated_at.isoformat() if project.updated_at else "",
+            }
 
         if status_data.get("status") == "unknown":
             # A non-completed run must never advertise a finished progress
@@ -227,18 +266,24 @@ class PipelineStatusView(APIView):
             })
 
         engine_status = status_data.get("status")
-        if engine_status and engine_status != project.status:
+        is_completed = engine_status == "completed"
+        if engine_status and (engine_status != project.status or is_completed):
             # Persist the engine progress, but never record 100% for a run
             # that has not actually completed (guards stale DB rows).
             persisted_progress = int(status_data.get("progress", 0) or 0)
-            if engine_status != "completed":
+            if not is_completed:
                 persisted_progress = min(persisted_progress, 99)
+            else:
+                persisted_progress = 100
             FtthProject.objects.filter(pk=project_id).update(
                 status=engine_status,
                 progress=persisted_progress,
-                stage_name=status_data.get("stage_name", ""),
-                stage_index=status_data.get("stage_index", 0),
-                error_message=status_data.get("error", ""),
+                stage_name=status_data.get("stage_name") or "",
+                stage_index=int(status_data.get("stage_index") or 0),
+                completed_at=(
+                    timezone.now() if is_completed else project.completed_at
+                ),
+                error_message=status_data.get("error") or "",
             )
 
         # Attach survey-assignment info so the results/status pages can show
@@ -318,6 +363,23 @@ class PipelineStatusView(APIView):
                         project_id,
                         len(permit_summary.get("rules_fired", [])),
                         permit_summary.get("rows_created", 0),
+                    )
+
+                # Generate the preliminary HLD permit-planning package once
+                # the matrix exists. This is intentionally separate from the
+                # final LLD package and must never block HLD completion.
+                from permits.models import PermitDocument
+                if not PermitDocument.objects.filter(
+                    permit__project_id=project_id,
+                    name__startswith="HLD detailed preliminary permit package",
+                ).exists():
+                    from permits.generators.hld_package import generate_hld_package
+                    hld_package = generate_hld_package(project_id, project.name or project_id)
+                    logger.info(
+                        "HLD preliminary permit package generated for %s: v%s, %s files",
+                        project_id,
+                        hld_package.get("version"),
+                        len(hld_package.get("files", [])),
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
