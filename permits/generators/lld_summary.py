@@ -323,10 +323,57 @@ def lld_street_summary(project_id: str, project_name: str) -> dict[str, Any]:
         for cat, bucket in sorted(cat_totals.items())
     )
 
+    # ── Chamber-to-chamber duct runs (mirrors the HLD summary tables) ──────
+    # LLD duct layers segmented at chambers; runs >150 m flagged REVIEW for
+    # a pull-point check before construction.
+    REVIEW_RUN_M = 150.0
+    run_rows: list[str] = []
+    review_items: list[tuple[str, str, str, float]] = []
+    corridor_totals: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"runs": 0, "length": 0.0, "min_len": float("inf"), "max_len": 0.0, "review": 0}
+    )
+    for layer_name in ("feeder_ducts", "distribution_ducts", "drop_ducts"):
+        for feature in data.lld_layer_features(project_id, layer_name):
+            props = data._props(feature)
+            if props.get("lld_purged"):
+                continue  # old rerouted-away corridor — never permit content
+            duct_type = str(_value(props, "DUCT_TYPE", "duct_type", default=layer_name.replace("_", " ").title()))
+            start_ch = str(_value(props, "START_CHAMBER", "start_chamber", default="") or "Project entry")
+            end_ch = str(_value(props, "END_CHAMBER", "end_chamber", default="") or "Network edge")
+            length = data._as_float(_value(props, "LENGTH_M", "length_m", default=0)) or 0.0
+            section_id = _value(props, "feature_id", "FEATURE_ID", "fid", "id", default="—")
+            is_review = length > REVIEW_RUN_M
+            row_cls = ' class="review"' if is_review else ""
+            run_rows.append(
+                f"<tr{row_cls}><td>{_e(duct_type)}</td><td>{_e(section_id)}</td>"
+                f"<td>{_e(start_ch)} → {_e(end_ch)}</td><td>{length:.1f} m</td>"
+                f"<td>{'REVIEW — pull point check' if is_review else ''}</td></tr>"
+            )
+            if is_review:
+                review_items.append((duct_type, str(section_id), f"{start_ch} → {end_ch}", length))
+            bucket = corridor_totals[duct_type]
+            bucket["runs"] += 1
+            bucket["length"] += length
+            bucket["min_len"] = min(bucket["min_len"], length)
+            bucket["max_len"] = max(bucket["max_len"], length)
+            if is_review:
+                bucket["review"] += 1
+
+    lld_corridor_rows = "".join(
+        f"<tr><td>{_e(kind)}</td><td>{bucket['runs']}</td><td>{bucket['length']:.1f} m</td>"
+        f"<td>{bucket['min_len']:.1f} m</td><td>{bucket['max_len']:.1f} m</td><td>{bucket['review'] or ''}</td></tr>"
+        for kind, bucket in sorted(corridor_totals.items())
+    ) or '<tr><td colspan="6">No duct data available.</td></tr>'
+    lld_review_rows = "".join(
+        f"<tr><td>{_e(dt)}</td><td>{_e(sid)}</td><td>{_e(run)}</td><td>{ln:.1f} m</td>"
+        f"<td>Add/verify intermediate pull chamber (HDPE 32/63 max pull ≈ 150 m)</td></tr>"
+        for dt, sid, run, ln in sorted(review_items, key=lambda r: -r[3])
+    ) or '<tr><td colspan="5">No runs exceed the 150 m pull threshold — no review items.</td></tr>'
+
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     content = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>LLD Permit Summary — {_e(project_name)}</title>
-<style>body{{font-family:Arial,sans-serif;color:#111827;margin:28px}}h1{{font-size:22px}}h2{{font-size:17px;margin-bottom:6px}}.notice{{padding:12px;background:#ecfdf5;border:2px solid #10b981;border-radius:7px}}.street{{page-break-inside:avoid;margin-top:28px}}table{{border-collapse:collapse;width:100%;font-size:11px}}th,td{{border:1px solid #d1d5db;padding:5px;text-align:left}}th{{background:#f3f4f6}}.small{{font-size:11px;color:#6b7280}}</style></head><body>
+<style>body{{font-family:Arial,sans-serif;color:#111827;margin:28px}}h1{{font-size:22px}}h2{{font-size:17px;margin-bottom:6px}}.notice{{padding:12px;background:#ecfdf5;border:2px solid #10b981;border-radius:7px}}.street{{page-break-inside:avoid;margin-top:28px}}table{{border-collapse:collapse;width:100%;font-size:11px}}th,td{{border:1px solid #d1d5db;padding:5px;text-align:left}}th{{background:#f3f4f6}}.small{{font-size:11px;color:#6b7280}}tr.review td{{background:#fef2f2;color:#991b1b;font-weight:600}}</style></head><body>
 <h1>Final LLD Permit Summary</h1><p class="small">Project: {_e(project_name)} · ID: {_e(project_id)} · Generated: {generated} · Purged/routed-away sections excluded</p>
 <div class="notice"><strong>FINAL DESIGN — SURVEY-CONFIRMED. The engineer-approved (rerouted) route is authoritative.</strong><br>
 Features marked <code>lld_purged</code> by the field survey (old rerouted-away corridor) are excluded from every row below. Section lengths, trench types, dimensions, street imagery and traffic management are computed from the completed LLD design layers and approved survey input.</div>
@@ -335,6 +382,13 @@ Features marked <code>lld_purged</code> by the field survey (old rerouted-away c
 <h3>By design type</h3>
 <table><thead><tr><th>Design type</th><th>Sections</th><th>Total length</th></tr></thead><tbody>{raw_rows}</tbody></table>
 <h2>Street-wise design and permit information</h2>{''.join(street_blocks) or '<p>No trench features were available in the LLD output.</p>'}
+<h2>Duct runs between chambers</h2><p class="small">Final LLD ducts segmented into chamber-to-chamber runs per duct layer. Runs longer than 150 m are flagged <strong>REVIEW</strong>: verify an intermediate pull chamber before construction. Purged (rerouted-away) ducts are excluded.</p>
+<table><thead><tr><th>Duct type</th><th>Runs</th><th>Total length</th><th>Shortest run</th><th>Longest run</th><th>REVIEW (&gt;150 m)</th></tr></thead><tbody>{lld_corridor_rows}</tbody></table>
+<details><summary style="cursor:pointer;font-size:13px;margin:10px 0 4px"><strong>All duct runs (section-wise)</strong> — click to expand {_e(len(run_rows))} rows</summary>
+<table><thead><tr><th>Duct type</th><th>Section</th><th>Run (start → end chamber)</th><th>Length</th><th>Status</th></tr></thead><tbody>{''.join(run_rows) or '<tr><td colspan="5">No duct runs available.</td></tr>'}</tbody></table>
+</details>
+<h2>REVIEW — runs exceeding 150 m pull threshold</h2><p class="small">Standard HDPE 32/63 sub-duct pulling distance is ≈ 150 m between chambers. Each run below needs an intermediate pull point added (or verified) before construction. Sorted longest first.</p>
+<table><thead><tr><th>Duct type</th><th>Section</th><th>Run (start → end chamber)</th><th>Length</th><th>Action</th></tr></thead><tbody>{lld_review_rows}</tbody></table>
 <h2>Permit-road form fields</h2><p class="small">The following fields from <strong>docs/permit_road.docx</strong> are represented by the LLD data where available; remaining values are completed during application.</p>
 <table><thead><tr><th>Field</th><th>Status / value</th></tr></thead><tbody>{''.join(f'<tr><td>{_e(field)}</td><td>Completed in LLD design data / application form</td></tr>' for field in _permit_road_fields())}</tbody></table>
 <p class="small">Reroute handling: where the survey approved a diverted path, the old corridor is excluded (see <code>lld_purged</code>) and only the approved route is carried into the permit.</p>

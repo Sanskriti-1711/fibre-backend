@@ -336,44 +336,92 @@ class PermitSummaryView(APIView):
     Returns both raw segment counts (``total``) and the clubbed street-level
     group counts (``total_groups``, per-project ``groups``) so the dashboard
     can surface one permit per street instead of one per segment.
+
+    Uses DB-level aggregates instead of materializing every PermitMatrix row
+    in Python — important when the matrix holds tens of thousands of rows.
     """
 
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        rows = PermitMatrix.objects.select_related("project", "rule").all()
-        counts: dict[str, int] = {}
-        per_project: dict[str, int] = {}
-        per_project_groups: dict[str, int] = {}
-        group_status: dict[tuple, tuple[int, str]] = {}  # key -> (priority, status)
-        for pm in rows:
-            counts[pm.status] = counts.get(pm.status, 0) + 1
-            per_project[pm.project_id] = per_project.get(pm.project_id, 0) + 1
-            key = (
-                str(pm.project_id),
-                pm.rule.rule_id if pm.rule else "",
-                pm.permit_group or pm.route_section,
-            )
-            if key not in group_status:
-                group_status[key] = (0, pm.status)
-                per_project_groups[str(pm.project_id)] = per_project_groups.get(
-                    str(pm.project_id), 0
-                ) + 1
-            prio = _GROUP_STATUS_PRIORITY.get(pm.status, 0)
-            if prio > group_status[key][0]:
-                group_status[key] = (prio, pm.status)
+        # ── Raw status counts (one aggregate query) ───────────────────
+        from django.db.models import Count
+
+        status_agg = (
+            PermitMatrix.objects
+            .values("status")
+            .annotate(n=Count("id"))
+            .order_by("status")
+        )
+        counts = {row["status"]: row["n"] for row in status_agg}
+        total = sum(counts.values())
+
+        # ── Per-project segment counts (one aggregate query) ──────────
+        per_project_agg = (
+            PermitMatrix.objects
+            .values("project_id")
+            .annotate(n=Count("id"))
+            .order_by("project_id")
+        )
+        per_project = {row["project_id"]: row["n"] for row in per_project_agg}
+
+        # ── Worst-first street-group status via a single raw SQL query ─
+        # The dashboard groups one permit per (project, rule, route_section)
+        # and picks the least-favourable status in each group. That "group
+        # by + MIN(priority)" reduction is easier in SQL than in the ORM.
+        # We map status → priority in SQL so the database does the heavy
+        # lifting; the Python side only counts the resulting groups.
+        priority_case = (
+            "CASE status "
+            "WHEN 'rejected' THEN 9 "
+            "WHEN 'under_review' THEN 8 "
+            "WHEN 'submitted' THEN 7 "
+            "WHEN 'evidence_required' THEN 6 "
+            "WHEN 'identified' THEN 5 "
+            "WHEN 'ready' THEN 4 "
+            "WHEN 'approved' THEN 3 "
+            "WHEN 'closed' THEN 2 "
+            "WHEN 'not_required' THEN 1 "
+            "ELSE 0 END"
+        )
+        group_sql = (
+            "SELECT "
+            "  pm.project_id, "
+            "  COALESCE(NULLIF(pm.permit_group, ''), pm.route_section) AS group_key, "
+            "  pm.rule_id, "
+            "  FIRST_VALUE(pm.status) OVER ("
+            "    PARTITION BY pm.project_id, COALESCE(NULLIF(pm.permit_group, ''), pm.route_section), pm.rule_id "
+            "    ORDER BY " + priority_case + " DESC, pm.permit_id"
+            "  ) AS group_status "
+            "FROM ftth_permit_matrix pm"
+        )
+        group_rows = PermitMatrix.objects.raw(group_sql)
+
         group_counts: dict[str, int] = {}
-        for (_key, (prio, status)) in group_status.items():
-            group_counts[status] = group_counts.get(status, 0) + 1
+        per_project_groups: dict[str, int] = {}
+        seen_groups: set[tuple] = set()
+        for gr in group_rows:
+            key = (str(gr.project_id), str(gr.rule_id or ""), str(gr.group_key))
+            if key in seen_groups:
+                continue
+            seen_groups.add(key)
+            st = gr.group_status
+            group_counts[st] = group_counts.get(st, 0) + 1
+            per_project_groups[str(gr.project_id)] = per_project_groups.get(str(gr.project_id), 0) + 1
+
         ready = group_counts.get(PermitMatrix.STATUS_READY, 0) + group_counts.get(
             PermitMatrix.STATUS_APPROVED, 0
         )
+
+        # ── Project names (one bulk query) ────────────────────────────
         names = {
-            str(p.pk): p.name for p in FtthProject.objects.filter(pk__in=per_project.keys())
+            str(p.pk): p.name
+            for p in FtthProject.objects.filter(pk__in=list(per_project.keys()))
         }
+
         return JsonResponse({
-            "total": len(rows),
-            "total_groups": len(group_status),
+            "total": total,
+            "total_groups": len(seen_groups),
             "by_status": counts,
             "group_by_status": group_counts,
             "ready": ready,

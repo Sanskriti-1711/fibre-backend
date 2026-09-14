@@ -52,13 +52,19 @@ from .models import BoqRate, BoqSnapshot, FtthLayer, FtthProject
 #   attr_len: attribute carrying an explicit length in metres (optional)
 # ---------------------------------------------------------------------------
 
-# Trenching (section 2) — from the combined trenches layer, keyed by
-# the ``sublayer`` attribute the engine stamps on each feature.
+# Trenching (section 2) — from the single Final_Trenches layer, keyed by the
+# construction class (trench_type / CONSTRUCT / USAGE_TYPE all carry it):
+# Open Cut (feeder + distribution routes combined), Garden (drop legs), HDD.
+# Legacy sublayer values are mapped too so HLD outputs from before the
+# single-trench change still quantify.
 _TRENCH_RULES = [
-    ("Feeder_Trench", "2.1"),
-    ("Distribution_Trench", "2.3"),
-    ("Garden_Trench", "2.5"),
-    ("Drill_Trench", "2.6"),
+    ("Open Cut", "2.1"),
+    ("Feeder_Trench", "2.1"),      # legacy per-tier sublayer tag
+    ("Distribution_Trench", "2.1"),  # legacy per-tier sublayer tag
+    ("Garden", "2.5"),
+    ("Garden_Trench", "2.5"),      # legacy per-tier sublayer tag
+    ("HDD", "2.6"),
+    ("Drill_Trench", "2.6"),       # legacy per-tier sublayer tag
 ]
 
 # Ducts (section 3) — from the ducts layer, keyed by DUCT_TYPE.
@@ -114,6 +120,7 @@ _BOM_ITEMS = [
     ("Plant Elements", "MFG / Mini-PoP enclosure", "6.3", "ea"),
     ("Plant Elements", "Handhole B125", "6.4", "ea"),
     ("Plant Elements", "Splice closure", "6.6", "ea"),
+    ("Plant Elements", "Optical coupler (drop ↔ distribution)", "6.13", "ea"),
     ("Plant Elements", "1:32 Splitter", "6.7", "ea"),
     ("Plant Elements", "1:8 Splitter", "6.8", "ea"),
     ("Plant Elements", "1:16 Splitter", "6.11", "ea"),
@@ -344,6 +351,41 @@ def _sum_by_attr(project_id: str, layer_name: str, attr: str,
     return totals
 
 
+def _sum_by_trench_class(project_id: str) -> Dict[str, float]:
+    """Trench metres grouped by construction class → BOQ item code.
+
+    Reads the single Final_Trenches publication. The class lives in
+    trench_type / CONSTRUCT / USAGE_TYPE (all carry the same value now);
+    the legacy ``sublayer`` tag is checked first so HLD outputs from
+    before the single-trench change still quantify. Reused corridors are
+    excluded (tracked separately via reused_metres).
+    """
+    match = dict(_TRENCH_RULES)
+    totals: Dict[str, float] = {}
+    layer = _get_layer(project_id, "trenches")
+    for f in _iter_features(layer):
+        props = f.get("properties", {}) or {}
+        if _is_reused(props):
+            continue
+        key = None
+        for attr in ("sublayer", "trench_type", "CONSTRUCT", "USAGE_TYPE"):
+            val = props.get(attr)
+            if val is None:
+                continue
+            key = match.get(str(val))
+            if key is not None:
+                break
+        if key is None:
+            continue
+        raw = props.get("length_m")
+        try:
+            qty = float(raw) if raw is not None else _geometry_length(f.get("geometry"))
+        except (TypeError, ValueError):
+            qty = _geometry_length(f.get("geometry"))
+        totals[key] = totals.get(key, 0.0) + qty
+    return totals
+
+
 def reused_metres(project_id: str) -> Dict[str, float]:
     """Metres of trench/duct/cable riding existing infrastructure.
 
@@ -353,7 +395,7 @@ def reused_metres(project_id: str) -> Dict[str, float]:
     """
     totals: Dict[str, float] = {}
     for layer_name, attr, match, length_attr in (
-        ("trenches", "sublayer", dict(_TRENCH_RULES), "length_m"),
+        ("trenches", "construct", dict(_TRENCH_RULES), "length_m"),
         ("ducts", "DUCT_TYPE", dict(_DUCT_RULES), "length_m"),
         ("cables", "CABLE_TYPE", None, None),
     ):
@@ -366,6 +408,8 @@ def reused_metres(project_id: str) -> Dict[str, float]:
                 key = "cable"
             else:
                 val = props.get(attr)
+                if val is None:
+                    val = props.get("trench_type") or props.get("USAGE_TYPE")
                 key = match.get(str(val))
                 if key is None:
                     continue
@@ -403,19 +447,18 @@ def compute_quantities(project_id: str) -> Dict[str, float]:
     if home_passes:
         qty["1.1"] = qty.get("1.1", 0.0) + home_passes
 
-    # 2. Trenching — sublayer breakdown (the merged ``trenches`` layer holds
-    #    the five sub-layers; ``Final_Trenches`` is the LLD mirror of the same
-    #    network, so counting it would double the quantities). Features riding
-    #    reused existing corridors are excluded — not new trenching.
-    trench_totals = _sum_by_attr(project_id, "trenches", "sublayer",
-                                 dict(_TRENCH_RULES), length_attr="length_m",
-                                 skip_reused=True)
+    # 2. Trenching — construction-class breakdown from the single trenches
+    #    layer (Open Cut / Garden / HDD). ``Final_Trenches`` is the only
+    #    trench publication now; the legacy per-tier sublayers still match
+    #    via the rule aliases. Features riding reused existing corridors are
+    #    excluded — not new trenching.
+    trench_totals = _sum_by_trench_class(project_id)
     for code, total in trench_totals.items():
         qty[code] = qty.get(code, 0.0) + total
 
-    # 2.11 Road restoration (asphalt) = the open-cut feeder + distribution
-    #     trench metres under the road; 2.12 brick/paving has no data source.
-    road_cut = qty.get("2.1", 0.0) + qty.get("2.3", 0.0)
+    # 2.11 Road restoration (asphalt) = the open-cut trench metres under the
+    #     road; 2.12 brick/paving has no data source.
+    road_cut = qty.get("2.1", 0.0)
     if road_cut:
         qty["2.11"] = qty.get("2.11", 0.0) + road_cut
 
@@ -469,6 +512,7 @@ def compute_quantities(project_id: str) -> Dict[str, float]:
     pdps = list(_iter_features(_get_layer(project_id, "pdps")))
     mfg = list(_iter_features(_get_layer(project_id, "mfg")))
     chambers = list(_iter_features(_get_layer(project_id, "chambers")))
+    coupleurs = list(_iter_features(_get_layer(project_id, "coupleurs")))
 
     def _int_prop(f, key):
         try:
@@ -486,21 +530,30 @@ def compute_quantities(project_id: str) -> Dict[str, float]:
     if mfg:
         qty["6.3"] = qty.get("6.3", 0.0) + len(mfg)
 
-    # Handholes (open cut) vs manholes (trench cut) by CHAMBER_TYPE.
-    for chamber_type, code in (("Handhole", "6.4"), ("Manhole", "6.5")):
-        n = sum(1 for f in chambers
-                if (f.get("properties") or {}).get("CHAMBER_TYPE") == chamber_type)
-        if n:
-            qty[code] = qty.get(code, 0.0) + n
+    # Standard chamber catalogue: HH (6.4), DHH+MH count as their
+    # equivalents; splice closures = DHH chambers hosting PDP splitters.
+    _ct = lambda f: (f.get("properties") or {}).get("CHAMBER_TYPE")
+    n_hh = sum(1 for f in chambers if _ct(f) in ("HH", "Handhole"))
+    n_dhh = sum(1 for f in chambers if _ct(f) in ("DHH", "Distribution Handhole"))
+    n_mh = sum(1 for f in chambers if _ct(f) in ("MH", "Manhole"))
+    if n_hh:
+        qty["6.4"] = qty.get("6.4", 0.0) + n_hh
+    if n_mh:
+        qty["6.5"] = qty.get("6.5", 0.0) + n_mh
+    if n_dhh:
+        # DHH hosts splitter install + distribution splicing → closure line.
+        qty["6.6"] = qty.get("6.6", 0.0) + n_dhh
 
-    # Splice closures = chambers hosting PDP equipment (one per PDP chamber).
-    closures = sum(
-        1 for f in chambers
-        if (f.get("properties") or {}).get("CHAMBER_TYPE") == "Chamber"
-        and str((f.get("properties") or {}).get("EQUIPMENT") or "").startswith("PDP")
-    )
-    if closures:
-        qty["6.6"] = qty.get("6.6", 0.0) + closures
+    # Couplers at pseudo → object duct connections (own Coupleurs layer;
+    # fall back to chambers carrying coupler equipment for legacy runs).
+    n_cpl = sum(1 for f in coupleurs)
+    if not n_cpl:
+        n_cpl = sum(
+            1 for f in chambers
+            if "coupler" in str((f.get("properties") or {}).get("EQUIPMENT") or "").lower()
+        )
+    if n_cpl:
+        qty["6.13"] = qty.get("6.13", 0.0) + n_cpl
 
     # Splitters — the design stamps per-ratio counts (SPL_32 / SPL_8 are the
     # template items; SPL_16 / SPL_64 are the ratios this design actually
@@ -688,15 +741,16 @@ def _is_length(code: str) -> bool:
 
 def _fallback_name(code: str) -> str:
     names = {
-        "2.1": "Feeder trench — open cut", "2.3": "Distribution trench — open cut",
-        "2.5": "Garden trench — ploughing", "2.6": "Drill / HDD crossings",
+        "2.1": "Trench — open cut (feeder + distribution)", "2.3": "Trench — open cut (feeder + distribution)",
+        "2.5": "Garden trench — micro-trenching", "2.6": "Drill / HDD crossings",
         "3.1": "Feeder duct HDPE 50/40", "3.7": "Distribution duct HDPE 32",
         "3.11": "Distribution sub-duct 1×7/4 (property)", "3.12": "Duct surplus (+2%)",
         "4.1": "Feeder cable 288 FO", "4.6": "Distribution cable 24 FO",
         "4.9": "Cable surplus (+2%)",
         "6.1": "DP48 (PDP with splicing)", "6.3": "MFG / Mini-PoP",
-        "6.4": "Handhole open cut (B125)", "6.5": "Handhole trench cut (B125)",
-        "6.6": "Closure (splice)", "7.1": "OTB 1–4 HH", "7.2": "OTB 5–8 HH",
+        "6.4": "Handhole HH 300x300/450x450 (B125)", "6.5": "Manhole MH 1200x1200",
+        "6.6": "Distribution Handhole DHH 600x600 (splicing)", "6.13": "Optical coupler (drop ↔ distribution)",
+        "7.1": "OTB 1–4 HH", "7.2": "OTB 5–8 HH",
         "7.3": "OTB 9–24 HH", "7.4": "OTB 25–48 HH", "9.1": "Access per property",
     }
     return names.get(code, code)

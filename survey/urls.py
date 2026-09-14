@@ -21,6 +21,8 @@ from .views import (
     SurveyFeatureUpsertAPIView,
     SurveyFeaturePhotoUploadView,
     SurveyFeatureApprovalAPIView,
+    ProjectRiskQueueAPIView,
+    CompletionForecastAPIView,
 )
 
 urlpatterns = [
@@ -60,4 +62,8 @@ urlpatterns = [
     path('survey-features/<uuid:feature_id>/upload-photo/', SurveyFeaturePhotoUploadView.as_view()),
     path('survey-features/<uuid:feature_id>/approval/', SurveyFeatureApprovalAPIView.as_view()),
     path('survey-features/<uuid:feature_id>/', SurveyFeatureDetailAPIView.as_view()),
+
+    # Tier-1 analytics: risk-ranked change queue + completion forecast
+    path('projects/<uuid:project_id>/risk-queue/', ProjectRiskQueueAPIView.as_view()),
+    path('projects/<uuid:project_id>/completion-forecast/', CompletionForecastAPIView.as_view()),
 ]

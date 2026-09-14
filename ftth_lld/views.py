@@ -204,7 +204,7 @@ def _change_type(sf):
     return "attribute"
 
 
-def _change_payload(sf):
+def _change_payload(sf, risk=None):
     comments = []
     if sf.review_notes:
         comments.append({
@@ -231,6 +231,10 @@ def _change_payload(sf):
         ),
         "timestamp": (sf.updated_at or sf.created_at or timezone.now()).isoformat(),
         "evidence": {"photos": 1 if sf.photo else 0, "notes": ""},
+        "risk": risk or {
+            "score": 0, "band": "unknown", "severity": "none",
+            "likelihood": 0, "lld_impact": 0, "factors": [],
+        },
         "comments": comments,
         "approval_history": [
             {
@@ -404,10 +408,17 @@ class LldReviewView(APIView):
             hld_fc = _hld_feature_collection(copy)
             survey_fc = _survey_feature_collection(copy)
             approved_fc = _approved_feature_collection(copy)
-            changes = [
-                _change_payload(sf)
-                for sf in SurveyFeature.objects.filter(project=copy).select_related("engineer").iterator(chunk_size=500)
-            ]
+            from survey.risk_scoring import score_changes
+
+            sfs = list(
+                SurveyFeature.objects.filter(project=copy)
+                .select_related("engineer")
+                .iterator(chunk_size=500)
+            )
+            risk_by_id = score_changes(sfs)
+            changes = [_change_payload(sf, risk_by_id.get(str(sf.id))) for sf in sfs]
+            # Highest-risk changes first — the review queue priority order.
+            changes.sort(key=lambda c: -c["risk"]["score"])
 
         asv = (
             ApprovedSurveyVersion.objects.filter(ftth_project=ftth)
@@ -440,43 +451,69 @@ class LldProjectsView(APIView):
     queue (change payloads) and a per-project LLD readiness summary so the
     frontend can render one block per project and enable Run LLD only when
     zero changes remain unresolved.
+
+    Counters are annotated at the DB level (no Python iteration over
+    SurveyFeature rows just to count statuses). The full ``changes``
+    payload is still built for consumers that render them (e.g.
+    ftth-survey-changes.html).
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from django.db.models import Count
+
+        # Bulk-fetch approved survey versions so we don't do one query per
+        # project inside the loop.
+        asv_map = {
+            a.ftth_project_id: a
+            for a in ApprovedSurveyVersion.objects.filter(
+                ftth_project__in=FtthProject.objects.all()
+            )
+            # DISTINCT ON (ftth_project_id) requires ORDER BY to start with
+            # the same expression (PostgreSQL) — latest version per project.
+            .order_by("ftth_project_id", "-created_at")
+            .distinct("ftth_project_id")
+        }
+
         projects = []
         for ftth in FtthProject.objects.all().order_by("-created_at"):
             copy = _survey_copy(ftth.project_id)
             if copy is None:
                 continue
-            changes = [
-                _change_payload(sf)
-                for sf in SurveyFeature.objects.filter(project=copy)
-                .select_related("engineer")
-                .iterator(chunk_size=500)
-            ]
-            if not changes:
+
+            # DB-level status counts (single query, no Python loop over
+            # SurveyFeature rows just to count statuses).
+            sf_qs = SurveyFeature.objects.filter(project=copy)
+            total = sf_qs.count()
+            if total == 0:
                 continue
-            statuses = [c["status"] for c in changes]
-            pending = statuses.count("pending_review")
-            correction = statuses.count("needs_correction")
-            asv = (
-                ApprovedSurveyVersion.objects.filter(ftth_project=ftth)
-                .order_by("-created_at")
-                .first()
+            counts = (
+                sf_qs
+                .values("survey_status")
+                .annotate(n=Count("id"))
             )
+            c = {row["survey_status"]: row["n"] for row in counts}
+            pending = c.get(SurveyFeature.SurveyStatus.PENDING_REVIEW, 0) + c.get(SurveyFeature.SurveyStatus.NEW, 0) + c.get(SurveyFeature.SurveyStatus.MODIFIED, 0) + c.get(SurveyFeature.SurveyStatus.REMOVED, 0)
+            correction = c.get(SurveyFeature.SurveyStatus.NEEDS_CORRECTION, 0)
+            approved = c.get(SurveyFeature.SurveyStatus.APPROVED, 0) + c.get(SurveyFeature.SurveyStatus.COMPLETED, 0)
+            rejected = c.get(SurveyFeature.SurveyStatus.REJECTED, 0)
+
+            asv = asv_map.get(ftth.project_id)
             projects.append({
                 "project_id": ftth.project_id,
                 "name": ftth.name or ftth.project_id,
                 "hld_version": HLD_VERSION,
-                "total": len(changes),
+                "total": total,
                 "pending": pending,
-                "approved": statuses.count("approved"),
-                "rejected": statuses.count("rejected"),
+                "approved": approved,
+                "rejected": rejected,
                 "needs_correction": correction,
                 "ready": pending == 0 and correction == 0,
                 "approved_survey_version": asv.version if asv else None,
-                "changes": changes,
+                "changes": [
+                    _change_payload(sf)
+                    for sf in sf_qs.select_related("engineer").iterator(chunk_size=500)
+                ],
             })
         return JsonResponse({"projects": projects})
 
@@ -488,18 +525,24 @@ class LldRunsView(APIView):
     runs, mirroring the HLD Outputs page). Each entry carries its provenance
     (HLD + Approved Survey versions), status, progress and layer list so the
     frontend can render View Output / Download actions.
+
+    Uses ``prefetch_related('layers')`` so the layer list is fetched in one
+    extra query instead of one query per run.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         runs = []
-        qs = LldRun.objects.select_related(
-            "ftth_project", "approved_survey_version", "run_by"
-        ).order_by("-run_date")
+        qs = (
+            LldRun.objects
+            .select_related("ftth_project", "approved_survey_version", "run_by")
+            .prefetch_related("layers")
+            .order_by("-run_date")
+        )
         for r in qs:
             layers = [
                 {"name": l.name, "feature_count": l.feature_count}
-                for l in LldLayer.objects.filter(lld_run=r)
+                for l in r.layers.all()
             ]
             runs.append({
                 "project_id": r.ftth_project_id,

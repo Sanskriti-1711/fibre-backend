@@ -755,12 +755,21 @@ class BoqView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
+        # Tier-1 A4: anomaly screening — flags quantities that look wrong
+        # (zero length items, dominant line items, outliers vs siblings).
+        from .boq_anomalies import detect_boq_anomalies
+        try:
+            anomalies = detect_boq_anomalies(project_id)
+        except Exception:
+            anomalies = {"anomalies": [], "checked": 0, "basis": {}}
+
         return JsonResponse({
             "project_id": project_id,
             "boq_rows": snapshot.boq_json,
             "bom_rows": snapshot.bom_json,
             "boq_totals": snapshot.boq_totals,
             "bom_totals": snapshot.bom_totals,
+            "anomalies": anomalies,
             "generated_at": snapshot.regenerated_at or snapshot.created_at,
         })
 

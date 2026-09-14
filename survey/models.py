@@ -590,6 +590,31 @@ class SurveyFeature(models.Model):
     change_reason = models.TextField(blank=True, default='', help_text='Why the engineer made this change')
     review_notes = models.TextField(blank=True, default='', help_text='Planner/approver notes from the approval decision')
 
+    # GPS capture quality (Tier-1 A2) — recorded at capture time so the
+    # LLD can downweight or re-verify features captured on a poor fix.
+    GPS_QUALITY_CHOICES = [
+        ('ok', 'OK (within requirement)'),
+        ('warn', 'Warn (degraded, allowed)'),
+        ('reject', 'Reject-grade (engineer override)'),
+        ('unknown', 'Unknown accuracy'),
+    ]
+    gps_accuracy_m = models.FloatField(
+        null=True, blank=True,
+        help_text='Device-reported horizontal accuracy (metres) at capture time',
+    )
+    gps_quality = models.CharField(
+        max_length=10,
+        choices=GPS_QUALITY_CHOICES,
+        blank=True,
+        default='',
+        help_text='Grade of the GPS fix against the layer requirement',
+    )
+
+    # Photo classification tags (Tier-1 A1) — e.g.
+    # ["trench", "road", "cable"] produced by the heuristic classifier on
+    # upload; used by the survey form for field auto-fill suggestions (A3).
+    photo_tags = models.JSONField(default=list, blank=True, help_text='Classified tags for the attached photo')
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -6,6 +6,7 @@ and later survey image references can be inserted without changing the layout.
 from __future__ import annotations
 
 import html
+import json
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
@@ -114,13 +115,89 @@ def generate_hld_summary(project_id: str, project_name: str) -> dict[str, Any]:
         f"<tr><td>{_e(kind)}</td><td>{bucket['count']}</td><td>{bucket['length']:.1f} m</td></tr>"
         for kind, bucket in sorted(totals.items())
     ) or '<tr><td colspan="3">No trench data available.</td></tr>'
+
+    # ── Chamber-to-chamber duct sections ─────────────────────────────────
+    # Ducts are CONTINUOUS corridors (geometry never splits); the chamber-
+    # bounded civil sections are recorded per feature in SECTIONS_JSON
+    # [{start, end, length_m}, …] with the ordered chain in SECTION_CHAIN.
+    # Sections longer than REVIEW_RUN_M need an intermediate pull point —
+    # flag them REVIEW so the planner checks chamber spacing.
+    REVIEW_RUN_M = 150.0
+    ducts = data.hld_layer_features(project_id, "ducts")
+    run_rows: list[str] = []
+    review_items: list[tuple[str, str, str, float]] = []  # (duct_type, id, section, len)
+    corridor_totals: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"sections": 0, "length": 0.0, "min_len": float("inf"), "max_len": 0.0, "review": 0}
+    )
+    for feature in ducts:
+        props = data._props(feature)
+        duct_type = str(_value(props, "DUCT_TYPE", "duct_type", default="Duct"))
+        length = data._as_float(_value(props, "LENGTH_M", "length_m", default=0)) or 0.0
+        ways = _value(props, "WAYS", "ways", default="—")
+        occupancy = _value(props, "OCCUPANCY_PCT", "occupancy_pct", default="—")
+        corridor_id = _value(props, "feature_id", "FEATURE_ID", "fid", "id", default="—")
+        sections_raw = _value(props, "SECTIONS_JSON", "sections_json", default="")
+        sections: list[dict] = []
+        if sections_raw:
+            try:
+                parsed = json.loads(sections_raw) if isinstance(sections_raw, str) else sections_raw
+                if isinstance(parsed, list):
+                    sections = [s for s in parsed if isinstance(s, dict)]
+            except Exception:
+                sections = []
+        if not sections:
+            # Corridor with no chamber splices — one whole-length section.
+            sections = [{"start": None, "end": None, "length_m": length}]
+        for idx, sec in enumerate(sections, 1):
+            sec_len = data._as_float(sec.get("length_m")) or 0.0
+            s_id = sec.get("start") or "Project entry"
+            e_id = sec.get("end") or "Network edge"
+            is_review = sec_len > REVIEW_RUN_M
+            row_cls = ' class="review"' if is_review else ""
+            run_rows.append(
+                f"<tr{row_cls}><td>{_e(duct_type)}</td><td>{_e(corridor_id)}·{idx}</td>"
+                f"<td>{_e(s_id)} → {_e(e_id)}</td><td>{sec_len:.1f} m</td>"
+                f"<td>{_e(ways)}</td><td>{_e(occupancy)}%</td>"
+                f"<td>{'REVIEW — pull point check' if is_review else ''}</td></tr>"
+            )
+            if is_review:
+                review_items.append((duct_type, f"{corridor_id}·{idx}", f"{s_id} → {e_id}", sec_len))
+            bucket = corridor_totals[duct_type]
+            bucket["sections"] += 1
+            bucket["length"] += sec_len
+            bucket["min_len"] = min(bucket["min_len"], sec_len)
+            bucket["max_len"] = max(bucket["max_len"], sec_len)
+            if is_review:
+                bucket["review"] += 1
+
+    corridor_rows = "".join(
+        f"<tr><td>{_e(kind)}</td><td>{bucket['sections']}</td>"
+        f"<td>{bucket['length']:.1f} m</td>"
+        f"<td>{bucket['min_len']:.1f} m</td><td>{bucket['max_len']:.1f} m</td>"
+        f"<td>{bucket['review'] or ''}</td></tr>"
+        for kind, bucket in sorted(corridor_totals.items())
+    ) or '<tr><td colspan="6">No duct data available.</td></tr>'
+
+    review_rows = "".join(
+        f"<tr><td>{_e(dt)}</td><td>{_e(sid)}</td><td>{_e(run)}</td><td>{ln:.1f} m</td>"
+        f"<td>Add/verify intermediate pull chamber (duct max pull distance ≈ 150 m for HDPE 32/63)</td></tr>"
+        for dt, sid, run, ln in sorted(review_items, key=lambda r: -r[3])
+    ) or '<tr><td colspan="5">No runs exceed the 150 m pull threshold — no review items.</td></tr>'
+
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     content = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>HLD Permit Summary — {_e(project_name)}</title>
-<style>body{{font-family:Arial,sans-serif;color:#111827;margin:28px}}h1{{font-size:22px}}h2{{font-size:17px;margin-bottom:6px}}.notice{{padding:12px;background:#fff7ed;border:2px solid #fb923c;border-radius:7px}}.street{{page-break-inside:avoid;margin-top:28px}}table{{border-collapse:collapse;width:100%;font-size:11px}}th,td{{border:1px solid #d1d5db;padding:5px;text-align:left}}th{{background:#f3f4f6}}.small{{font-size:11px;color:#6b7280}}</style></head><body>
+<style>body{{font-family:Arial,sans-serif;color:#111827;margin:28px}}h1{{font-size:22px}}h2{{font-size:17px;margin-bottom:6px}}.notice{{padding:12px;background:#fff7ed;border:2px solid #fb923c;border-radius:7px}}.street{{page-break-inside:avoid;margin-top:28px}}table{{border-collapse:collapse;width:100%;font-size:11px}}th,td{{border:1px solid #d1d5db;padding:5px;text-align:left}}th{{background:#f3f4f6}}.small{{font-size:11px;color:#6b7280}}tr.review td{{background:#fef2f2;color:#991b1b;font-weight:600}}</style></head><body>
 <h1>Preliminary HLD Permit Summary</h1><p class="small">Project: {_e(project_name)} · ID: {_e(project_id)} · Generated: {generated}</p>
 <div class="notice"><strong>PLANNING ONLY — NOT FOR CONSTRUCTION OR AUTHORITY SUBMISSION.</strong><br>Dimensions, street conditions, traffic controls and photographs must be verified and replaced/confirmed during the field survey and LLD.</div>
 <h2>Overall trench summary</h2><table><thead><tr><th>Trench type / method</th><th>Sections</th><th>Total length</th></tr></thead><tbody>{total_rows}</tbody></table>
+<h2>Duct sections between chambers</h2><p class="small">Ducts are continuous corridors that pass through chambers; the chamber-bounded civil sections within each corridor are listed here (from the corridor's section chain) — the build units a contractor constructs and prices. Sections ending at “Network edge” terminate at a PDP / polygon entry rather than an intermediate chamber. Sections longer than 150 m are flagged <strong>REVIEW</strong>: verify an intermediate pull chamber exists before construction.</p>
+<table><thead><tr><th>Duct type</th><th>Sections</th><th>Total length</th><th>Shortest section</th><th>Longest section</th><th>REVIEW (&gt;150 m)</th></tr></thead><tbody>{corridor_rows}</tbody></table>
+<h2>REVIEW — sections exceeding 150 m pull threshold</h2><p class="small">Standard HDPE 32/63 sub-duct pulling distance is ≈ 150 m between chambers. Each section below needs an intermediate pull point added (or a verified existing one) before construction. Sorted longest first.</p>
+<table><thead><tr><th>Duct type</th><th>Section</th><th>Run (start → end chamber)</th><th>Length</th><th>Action</th></tr></thead><tbody>{review_rows}</tbody></table>
+<details><summary style="cursor:pointer;font-size:13px;margin:10px 0 4px"><strong>All duct sections (section-wise)</strong> — click to expand {_e(len(run_rows))} rows</summary>
+<table><thead><tr><th>Duct type</th><th>Section</th><th>Run (start → end chamber)</th><th>Length</th><th>Ways</th><th>Occupancy</th></tr></thead><tbody>{''.join(run_rows) or '<tr><td colspan="6">No duct runs available.</td></tr>'}</tbody></table>
+</details>
 <h2>Street-wise design and permit information</h2>{''.join(street_blocks) or '<p>No trench features were available in the HLD output.</p>'}
 <h2>Permit-road form fields</h2><p class="small">The following fields from <strong>docs/permit_road.docx</strong> are represented by the HLD data where available. Values not present in HLD are marked “To be completed during Survey/LLD”; no sample values are copied into the project.</p>
 <table><thead><tr><th>Field</th><th>HLD value / status</th></tr></thead><tbody>{''.join(f'<tr><td>{_e(field)}</td><td>To be completed during Survey/LLD</td></tr>' for field in _permit_road_fields())}</tbody></table>

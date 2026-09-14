@@ -58,8 +58,7 @@ STAGES = [
     {"index": 2, "name": "Network Layer",   "algorithm": "03_network_layer",
      "outputs": ["PDPs", "MFG"]},
     {"index": 3, "name": "Trench Layer",    "algorithm": "04_trench_layer",
-     "outputs": ["Feeder_Trench", "Distribution_Trench",
-                  "Garden_Trench", "Drill_Trench", "Final_Trenches"]},
+     "outputs": ["Final_Trenches"]},
     {"index": 4, "name": "Cable Layer",     "algorithm": "06_cable_layer",
      "outputs": ["Feeder_Cable", "Distribution_Cable"]},
     {"index": 5, "name": "Duct Layer",      "algorithm": "05_duct_layer",
@@ -80,6 +79,7 @@ LAYER_NAME_MAP = {
     "feeder_ducts":        ("Feeder_Ducts",         "Feeder_Ducts"),
     "distribution_ducts":  ("Distribution_Ducts",   "Distribution_Ducts"),
     "drop_ducts":          ("Drop_Ducts",             "Drop_Ducts"),
+    "coupleurs":           ("Coupleurs",              "Coupleurs"),
     "chambers":            ("Chambers",             "Chambers"),
     "poles":               ("Poles",                "Poles"),
     "brownfield":          ("Existing_Infrastructure", "brownfield"),
@@ -99,12 +99,11 @@ PIPELINE_STEPS = [
     {"name": "network", "alg_id": "hldplanning:03_network_layer", "label": "Network Layer",
      "outputs": ["PDPs.gpkg", "MFG.gpkg"]},
     {"name": "trench",  "alg_id": "hldplanning:04_trench_layer",  "label": "Trench Layer",
-     "outputs": ["Feeder_Trench.gpkg", "Distribution_Trench.gpkg",
-                  "Garden_Trench.gpkg", "Drill_Trench.gpkg", "Final_Trenches.gpkg"]},
+     "outputs": ["Final_Trenches.gpkg"]},
     {"name": "cable",   "alg_id": "hldplanning:06_cable_layer",   "label": "Cable Layer",
      "outputs": ["Feeder_Cable.gpkg", "Distribution_Cable.gpkg"]},
     {"name": "duct",    "alg_id": "hldplanning:05_duct_layer",    "label": "Duct Layer",
-     "outputs": ["Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg"]},
+     "outputs": ["Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg", "Coupleurs.gpkg"]},
 ]
 
 # Step dependency chain: which step must be completed before this one
@@ -131,6 +130,7 @@ SURVEY_PACKAGE_FILES = [
     "Chambers.gpkg",
     "Final_Trenches.gpkg",
     "Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg",
+    "Coupleurs.gpkg",
     "Existing_Infrastructure.gpkg", "Existing_Infrastructure_Points.gpkg",
 ]
 
@@ -154,6 +154,7 @@ SURVEY_GEOJSON_FILES = {
     "Feeder_Ducts.geojson":         "feeder_ducts.geojson",
     "Distribution_Ducts.geojson":   "distribution_ducts.geojson",
     "Drop_Ducts.geojson":           "drop_ducts.geojson",
+    "Coupleurs.geojson":            "coupleurs.geojson",
     "Existing_Infrastructure.geojson":       "existing_infrastructure.geojson",
     "Existing_Infrastructure_Points.geojson": "existing_infrastructure_points.geojson",
 }
@@ -166,10 +167,10 @@ SURVEY_GEOJSON_FILES = {
 # GPKG files to include in the full design package zip.
 DESIGN_PACKAGE_FILES = [
     "Objects.gpkg", "Polygons.gpkg", "PDPs.gpkg", "MFG.gpkg",
-    "Feeder_Trench.gpkg", "Distribution_Trench.gpkg", "Garden_Trench.gpkg",
-    "Drill_Trench.gpkg", "Final_Trenches.gpkg", "Pseudo_HH.gpkg",
+    "Final_Trenches.gpkg", "Pseudo_HH.gpkg",
     "Feeder_Cable.gpkg", "Distribution_Cable.gpkg",
     "Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg",
+    "Coupleurs.gpkg",
     "Chambers.gpkg", "Poles.gpkg",
     "Existing_Infrastructure.gpkg", "Existing_Infrastructure_Points.gpkg",
     "BOQ.xlsx", "BOM.xlsx",
@@ -187,9 +188,7 @@ DESIGN_GEOJSON_FILES = {
     "Feeder_Ducts.geojson":         "feeder_ducts.geojson",
     "Distribution_Ducts.geojson":   "distribution_ducts.geojson",
     "Drop_Ducts.geojson":           "drop_ducts.geojson",
-    "Feeder_Trench.geojson":        "feeder_trench.geojson",
-    "Distribution_Trench.geojson":  "distribution_trench.geojson",
-    "Garden_Trench.geojson":        "garden_trench.geojson",
+    "Coupleurs.geojson":            "coupleurs.geojson",
     "Final_Trenches.geojson":       "final_trenches.geojson",
     "Chambers.geojson":             "chambers.geojson",
     "Poles.geojson":                "poles.geojson",

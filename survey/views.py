@@ -818,12 +818,32 @@ class SurveyFeaturePhotoUploadView(APIView):
 
         # Save the photo
         sf.photo = photo
+
+        # Tier-1 A1: classify the photo so tags drive the A3 auto-fill.
+        from .photo_classifier import classify_photo
+        try:
+            result = classify_photo(photo, meta={
+                "layer_name": sf.layer_name,
+                "layer_id": sf.layer_id,
+                "description": sf.change_reason or "",
+                "asset_type": (sf.survey_attributes or {}).get("asset_type", ""),
+            })
+            sf.photo_tags = result["tags"]
+        except Exception:
+            sf.photo_tags = []
+
         sf.save()
+
+        # Tier-1 A3: field auto-fill suggestions derived from the tags.
+        from .auto_fill import autofill_from_tags
+        suggestions = autofill_from_tags(sf.photo_tags or [], sf)
 
         return Response(
             {
                 "id": str(sf.id),
                 "photo_url": request.build_absolute_uri(sf.photo.url) if sf.photo else None,
+                "photo_tags": sf.photo_tags,
+                "suggestions": suggestions,
                 "uploaded_at": sf.updated_at.isoformat(),
             },
             status=status.HTTP_200_OK,
@@ -898,3 +918,61 @@ class SurveyFeatureApprovalAPIView(APIView):
 
         serializer = SurveyFeatureSerializer(sf, context={'request': request})
         return Response(serializer.data)
+
+
+class ProjectRiskQueueAPIView(APIView):
+    """GET /api/survey/projects/<pid>/risk-queue/?band=critical
+
+    Risk-ranked survey change queue (Tier-1 A5). Every SurveyFeature on the
+    project is scored (severity x likelihood x lld_impact) and returned
+    sorted highest-risk first, so reviewers work the queue in priority order.
+    Optional ?band= filters (critical|high|medium|low).
+    """
+
+    def get(self, request, project_id):
+        from .models import SurveyFeature
+        from .risk_scoring import score_changes
+        from .serializers import SurveyFeatureSerializer
+
+        qs = SurveyFeature.objects.filter(project_id=project_id).select_related('engineer')
+        band_filter = request.GET.get('band')
+
+        sfs = list(qs)
+        risk_by_id = score_changes(sfs)
+
+        rows = []
+        for sf in sfs:
+            risk = risk_by_id.get(str(sf.id), {})
+            if band_filter and risk.get('band') != band_filter:
+                continue
+            payload = SurveyFeatureSerializer(sf, context={'request': request}).data
+            payload['risk'] = risk
+            rows.append(payload)
+
+        rows.sort(key=lambda r: -r['risk'].get('score', 0))
+        import collections
+        bands = collections.Counter(r.get('band') for r in risk_by_id.values())
+        return Response({
+            'project': str(project_id),
+            'total_scored': len(risk_by_id),
+            'bands': dict(bands),
+            'changes': rows,
+        })
+
+
+class CompletionForecastAPIView(APIView):
+    """GET /api/survey/projects/<pid>/completion-forecast/
+
+    Predicted final completion % and ETA from current progress and capture
+    velocity (Tier-1 A6). Assumptions are included so the UI can show how
+    the number was derived.
+    """
+
+    def get(self, request, project_id):
+        from projects.models import Project
+        from .completion_forecast import completion_forecast
+
+        project = Project.objects.filter(pk=project_id).first()
+        if project is None:
+            return Response({'error': 'Project not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(completion_forecast(project))

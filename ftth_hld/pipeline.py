@@ -657,7 +657,12 @@ def ftth_project_payloads(limit: int = 50) -> list[dict]:
         pass
 
     data = []
-    for p in FtthProject.objects.all()[:limit]:
+    # Most-recently-active first: updated_at moves on every re-run/poll,
+    # so a re-run of an old project surfaces at the top instead of its
+    # original creation-date position (fall back to created_at when equal).
+    for p in FtthProject.objects.all().order_by(
+        "-updated_at", "-created_at"
+    )[:limit]:
         enriched = engine_data.get(p.project_id, {})
         copy = survey_copies.get(p.project_id)
         engineer = p.assigned_engineer

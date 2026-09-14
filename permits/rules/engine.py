@@ -422,7 +422,11 @@ def project_summary(project_id: str) -> dict:
     groups (rule × ``permit_group``, falling back to the route section for
     ungrouped rows) — the clubbed number the UI surfaces as "permits".
     """
-    rows = list(PermitMatrix.objects.filter(project_id=project_id))
+    rows = list(
+        PermitMatrix.objects.filter(project_id=project_id).select_related(
+            "authority", "rule"
+        )
+    )
     counts: dict[str, int] = {}
     groups: set[tuple] = set()
     for pm in rows:
