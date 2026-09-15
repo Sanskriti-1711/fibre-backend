@@ -443,7 +443,11 @@ def reused_metres(project_id: str) -> Dict[str, float]:
         layer = _get_layer(project_id, layer_name)
         for f in _iter_features(layer):
             props = f.get("properties", {}) or {}
-            if not _is_reused(props):
+            # A grouped feature is "Mixed": part of it rides existing
+            # infrastructure and part is new. It reports those metres in
+            # REUSE_LEN_M, so the whole-feature reuse test must not skip it —
+            # otherwise the reuse saving disappears from the report entirely.
+            if not _is_reused(props) and _reuse_len_m(props) <= 0:
                 continue
             if attr == "CABLE_TYPE":
                 key = "cable"
