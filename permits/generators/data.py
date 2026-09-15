@@ -59,6 +59,81 @@ def hld_layer_features(project_id: str, layer_name: str) -> list[dict[str, Any]]
     return list((row.geojson or {}).get("features", []))
 
 
+def _line_length_m(coords: list) -> float:
+    """Geodesic length of a stored GeoJSON line (the HLD layer store is 4326)."""
+    total = 0.0
+    for i in range(len(coords) - 1):
+        try:
+            (x1, y1), (x2, y2) = coords[i][:2], coords[i + 1][:2]
+        except (TypeError, IndexError):
+            continue
+        if None in (x1, y1, x2, y2):
+            continue
+        if abs(x1) > 180 or abs(y1) > 90:
+            # Projected metres (EPSG:25833) — plain Euclidean distance.
+            total += math.hypot(x2 - x1, y2 - y1)
+            continue
+        p1, p2 = math.radians(y1), math.radians(y2)
+        dp = p2 - p1
+        dl = math.radians(x2 - x1)
+        h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+        total += 2 * 6371008.8 * math.asin(math.sqrt(h))
+    return total
+
+
+def hld_layer_sections(project_id: str, layer_name: str) -> list[dict[str, Any]]:
+    """One row per continuous geometry PART (a buildable civil section).
+
+    The HLD trench layer is published as one feature per construction
+    sub-category (Open Cut / Garden / HDD), each holding every continuous run
+    of that category as a geometry part.  Permit section tables, the BOQ
+    reference and the street summary need those sections back, so expand the
+    multipart geometry here instead of making every caller walk it.
+
+    No duplicate line items: the grouped geometry is already de-duplicated by
+    the pipeline's union, and identical parts are dropped here too (vertices
+    rounded to 1e-6 deg ≈ 0.1 m) so a repeated part can never be billed twice.
+    Sub-metre noding slivers are returned (geometry stays complete) but carry
+    ``SLIVER = 1`` so callers can exclude them from quantities.
+    """
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple] = set()
+    for feature in hld_layer_features(project_id, layer_name):
+        props = _props(feature)
+        geom = feature.get("geometry") or {}
+        gtype = geom.get("type")
+        coords = geom.get("coordinates") or []
+        if gtype == "MultiLineString":
+            parts = [p for p in coords if isinstance(p, list) and len(p) >= 2]
+        elif gtype == "LineString":
+            parts = [coords] if len(coords) >= 2 else []
+        else:
+            parts = []
+        for idx, part in enumerate(parts, 1):
+            try:
+                key = tuple((round(float(c[0]), 6), round(float(c[1]), 6)) for c in part)
+            except (TypeError, IndexError, ValueError):
+                continue
+            if len(key) < 2 or key in seen:
+                continue
+            seen.add(key)
+            length = _line_length_m(part)
+            if length <= 0:
+                continue
+            section = dict(props)
+            kind = str(props.get("trench_type") or layer_name)
+            section["SECTION_ID"] = f"{kind}-{len(rows) + 1:04d}"
+            section["PART_INDEX"] = idx
+            section["PARTS_IN_FEATURE"] = props.get("PARTS")
+            section["SECTION_LEN_M"] = round(length, 2)
+            # Per-section length replaces the group total so quantities are
+            # section-wise and can never be counted twice.
+            section["length_m"] = round(length, 2)
+            section["SLIVER"] = 1 if length < 1.0 else 0
+            rows.append(section)
+    return rows
+
+
 def lld_layer_features(
     project_id: str, layer_name: str, lld_run_id: Optional[str] = None
 ) -> list[dict[str, Any]]:

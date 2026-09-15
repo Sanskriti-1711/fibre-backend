@@ -61,26 +61,37 @@ def generate_hld_summary(project_id: str, project_name: str) -> dict[str, Any]:
     """Build one street-wise, planning-only HTML summary from HLD layers."""
     # HLD is the sole source for this preliminary document. Use the persisted
     # HLD attribute table, never the latest LLD run.
-    trenches = data.hld_layer_features(project_id, "trenches")
+    # One row per continuous civil section, expanded from the grouped
+    # multipart trench geometry (see data.hld_layer_sections). Each physical
+    # trench appears exactly once — the pipeline's union de-duplicates it and
+    # the helper drops any repeated part — so the section table carries no
+    # duplicate line items. Sub-metre noding slivers are held back from the
+    # quantities and reported separately, because a trench shorter than 1 m is
+    # not buildable and would otherwise inflate every number in this document.
+    trenches = data.hld_layer_sections(project_id, "trenches")
 
     streets: dict[str, dict[str, Any]] = defaultdict(lambda: {
         "sections": [], "types": defaultdict(lambda: {"count": 0, "length": 0.0}),
         "traffic": set(), "images": [],
     })
     totals: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "length": 0.0})
+    slivers: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "length": 0.0})
 
-    for feature in trenches:
-        props = data._props(feature)
+    for props in trenches:
         street = _street_name(props)
         trench_type = str(_value(props, "trench_type", "TRENCH_TYPE", "construction_method", "CONSTRUCT", default="Unknown"))
         method = str(_value(props, "CONSTRUCT", "construction_method", default=trench_type))
-        length = data._as_float(_value(props, "length_m", "LENGTH_M", "distance_m", default=0)) or 0.0
+        length = data._as_float(_value(props, "SECTION_LEN_M", "length_m", "LENGTH_M", "distance_m", default=0)) or 0.0
         depth = _value(props, "DEPTH_MM", "depth_mm", "depth", default="—")
         width = _value(props, "WIDTH_MM", "width_mm", "width", default="—")
         surface = _value(props, "SURFACE", "surface", default="—")
-        section_id = _value(props, "feature_id", "FEATURE_ID", "fid", "id", default="—")
+        section_id = _value(props, "SECTION_ID", "feature_id", "FEATURE_ID", "fid", "id", default="—")
         traffic = _value(props, "fclass", "road_class", "ROAD_CLASS", "street", "STREET", default="Not classified")
         image = _value(props, "image_url", "IMAGE_URL", "photo_url", "PHOTO_URL", default="No field image — survey pending")
+        if data._as_float(_value(props, "SLIVER", default=0)):
+            slivers[trench_type]["count"] += 1
+            slivers[trench_type]["length"] += length
+            continue
         row = streets[street]
         row["sections"].append((section_id, trench_type, method, length, width, depth, surface, str(image)))
         row["types"][trench_type]["count"] += 1
@@ -115,6 +126,18 @@ def generate_hld_summary(project_id: str, project_name: str) -> dict[str, Any]:
         f"<tr><td>{_e(kind)}</td><td>{bucket['count']}</td><td>{bucket['length']:.1f} m</td></tr>"
         for kind, bucket in sorted(totals.items())
     ) or '<tr><td colspan="3">No trench data available.</td></tr>'
+
+    sliver_note = ""
+    if slivers:
+        detail = ", ".join(
+            f"{kind}: {b['count']} sections / {b['length']:.1f} m"
+            for kind, b in sorted(slivers.items())
+        )
+        sliver_note = (
+            '<p class="small">Excluded from the quantities above: sub-metre noding slivers — '
+            f"{_e(detail)}. These are union/noding artefacts below the 1 m buildable threshold "
+            "(still present in the trench layer, flagged SLIVER=1).</p>"
+        )
 
     # ── Chamber-to-chamber duct sections ─────────────────────────────────
     # Ducts are CONTINUOUS corridors (geometry never splits); the chamber-
@@ -191,6 +214,7 @@ def generate_hld_summary(project_id: str, project_name: str) -> dict[str, Any]:
 <h1>Preliminary HLD Permit Summary</h1><p class="small">Project: {_e(project_name)} · ID: {_e(project_id)} · Generated: {generated}</p>
 <div class="notice"><strong>PLANNING ONLY — NOT FOR CONSTRUCTION OR AUTHORITY SUBMISSION.</strong><br>Dimensions, street conditions, traffic controls and photographs must be verified and replaced/confirmed during the field survey and LLD.</div>
 <h2>Overall trench summary</h2><table><thead><tr><th>Trench type / method</th><th>Sections</th><th>Total length</th></tr></thead><tbody>{total_rows}</tbody></table>
+{sliver_note}
 <h2>Duct sections between chambers</h2><p class="small">Ducts are continuous corridors that pass through chambers; the chamber-bounded civil sections within each corridor are listed here (from the corridor's section chain) — the build units a contractor constructs and prices. Sections ending at “Network edge” terminate at a PDP / polygon entry rather than an intermediate chamber. Sections longer than 150 m are flagged <strong>REVIEW</strong>: verify an intermediate pull chamber exists before construction.</p>
 <table><thead><tr><th>Duct type</th><th>Sections</th><th>Total length</th><th>Shortest section</th><th>Longest section</th><th>REVIEW (&gt;150 m)</th></tr></thead><tbody>{corridor_rows}</tbody></table>
 <h2>REVIEW — sections exceeding 150 m pull threshold</h2><p class="small">Standard HDPE 32/63 sub-duct pulling distance is ≈ 150 m between chambers. Each section below needs an intermediate pull point added (or a verified existing one) before construction. Sorted longest first.</p>

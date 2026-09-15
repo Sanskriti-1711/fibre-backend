@@ -271,7 +271,7 @@ class _CombinedLayer:
 
 
 def _get_layer(project_id: str, name: str):
-    """Get a layer by name, preferring LLD output over HLD input.
+    """Get a layer by name, preferring the fresher of LLD output / HLD input.
 
     When one HLD name maps to multiple LLD layers (e.g. 'ducts' →
     feeder_ducts + distribution_ducts + drop_ducts), returns a combined
@@ -280,7 +280,14 @@ def _get_layer(project_id: str, name: str):
     Returns an object with a `.geojson` attribute (FtthLayer, LldLayer,
     or _CombinedLayer — all expose the same interface for _iter_features).
     """
-    # Try LLD first
+    hld_layer = FtthLayer.objects.filter(
+        ftth_project__project_id=project_id, name=name
+    ).first()
+
+    # Prefer the LLD only when it is at least as fresh as the HLD layer.
+    # Preferring LLD unconditionally priced a re-run HLD with an older LLD
+    # snapshot: after a trench-layer fix the BOQ still billed the previous
+    # geometry. When the HLD layer is newer (or no LLD exists), the HLD wins.
     lld_run = _latest_lld_run(project_id)
     if lld_run is not None:
         from ftth_lld.models import LldLayer
@@ -296,13 +303,15 @@ def _get_layer(project_id: str, name: str):
             except Exception:
                 pass
         if matched:
-            if len(matched) == 1:
-                return matched[0]
-            return _CombinedLayer(matched)
-    # Fall back to HLD
-    return FtthLayer.objects.filter(
-        ftth_project__project_id=project_id, name=name
-    ).first()
+            lld_times = [t for t in (getattr(l, "updated_at", None) for l in matched) if t]
+            newest_lld = max(lld_times) if lld_times else None
+            hld_time = getattr(hld_layer, "updated_at", None) if hld_layer is not None else None
+            if hld_layer is None or newest_lld is None or hld_time is None or newest_lld >= hld_time:
+                if len(matched) == 1:
+                    return matched[0]
+                return _CombinedLayer(matched)
+
+    return hld_layer
 
 
 def _iter_features(layer):
@@ -316,6 +325,40 @@ def _iter_features(layer):
 # ---------------------------------------------------------------------------
 # Quantity computation
 # ---------------------------------------------------------------------------
+
+def _reuse_len_m(props) -> float:
+    """Metres of a feature riding existing infrastructure, when known.
+
+    The pipeline writes this per grouped feature (REUSE_LEN_M) because one
+    published trench feature can hold a whole construction sub-category —
+    part of it reusing existing ducts and part of it new.
+    """
+    try:
+        v = props.get("REUSE_LEN_M")
+        return float(v) if v is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _new_build_length(props, feature) -> float:
+    """Length to BILL: the feature's length minus the part that is reused.
+
+    A grouped HLD trench feature (one per Open Cut / Garden / HDD) carries
+    many runs, so stamping the whole feature "Reused" billed 0 m of trench and
+    wrote the entire network off as reuse. With REUSE_LEN_M only the reused
+    metres are excluded; a wholly-reused feature still contributes 0 and a
+    wholly-new one its full length.
+    """
+    raw = props.get("length_m")
+    try:
+        total = float(raw) if raw is not None else _geometry_length(feature.get("geometry"))
+    except (TypeError, ValueError):
+        total = _geometry_length(feature.get("geometry"))
+    reuse = _reuse_len_m(props)
+    if reuse <= 0:
+        return 0.0 if _is_reused(props) else total
+    return max(0.0, total - reuse)
+
 
 def _sum_by_attr(project_id: str, layer_name: str, attr: str,
                  match: Dict[str, str], length_attr: Optional[str] = None,
@@ -377,11 +420,9 @@ def _sum_by_trench_class(project_id: str) -> Dict[str, float]:
                 break
         if key is None:
             continue
-        raw = props.get("length_m")
-        try:
-            qty = float(raw) if raw is not None else _geometry_length(f.get("geometry"))
-        except (TypeError, ValueError):
-            qty = _geometry_length(f.get("geometry"))
+        # Bill only the NEW part: a grouped trench feature carries a whole
+        # construction sub-category, so it can be partly reused, partly new.
+        qty = _new_build_length(props, f)
         totals[key] = totals.get(key, 0.0) + qty
     return totals
 
@@ -413,11 +454,15 @@ def reused_metres(project_id: str) -> Dict[str, float]:
                 key = match.get(str(val))
                 if key is None:
                     continue
-            raw = props.get(length_attr) if length_attr else None
-            try:
-                qty = float(raw) if raw is not None else _geometry_length(f.get("geometry"))
-            except (TypeError, ValueError):
-                qty = _geometry_length(f.get("geometry"))
+            # Prefer the pipeline's per-run reused metres for grouped
+            # features (REUSE_LEN_M); fall back to the whole feature.
+            qty = _reuse_len_m(props)
+            if qty <= 0:
+                raw = props.get(length_attr) if length_attr else None
+                try:
+                    qty = float(raw) if raw is not None else _geometry_length(f.get("geometry"))
+                except (TypeError, ValueError):
+                    qty = _geometry_length(f.get("geometry"))
             totals[key] = totals.get(key, 0.0) + qty
     return {k: round(v, 2) for k, v in totals.items() if v}
 
