@@ -206,6 +206,10 @@ def get_trench_design(project_id: str, include_layers: bool = True) -> dict | No
     civil trench designer runs on the project's own HLD outputs and returns the
     designed spans, structural nodes, HDD crossings, aerial drops and the aerial
     zones that drove them.
+
+    The designer writes in the project CRS (metres, EPSG:25833), which a browser
+    map cannot draw — every layer is reprojected to WGS84 here, the same way the
+    pipeline layers are, so MapLibre renders it at the right place.
     """
     url = _engine_url(f"/ftth/hld/results/{project_id}/design")
     try:
@@ -213,13 +217,36 @@ def get_trench_design(project_id: str, include_layers: bool = True) -> dict | No
             url, params={"layers": "true" if include_layers else "false"},
             timeout=180,
         )
-        if resp.status_code == 200:
-            return resp.json()
-        logger.warning("Engine design payload %s -> HTTP %s",
-                       project_id, resp.status_code)
-    except requests.RequestException as exc:
+        if resp.status_code != 200:
+            logger.warning("Engine design payload %s -> HTTP %s",
+                           project_id, resp.status_code)
+            return None
+        data = resp.json()
+    except (requests.RequestException, ValueError) as exc:
         logger.warning("Engine unreachable for design %s: %s", project_id, exc)
-    return None
+        return None
+
+    layers = data.get("layers") or {}
+    source_crs = data.get("crs") or DEFAULT_SOURCE_CRS
+    for name, layer in layers.items():
+        geojson = layer.get("geojson") if isinstance(layer, dict) else None
+        if not isinstance(geojson, dict) or not geojson.get("features"):
+            continue
+        # _detect_crs reads the GeoJSON `crs` member; the designer's files do
+        # not carry one, so stamp the CRS the engine reported.
+        geojson.setdefault("crs", {
+            "type": "name", "properties": {"name": source_crs},
+        })
+        try:
+            layer["geojson"] = json.loads(
+                _reproject_geojson(json.dumps(geojson).encode("utf-8"))
+            )
+        except Exception as exc:  # noqa: BLE001 — keep the run usable
+            logger.warning("Design layer %s/%s not reprojected: %s",
+                           project_id, name, exc)
+    if layers:
+        data["map_crs"] = "EPSG:4326"
+    return data
 
 
 def run_trench_design(project_id: str, force: bool = False) -> dict | None:
