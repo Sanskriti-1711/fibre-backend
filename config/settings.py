@@ -217,7 +217,10 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=7),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=12),
+    # Refresh must OUTLIVE the access token — it is the renewal credential.
+    # 30 days = "stay logged in on the survey device for a month", with the
+    # 401→refresh path in apiFetch renewing the 12h access token silently.
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
