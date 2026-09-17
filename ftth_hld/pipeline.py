@@ -199,6 +199,46 @@ def get_layer_geojson(project_id: str, layer_name: str) -> bytes | None:
     return None
 
 
+def get_trench_design(project_id: str, include_layers: bool = True) -> dict | None:
+    """Trench-design payload (status + report + design layers) from the engine.
+
+    Phase A of ``docs/subprojects/ftth-engine/TRENCH_DESIGN.md``: the standalone
+    civil trench designer runs on the project's own HLD outputs and returns the
+    designed spans, structural nodes, HDD crossings, aerial drops and the aerial
+    zones that drove them.
+    """
+    url = _engine_url(f"/ftth/hld/results/{project_id}/design")
+    try:
+        resp = requests.get(
+            url, params={"layers": "true" if include_layers else "false"},
+            timeout=180,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        logger.warning("Engine design payload %s -> HTTP %s",
+                       project_id, resp.status_code)
+    except requests.RequestException as exc:
+        logger.warning("Engine unreachable for design %s: %s", project_id, exc)
+    return None
+
+
+def run_trench_design(project_id: str, force: bool = False) -> dict | None:
+    """Start (or re-run) the trench designer for a project on the engine."""
+    url = _engine_url(f"/ftth/hld/design/{project_id}")
+    try:
+        resp = requests.post(
+            url, params={"force": "true" if force else "false"}, timeout=60,
+        )
+        if resp.status_code in (200, 202):
+            return resp.json()
+        logger.warning("Engine design run %s -> HTTP %s", project_id,
+                       resp.status_code)
+    except requests.RequestException as exc:
+        logger.warning("Engine unreachable to start design %s: %s",
+                       project_id, exc)
+    return None
+
+
 def persist_layer(project_id: str, layer_name: str, geojson_data: dict) -> int:
     """Upsert a single layer's GeoJSON into the ``FtthLayer`` table.
 

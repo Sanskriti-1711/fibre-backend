@@ -10,6 +10,7 @@ The LLD review/run workflow lives in the ``ftth_lld`` app
 
 from django.urls import path
 
+from .design_api import RunTrenchDesignView, TrenchDesignView
 from .api import (
     BoqDownloadView,
     BoqRegenerateView,
@@ -43,6 +44,14 @@ urlpatterns = [
     # GET  /api/ftth/hld/results/<id>/survey-package/ — field-survey subset (ZIP)
     path("ftth/hld/results/<str:project_id>/survey-package/",
          SurveyPackageView.as_view(), name="ftth-survey-package"),
+
+    # GET  /api/ftth/hld/results/<id>/trench-design/ — designed trench network
+    path("ftth/hld/results/<str:project_id>/trench-design/",
+         TrenchDesignView.as_view(), name="ftth-trench-design"),
+
+    # POST /api/ftth/hld/results/<id>/trench-design/run/ — (re)run the designer
+    path("ftth/hld/results/<str:project_id>/trench-design/run/",
+         RunTrenchDesignView.as_view(), name="ftth-trench-design-run"),
 
     # GET  /api/ftth/hld/results/<id>/design-package/ — full design package (ZIP)
     path("ftth/hld/results/<str:project_id>/design-package/",
