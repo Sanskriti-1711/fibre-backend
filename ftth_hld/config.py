@@ -82,6 +82,9 @@ LAYER_NAME_MAP = {
     "coupleurs":           ("Coupleurs",              "Coupleurs"),
     "chambers":            ("Chambers",             "Chambers"),
     "poles":               ("Poles",                "Poles"),
+    # Aerial legs the trench stage classified (never excavated): a design
+    # decision, separate from the aerial drop the pole/aerial stage builds.
+    "aerial_drops":        ("Aerial_Drops",         "aerial_drops"),
     "brownfield":          ("Existing_Infrastructure", "brownfield"),
     "trenches":            ("Final_Trenches",       "trench_layer"),
     # Backward-compatible aliases
@@ -128,6 +131,9 @@ SURVEY_PACKAGE_FILES = [
     "Polygons.gpkg", "PDPs.gpkg",
     "Feeder_Cable.gpkg", "Distribution_Cable.gpkg",
     "Chambers.gpkg",
+    # The field team must know which drop legs are on the pole line and why,
+    # otherwise an aerial leg looks like a missing trench on the map.
+    "Aerial_Drops.gpkg",
     "Final_Trenches.gpkg",
     "Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg",
     "Coupleurs.gpkg",
@@ -150,6 +156,7 @@ SURVEY_GEOJSON_FILES = {
     "Feeder_Cable.geojson":         "feeder_cable.geojson",
     "Distribution_Cable.geojson":   "distribution_cable.geojson",
     "Chambers.geojson":             "chambers.geojson",
+    "Aerial_Drops.geojson":         "aerial_drops.geojson",
     "Final_Trenches.geojson":       "final_trenches.geojson",
     "Feeder_Ducts.geojson":         "feeder_ducts.geojson",
     "Distribution_Ducts.geojson":   "distribution_ducts.geojson",
@@ -167,7 +174,7 @@ SURVEY_GEOJSON_FILES = {
 # GPKG files to include in the full design package zip.
 DESIGN_PACKAGE_FILES = [
     "Objects.gpkg", "Polygons.gpkg", "PDPs.gpkg", "MFG.gpkg",
-    "Final_Trenches.gpkg", "Pseudo_HH.gpkg",
+    "Final_Trenches.gpkg", "Aerial_Drops.gpkg", "Pseudo_HH.gpkg",
     "Feeder_Cable.gpkg", "Distribution_Cable.gpkg",
     "Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg",
     "Coupleurs.gpkg",
@@ -190,6 +197,7 @@ DESIGN_GEOJSON_FILES = {
     "Drop_Ducts.geojson":           "drop_ducts.geojson",
     "Coupleurs.geojson":            "coupleurs.geojson",
     "Final_Trenches.geojson":       "final_trenches.geojson",
+    "Aerial_Drops.geojson":         "aerial_drops.geojson",
     "Chambers.geojson":             "chambers.geojson",
     "Poles.geojson":                "poles.geojson",
     "Existing_Infrastructure.geojson":       "existing_infrastructure.geojson",

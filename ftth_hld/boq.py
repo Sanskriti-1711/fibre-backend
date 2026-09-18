@@ -383,10 +383,25 @@ def _sum_by_attr(project_id: str, layer_name: str, attr: str,
         if key is None:
             continue
         if length_attr:
-            raw = props.get(length_attr)
-            try:
-                qty = float(raw) if raw is not None else _geometry_length(f.get("geometry"))
-            except (TypeError, ValueError):
+            # ``length_attr`` may be a preference LIST: the duct layers publish
+            # a CLUBBED corridor (one line per street, ``length_m``) alongside
+            # the material actually laid in ``BUNDLE_LEN_M`` — the sum of the
+            # parallel ducts. Quantities must bill the material, so the
+            # bundle field wins whenever it is present.
+            names = ((length_attr,) if isinstance(length_attr, str)
+                     else tuple(length_attr))
+            qty = None
+            for nm in names:
+                raw = props.get(nm)
+                if raw is None:
+                    continue
+                try:
+                    qty = float(raw)
+                except (TypeError, ValueError):
+                    qty = None
+                if qty is not None:
+                    break
+            if qty is None:
                 qty = _geometry_length(f.get("geometry"))
         else:
             qty = 1.0
@@ -511,9 +526,25 @@ def compute_quantities(project_id: str) -> Dict[str, float]:
     if road_cut:
         qty["2.11"] = qty.get("2.11", 0.0) + road_cut
 
+    # 2.13 Aerial drop legs — classified by the trench stage, NOT excavated.
+    #     They are deliberately absent from Final_Trenches (nothing is dug), so
+    #     trenching already excludes them; reporting the metres here keeps the
+    #     estimator from looking for a trench that was never built. The rate
+    #     card has no aerial row yet, so the BOQ surfaces it as an unpriced
+    #     informational line instead of inventing a price.
+    aerial_m = 0.0
+    for f in _iter_features(_get_layer(project_id, "aerial_drops")):
+        props = f.get("properties") or {}
+        if str(props.get("EXCAVATION", "0")).strip().lower() in ("1", "true", "yes"):
+            continue
+        aerial_m += _geometry_length(f.get("geometry"))
+    if aerial_m:
+        qty["2.13"] = round(aerial_m, 2)
+
     # 3. Ducts — by DUCT_TYPE (reused existing ducts excluded — no new HDPE)
     duct_totals = _sum_by_attr(project_id, "ducts", "DUCT_TYPE",
-                               dict(_DUCT_RULES), length_attr="length_m",
+                               dict(_DUCT_RULES),
+                               length_attr=("BUNDLE_LEN_M", "length_m"),
                                skip_reused=True)
     for code, total in duct_totals.items():
         qty[code] = qty.get(code, 0.0) + total
@@ -792,6 +823,7 @@ def _fallback_name(code: str) -> str:
     names = {
         "2.1": "Trench — open cut (feeder + distribution)", "2.3": "Trench — open cut (feeder + distribution)",
         "2.5": "Garden trench — micro-trenching", "2.6": "Drill / HDD crossings",
+        "2.13": "Aerial drop legs — classified, NOT excavated (material: poles + span cable)",
         "3.1": "Feeder duct HDPE 50/40", "3.7": "Distribution duct HDPE 32",
         "3.11": "Distribution sub-duct 1×7/4 (property)", "3.12": "Duct surplus (+2%)",
         "4.1": "Feeder cable 288 FO", "4.6": "Distribution cable 24 FO",
