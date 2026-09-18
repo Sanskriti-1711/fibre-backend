@@ -347,10 +347,13 @@ class PermitSummaryView(APIView):
         # ── Raw status counts (one aggregate query) ───────────────────
         from django.db.models import Count
 
+        # PermitMatrix's primary key is ``permit_id`` (not ``id``), so the
+        # aggregate must name it explicitly — ``Count("id")`` raises
+        # FieldError and 500s the whole KPI endpoint.
         status_agg = (
             PermitMatrix.objects
             .values("status")
-            .annotate(n=Count("id"))
+            .annotate(n=Count("permit_id"))
             .order_by("status")
         )
         counts = {row["status"]: row["n"] for row in status_agg}
@@ -360,7 +363,7 @@ class PermitSummaryView(APIView):
         per_project_agg = (
             PermitMatrix.objects
             .values("project_id")
-            .annotate(n=Count("id"))
+            .annotate(n=Count("permit_id"))
             .order_by("project_id")
         )
         per_project = {row["project_id"]: row["n"] for row in per_project_agg}
