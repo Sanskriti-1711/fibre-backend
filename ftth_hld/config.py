@@ -85,6 +85,20 @@ LAYER_NAME_MAP = {
     # Aerial legs the trench stage classified (never excavated): a design
     # decision, separate from the aerial drop the pole/aerial stage builds.
     "aerial_drops":        ("Aerial_Drops",         "aerial_drops"),
+    # What the pole / aerial-drop stage BUILDS for those classified legs: the
+    # drop trench (a span on a pole, never dug) and the cable it carries. Both
+    # are published by the engine and ingested into `gis.aerial_drop_trench_layer`
+    # / `gis.aerial_cable_layer`, but they were missing from this map — and
+    # `LayerGeoJSONView` rejects any name that is not in it, so the two layers
+    # 404'd on the platform and could never be drawn, in any project. That is
+    # why the aerial routes were invisible on the map even on a run with a real
+    # aerial classification.
+    "aerial_drop_trenches": ("Aerial_Drop_Trenches", "aerial_drop_trenches"),
+    "aerial_cable":        ("Aerial_Cable",         "aerial_cable"),
+    # The trench designer's structural nodes (HDD pits / junctions / PDPs /
+    # bends / pulls): the evidence behind every planned chamber, and the layer
+    # the map draws the structures' real positions from.
+    "trench_nodes":        ("Trench_Nodes",         "trench_nodes"),
     "brownfield":          ("Existing_Infrastructure", "brownfield"),
     "trenches":            ("Final_Trenches",       "trench_layer"),
     # Backward-compatible aliases
@@ -157,6 +171,7 @@ SURVEY_GEOJSON_FILES = {
     "Distribution_Cable.geojson":   "distribution_cable.geojson",
     "Chambers.geojson":             "chambers.geojson",
     "Aerial_Drops.geojson":         "aerial_drops.geojson",
+    "Trench_Nodes.geojson":         "trench_nodes.geojson",
     "Final_Trenches.geojson":       "final_trenches.geojson",
     "Feeder_Ducts.geojson":         "feeder_ducts.geojson",
     "Distribution_Ducts.geojson":   "distribution_ducts.geojson",
@@ -174,7 +189,7 @@ SURVEY_GEOJSON_FILES = {
 # GPKG files to include in the full design package zip.
 DESIGN_PACKAGE_FILES = [
     "Objects.gpkg", "Polygons.gpkg", "PDPs.gpkg", "MFG.gpkg",
-    "Final_Trenches.gpkg", "Aerial_Drops.gpkg", "Pseudo_HH.gpkg",
+    "Final_Trenches.gpkg", "Aerial_Drops.gpkg", "Trench_Nodes.gpkg", "Pseudo_HH.gpkg",
     "Feeder_Cable.gpkg", "Distribution_Cable.gpkg",
     "Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg",
     "Coupleurs.gpkg",
@@ -198,6 +213,7 @@ DESIGN_GEOJSON_FILES = {
     "Coupleurs.geojson":            "coupleurs.geojson",
     "Final_Trenches.geojson":       "final_trenches.geojson",
     "Aerial_Drops.geojson":         "aerial_drops.geojson",
+    "Trench_Nodes.geojson":         "trench_nodes.geojson",
     "Chambers.geojson":             "chambers.geojson",
     "Poles.geojson":                "poles.geojson",
     "Existing_Infrastructure.geojson":       "existing_infrastructure.geojson",
