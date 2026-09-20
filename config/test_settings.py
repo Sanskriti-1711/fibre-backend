@@ -14,6 +14,11 @@ DATABASES = {
     }
 }
 
+# Hash passwords cheaply — the API tests create users and never verify a
+# password hash. PBKDF2 (the default) costs ~0.4 s per user, which dominates
+# the runtime of a suite this size.
+PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+
 # Disable HTTPS requirement for JWT in dev
 SIMPLE_JWT["AUTH_HEADER_TYPES"] = ("Bearer",)  # noqa: F405
 SIMPLE_JWT["USER_AUTHENTICATION_RULE"] = "rest_framework_simplejwt.authentication.default_user_authentication_rule"
