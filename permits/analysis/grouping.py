@@ -47,7 +47,10 @@ def assign_groups(project_id: str, roads_path=None) -> dict:
             FROM gis.trench_layer t
             WHERE pm.project_id = %s
               AND pm.layer = 'trench_layer'
-              AND pm.route_section = t.id::text
+              -- Section rows are keyed "<gis_id>#<SECTION_ID>"; the street
+              -- comes from the parent trench feature. Plain feature-keyed
+              -- rows (older projects) still match directly.
+              AND split_part(pm.route_section, '#', 1) = t.id::text
               AND NULLIF(pm.permit_group, '') IS NULL
             """,
             [project_id],
@@ -61,7 +64,14 @@ def assign_groups(project_id: str, roads_path=None) -> dict:
     if roads_path is None or not roads_path.exists():
         summary["no_roads"] = True
         return summary
-    features = _roads_geojson(roads_path)
+    # Reads a shapefile zip via GDAL. The backend runs without GDAL, so a
+    # project whose roads *file* exists but cannot be read must degrade to
+    # "no roads" — this step is a grouping nicety, never a hard failure (the
+    # street grouping is normally done inline by the section-level rules).
+    try:
+        features = _roads_geojson(roads_path)
+    except Exception:  # noqa: BLE001 - GDAL optional on the backend
+        features = []
     if not features:
         summary["no_roads"] = True
         return summary

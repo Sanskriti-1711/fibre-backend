@@ -2,7 +2,7 @@
 Django REST Framework API views for the FTTH HLD module.
 
 All pipeline operations are **proxied** to the FastAPI engine
-(``ftth-engine/``) via HTTP. The Django app acts as an API gateway —
+(``HLD_Planning_01/web/backend``) via HTTP. The Django app acts as an API gateway —
 it handles authentication, file upload, and response formatting, while
 the engine handles Docker / ``qgis_process`` orchestration.
 
@@ -352,6 +352,27 @@ class PipelineStatusView(APIView):
                         "HLD fclass attribution for %s: %s",
                         project_id, summary,
                     )
+                # Expand the grouped trench features into street-attributed
+                # civil sections (one row per buildable section). The permit
+                # matrix, the street-wise summary tables and the BOQ reference
+                # all read this table; without it a street can only be resolved
+                # per 4 km grouped feature.
+                try:
+                    from permits.analysis.trench_sections import (
+                        build_trench_sections,
+                        sections_are_fresh,
+                    )
+                    if not sections_are_fresh(project_id):
+                        sec_summary = build_trench_sections(project_id)
+                        logger.info(
+                            "HLD trench sections for %s: %s",
+                            project_id, sec_summary,
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "HLD trench section build failed for %s: %s",
+                        project_id, exc,
+                    )
                 # Only re-run the (potentially expensive) analysis once per
                 # completed project — later polls skip it.
                 from permits.models import PermitMatrix
@@ -694,11 +715,21 @@ class DeleteProjectView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # 1. Attempt to delete from the FastAPI engine
-        engine_result = delete_project(project_id)
-
-        # 2. Remove the Django record
+        # 1. Remove the Django record FIRST.
+        #
+        # The engine's project table is referenced by Django's permit matrix
+        # (PermitMatrix.project → FtthProject), so the engine's own
+        # `DELETE FROM ftth_projects` fails with a foreign-key violation if
+        # any permit row is still present.  Dropping our rows first (they
+        # cascade: layers, LLD runs, permits, submissions, documents) releases
+        # the reference, and only then is the engine free to clean up disk
+        # + PostGIS.
         project.delete()
+
+        # 2. Delete from the FastAPI engine (disk + PostGIS).  Non-fatal: the
+        # Django side is already gone, so a failure here leaves orphaned
+        # engine files at worst, and that is reported to the caller.
+        engine_result = delete_project(project_id)
 
         # 3. Remove local cached files
         import shutil
@@ -711,6 +742,10 @@ class DeleteProjectView(APIView):
             "project_id": project_id,
             "engine_deleted": engine_result.get("deleted", False),
             "engine_detail": engine_result.get("detail"),
+            # PostGIS cleanup is best-effort on the engine side; surface a
+            # failure so an orphaned project row is not discovered later.
+            "postgis_cleaned": engine_result.get("postgis_cleaned", True),
+            "postgis_error": engine_result.get("postgis_error"),
         })
 
 

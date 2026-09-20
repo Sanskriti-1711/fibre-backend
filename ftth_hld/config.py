@@ -11,7 +11,8 @@ import os
 # FastAPI Engine — the single pipeline orchestrator
 # ---------------------------------------------------------------------------
 # The Django ftth_hld app proxies all pipeline operations to this service.
-# The engine (ftth-engine/) handles Docker exec/cp for qgis_process.
+# The engine (HLD_Planning_01/web/backend) handles Docker exec/cp for
+# qgis_process.
 #
 # Resolution order:
 #   1. FTTH_ENGINE_URL env var (always wins — set this on Zeabur if the

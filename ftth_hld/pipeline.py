@@ -3,8 +3,8 @@ Pipeline proxy layer.
 
 Instead of calling ``docker exec`` / ``docker cp`` directly, this
 module proxies all pipeline operations to the **FTTH FastAPI engine**
-(``ftth-engine/``), which is the single service responsible for
-orchestrating ``qgis_process`` inside the Docker container.
+(``HLD_Planning_01/web/backend``), which is the single service responsible
+for orchestrating ``qgis_process`` inside the Docker container.
 
 This keeps the Django app clean and allows future services (Survey,
 LLD, etc.) to reuse the same FastAPI pipeline gateway.

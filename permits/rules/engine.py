@@ -9,12 +9,14 @@ a gap note — never as "no permit needed".
 from __future__ import annotations
 
 import json
+import uuid
 
 from django.db import connection
 
 from ..analysis.grouping import assign_groups
 from ..analysis.municipality import attribute_municipality
 from ..analysis.road_authority import resolve_road_authority
+from ..generators.data import hld_layer_sections
 from ..analysis.spatial_intersection import (
     gis_table_exists,
     intersections_with,
@@ -296,41 +298,45 @@ def run_analysis(project_id: str, user=None) -> dict:
             summary["rows_created"] += fired
             continue
 
-        # ── Attribute road-authority rule (fclass on trench segments) ────
+        # ── Attribute road-authority rule (fclass on trench sections) ────
         if rule_def.operator == "ATTRIBUTE":
             if not gis_table_exists("trench_layer"):
                 summary["gaps"].append(
                     f"{rule_def.rule_id}: gis.trench_layer not present"
                 )
                 continue
-            with connection.cursor() as cur:
-                # Key on the gis row ``id`` (bigserial) — NOT fid: the five
-                # trench sub-layers (feeder/distribution/garden/drill/final)
-                # merge into trench_layer with colliding fids, so fid is not
-                # unique per feature.
-                cur.execute(
-                    """
-                    SELECT id, properties->>'fclass' AS fclass
-                    FROM gis.trench_layer
-                    WHERE project_id = %s
-                      AND properties->>'fclass' IS NOT NULL
-                      AND properties->>'fclass' <> ''
-                    LIMIT 3000
-                    """,
-                    [project_id],
-                )
-                hits = cur.fetchall()
-            if not hits:
+            # SECTION-LEVEL, street-wise. The trench layer publishes one
+            # feature per construction sub-category (Open Cut / Garden / HDD),
+            # so keying permits on the feature would give three rows for the
+            # whole network and lose every street. Read the buildable civil
+            # sections instead: each one carries the road it runs along, the
+            # responsible authority follows from that road class, and the
+            # street groups its sections into one permit per street.
+            sections = [
+                sec for sec in hld_layer_sections(project_id, "trench_layer")
+                if str(sec.get("fclass") or "").strip()
+            ]
+            if not sections:
                 summary["gaps"].append(
-                    f"{rule_def.rule_id}: no fclass persisted on trench segments — "
-                    "persist road classification to enable authority mapping"
+                    f"{rule_def.rule_id}: no fclass persisted on trench sections — "
+                    "run the road-class attribution (needs the project's roads "
+                    "input) to enable authority mapping"
                 )
                 continue
-            fired = 0
-            # Resolve the Straßenbaulastträger per fclass ONCE (the class set
-            # is small) — avoids N lookups for the same class.
+            # One row per SECTION means thousands of rows on a real network, so
+            # this rule writes in BATCHES (create / update / events) instead of
+            # one round trip per section — the analysis runs inside the HLD
+            # status poll, where a per-row upsert would stall the UI.
+            required = rule.required_level == "REQUIRED"
             authority_cache: dict[str, tuple[PermitAuthority | None, str]] = {}
-            for route_id, fclass in hits:
+            existing = {
+                row.route_section: row
+                for row in PermitMatrix.objects.filter(project_id=project_id, rule=rule)
+            }
+            to_create: list[PermitMatrix] = []
+            to_update: list[PermitMatrix] = []
+            for sec in sections:
+                fclass = str(sec.get("fclass")).strip()
                 code, owner_label = resolve_road_authority(fclass)
                 if code not in authority_cache:
                     authority_cache[code] = (
@@ -338,6 +344,13 @@ def run_analysis(project_id: str, user=None) -> dict:
                         owner_label,
                     )
                 authority, label = authority_cache[code]
+                street = str(sec.get("street_name") or "").strip()
+                # Section identity is ``<gis_id>#<SECTION_ID>`` — unique per
+                # section while still tracing back to the parent feature (the
+                # map/joins match on the part before the ``#``).
+                parent = str(sec.get("PARENT_FEATURE_ID") or "").strip()
+                section_id = str(sec.get("SECTION_ID") or "").strip() or "section"
+                route_section = (f"{parent}#{section_id}" if parent else section_id)[:128]
                 evidence = {
                     "road_class": {"present": True, "value": fclass},
                     "road_owner": {
@@ -345,14 +358,87 @@ def run_analysis(project_id: str, user=None) -> dict:
                         "value": label if authority is not None else None,
                     },
                 }
-                _upsert_permit(
-                    project_id, rule, str(route_id),
-                    layer="trench_layer", evidence=evidence,
-                    authority=authority,
+                if street:
+                    evidence["street_name"] = {"present": True, "value": street}
+                notes = f"Street: {street}" if street else "Street: (unnamed road)"
+                # One permit per street: group this section with the others on
+                # the same road. Never overwrite a manual grouping.
+                group = (street or f"{fclass} (unnamed)")[:128]
+                row = existing.get(route_section)
+                if row is None:
+                    row = PermitMatrix(
+                        permit_id=uuid.uuid4(),
+                        project_id=project_id,
+                        rule=rule,
+                        route_section=route_section,
+                        layer="trench_layer",
+                        authority=authority,
+                        permit_type=rule.name,
+                        rule_version=str(rule.version),
+                        required=required,
+                        blocks_construction=rule.blocks_construction,
+                        evidence=evidence,
+                        analysis_notes=notes,
+                        permit_group=group,
+                        status=PermitMatrix.STATUS_IDENTIFIED,
+                        readiness_pct=0,
+                    )
+                    to_create.append(row)
+                else:
+                    row.evidence = {**(row.evidence or {}), **evidence}
+                    row.analysis_notes = notes
+                    if authority is not None:
+                        row.authority = authority
+                    if not (row.permit_group or "").strip():
+                        row.permit_group = group
+                    to_update.append(row)
+            if to_create:
+                PermitMatrix.objects.bulk_create(
+                    to_create, batch_size=500, ignore_conflicts=True)
+            if to_update:
+                PermitMatrix.objects.bulk_update(
+                    to_update,
+                    ["evidence", "analysis_notes", "permit_group", "authority", "updated_at"],
+                    batch_size=500,
                 )
-                fired += 1
+            # Traceability events — same contract as _upsert_permit, batched.
+            known_events = set(
+                PermitEvent.objects.filter(
+                    event="IDENTIFIED",
+                    permit_id__in=[r.permit_id for r in to_create],
+                ).values_list("permit_id", flat=True)
+            )
+            PermitEvent.objects.bulk_create(
+                [
+                    PermitEvent(
+                        permit_id=r.permit_id,
+                        event="IDENTIFIED",
+                        detail={"rule_id": rule.rule_id, "created": True},
+                    )
+                    for r in to_create
+                    if r.permit_id not in known_events
+                ],
+                batch_size=500,
+                ignore_conflicts=True,
+            )
+            fired = len(to_create) + len(to_update)
             summary["rules_fired"].append({"rule_id": rule_def.rule_id, "rows": fired})
             summary["rows_created"] += fired
+
+    # Fill the municipality on the rows that were just created: the trench-layer
+    # pass above runs before any row exists, so a first analysis would leave
+    # Gemeinden blank until a second run. Cheap (a few SQL statements) and it
+    # never overwrites a manual value.
+    if summary["rows_created"]:
+        try:
+            muni_late = attribute_municipality(project_id)
+            if muni_late.get("rows_updated"):
+                summary["notes"].append(
+                    f"municipality filled on {muni_late['rows_updated']} new "
+                    f"matrix row(s)"
+                )
+        except Exception as exc:  # noqa: BLE001 - never fail the analysis
+            summary["notes"].append(f"municipality backfill skipped: {exc}")
 
     # Refresh readiness on every touched row (evidence satisfaction check).
     _refresh_readiness(project_id)

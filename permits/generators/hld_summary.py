@@ -150,12 +150,20 @@ def generate_hld_summary(project_id: str, project_name: str) -> dict[str, Any]:
     run_rows: list[str] = []
     review_items: list[tuple[str, str, str, float]] = []  # (duct_type, id, section, len)
     corridor_totals: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"sections": 0, "length": 0.0, "min_len": float("inf"), "max_len": 0.0, "review": 0}
+        lambda: {"sections": 0, "length": 0.0, "min_len": float("inf"), "max_len": 0.0,
+                 "review": 0, "bundle": 0.0, "runs": 0, "clubs": 0}
     )
     for feature in ducts:
         props = data._props(feature)
         duct_type = str(_value(props, "DUCT_TYPE", "duct_type", default="Duct"))
         length = data._as_float(_value(props, "LENGTH_M", "length_m", default=0)) or 0.0
+        # The published corridor is CLUBBED — every duct on the same route is
+        # dissolved into one line per street — while BUNDLE_LEN_M carries the
+        # duct material actually laid (the parallel runs), N_DUCTS how many
+        # parallel ducts the corridor needs and CLUBS how many routes it merged.
+        bundle = data._as_float(_value(props, "BUNDLE_LEN_M", "bundle_len_m", default=0)) or 0.0
+        n_runs = _value(props, "N_DUCTS", "n_ducts", default=0)
+        n_clubs = _value(props, "CLUBS", "clubs", default=0)
         ways = _value(props, "WAYS", "ways", default="—")
         occupancy = _value(props, "OCCUPANCY_PCT", "occupancy_pct", default="—")
         corridor_id = _value(props, "feature_id", "FEATURE_ID", "fid", "id", default="—")
@@ -192,14 +200,19 @@ def generate_hld_summary(project_id: str, project_name: str) -> dict[str, Any]:
             bucket["max_len"] = max(bucket["max_len"], sec_len)
             if is_review:
                 bucket["review"] += 1
+        bucket = corridor_totals[duct_type]
+        bucket["bundle"] += bundle
+        bucket["runs"] = max(bucket["runs"], int(n_runs or 0))
+        bucket["clubs"] = max(bucket["clubs"], int(n_clubs or 0))
 
     corridor_rows = "".join(
-        f"<tr><td>{_e(kind)}</td><td>{bucket['sections']}</td>"
+        f"<tr><td>{_e(kind)}</td><td>{bucket['clubs']}</td><td>{bucket['sections']}</td>"
         f"<td>{bucket['length']:.1f} m</td>"
         f"<td>{bucket['min_len']:.1f} m</td><td>{bucket['max_len']:.1f} m</td>"
+        f"<td>{bucket['runs']}</td><td>{bucket['bundle']:.1f} m</td>"
         f"<td>{bucket['review'] or ''}</td></tr>"
         for kind, bucket in sorted(corridor_totals.items())
-    ) or '<tr><td colspan="6">No duct data available.</td></tr>'
+    ) or '<tr><td colspan="9">No duct data available.</td></tr>'
 
     review_rows = "".join(
         f"<tr><td>{_e(dt)}</td><td>{_e(sid)}</td><td>{_e(run)}</td><td>{ln:.1f} m</td>"
@@ -216,7 +229,8 @@ def generate_hld_summary(project_id: str, project_name: str) -> dict[str, Any]:
 <h2>Overall trench summary</h2><table><thead><tr><th>Trench type / method</th><th>Sections</th><th>Total length</th></tr></thead><tbody>{total_rows}</tbody></table>
 {sliver_note}
 <h2>Duct sections between chambers</h2><p class="small">Ducts are continuous corridors that pass through chambers; the chamber-bounded civil sections within each corridor are listed here (from the corridor's section chain) — the build units a contractor constructs and prices. Sections ending at “Network edge” terminate at a PDP / polygon entry rather than an intermediate chamber. Sections longer than 150 m are flagged <strong>REVIEW</strong>: verify an intermediate pull chamber exists before construction.</p>
-<table><thead><tr><th>Duct type</th><th>Sections</th><th>Total length</th><th>Shortest section</th><th>Longest section</th><th>REVIEW (&gt;150 m)</th></tr></thead><tbody>{corridor_rows}</tbody></table>
+<p class="small">Ducts on similar routes are <strong>clubbed</strong>: all the parallel ducts laid along one street are dissolved into a single corridor line, so each street appears once. <em>Corridor length</em> is the street footage; <em>parallel runs</em> is how many {ways}-way ducts that corridor needs; <em>duct material</em> is the duct length actually laid (the parallel runs summed) and is what the BOQ bills. REVIEW marks corridors still needing a pull-point check.</p>
+<table><thead><tr><th>Duct type</th><th>Clubbed routes</th><th>Sections</th><th>Corridor length</th><th>Shortest section</th><th>Longest section</th><th>Parallel runs</th><th>Duct material</th><th>REVIEW (&gt;150 m)</th></tr></thead><tbody>{corridor_rows}</tbody></table>
 <h2>REVIEW — sections exceeding 150 m pull threshold</h2><p class="small">Standard HDPE 32/63 sub-duct pulling distance is ≈ 150 m between chambers. Each section below needs an intermediate pull point added (or a verified existing one) before construction. Sorted longest first.</p>
 <table><thead><tr><th>Duct type</th><th>Section</th><th>Run (start → end chamber)</th><th>Length</th><th>Action</th></tr></thead><tbody>{review_rows}</tbody></table>
 <details><summary style="cursor:pointer;font-size:13px;margin:10px 0 4px"><strong>All duct sections (section-wise)</strong> — click to expand {_e(len(run_rows))} rows</summary>

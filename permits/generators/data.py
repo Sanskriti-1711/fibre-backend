@@ -13,7 +13,19 @@ from typing import Any, Optional
 
 from django.db import connection
 
+from ..analysis.sections import (
+    SLIVER_M,
+    coord_key,
+    feature_parts,
+    line_length_m,
+    part_fingerprint,
+    part_midpoint,
+)
 from ..models import PermitMatrix
+
+# Section table produced by ``permits.analysis.trench_sections`` (one row per
+# buildable civil section, with the street it runs along).
+SECTION_LAYER = "trench_sections"
 
 # Layers the package generator consumes (final design layers).
 PACKAGE_LAYERS = [
@@ -61,63 +73,87 @@ def hld_layer_features(project_id: str, layer_name: str) -> list[dict[str, Any]]
 
 def _line_length_m(coords: list) -> float:
     """Geodesic length of a stored GeoJSON line (the HLD layer store is 4326)."""
-    total = 0.0
-    for i in range(len(coords) - 1):
+    return line_length_m(coords)
+
+
+def _section_street_map(props: dict[str, Any]) -> dict[str, Any]:
+    """Per-section street attribution stamped by the section builder."""
+    raw = props.get("SECTION_STREETS")
+    if isinstance(raw, str):
         try:
-            (x1, y1), (x2, y2) = coords[i][:2], coords[i + 1][:2]
-        except (TypeError, IndexError):
-            continue
-        if None in (x1, y1, x2, y2):
-            continue
-        if abs(x1) > 180 or abs(y1) > 90:
-            # Projected metres (EPSG:25833) — plain Euclidean distance.
-            total += math.hypot(x2 - x1, y2 - y1)
-            continue
-        p1, p2 = math.radians(y1), math.radians(y2)
-        dp = p2 - p1
-        dl = math.radians(x2 - x1)
-        h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-        total += 2 * 6371008.8 * math.asin(math.sqrt(h))
-    return total
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _apply_street(section: dict[str, Any], props: dict[str, Any], part: list) -> None:
+    """Attach the street/road class of the road this section runs along.
+
+    The builder keys the street per section midpoint, so the lookup is robust
+    to part ordering. Absent attribution leaves the keys blank rather than
+    inventing a street — the summary then reports "Unnamed street".
+    """
+    info = _section_street_map(props).get(coord_key(*part_midpoint(part)) or "") or {}
+    if not isinstance(info, dict):
+        info = {}
+    section["street_name"] = info.get("street_name") or props.get("street_name") or ""
+    section["fclass"] = info.get("fclass") or props.get("fclass") or ""
+    section["highway"] = info.get("highway") or props.get("highway") or ""
 
 
 def hld_layer_sections(project_id: str, layer_name: str) -> list[dict[str, Any]]:
     """One row per continuous geometry PART (a buildable civil section).
 
-    The HLD trench layer is published as one feature per construction
-    sub-category (Open Cut / Garden / HDD), each holding every continuous run
-    of that category as a geometry part.  Permit section tables, the BOQ
-    reference and the street summary need those sections back, so expand the
-    multipart geometry here instead of making every caller walk it.
+    Prefers the persisted ``trench_sections`` table (built by
+    ``permits.analysis.trench_sections``), which already carries one row per
+    section together with the street the section runs along.  Projects built
+    before that table existed fall back to expanding the grouped geometry
+    here, so the section tables never come back empty.
 
-    No duplicate line items: the grouped geometry is already de-duplicated by
-    the pipeline's union, and identical parts are dropped here too (vertices
+    No duplicate line items: the grouped geometry is de-duplicated by the
+    pipeline's union, and identical parts are dropped here too (vertices
     rounded to 1e-6 deg ≈ 0.1 m) so a repeated part can never be billed twice.
     Sub-metre noding slivers are returned (geometry stays complete) but carry
     ``SLIVER = 1`` so callers can exclude them from quantities.
     """
+    if layer_name in ("trenches", "trench_layer", SECTION_LAYER):
+        persisted = _persisted_sections(project_id)
+        if persisted:
+            return persisted
+    return _sections_from_geometry(project_id, layer_name)
+
+
+def _persisted_sections(project_id: str) -> list[dict[str, Any]]:
+    """Section rows from the persisted ``trench_sections`` layer, if any."""
+    rows: list[dict[str, Any]] = []
+    for feature in hld_layer_features(project_id, SECTION_LAYER):
+        props = dict(_props(feature))
+        length = _as_float(props.get("SECTION_LEN_M")) or _as_float(props.get("length_m"))
+        if not length or length <= 0:
+            length = line_length_m(((feature.get("geometry") or {}).get("coordinates")) or [])
+        if length <= 0:
+            continue
+        props.setdefault("SECTION_ID", props.get("feature_id") or "")
+        props["SECTION_LEN_M"] = round(length, 2)
+        props["length_m"] = round(length, 2)
+        props["SLIVER"] = 1 if length < SLIVER_M else 0
+        rows.append(props)
+    return rows
+
+
+def _sections_from_geometry(project_id: str, layer_name: str) -> list[dict[str, Any]]:
+    """Fallback: expand the grouped multipart trench geometry into sections."""
     rows: list[dict[str, Any]] = []
     seen: set[tuple] = set()
     for feature in hld_layer_features(project_id, layer_name):
         props = _props(feature)
-        geom = feature.get("geometry") or {}
-        gtype = geom.get("type")
-        coords = geom.get("coordinates") or []
-        if gtype == "MultiLineString":
-            parts = [p for p in coords if isinstance(p, list) and len(p) >= 2]
-        elif gtype == "LineString":
-            parts = [coords] if len(coords) >= 2 else []
-        else:
-            parts = []
-        for idx, part in enumerate(parts, 1):
-            try:
-                key = tuple((round(float(c[0]), 6), round(float(c[1]), 6)) for c in part)
-            except (TypeError, IndexError, ValueError):
-                continue
+        for idx, part in enumerate(feature_parts(feature), 1):
+            key = part_fingerprint(part)
             if len(key) < 2 or key in seen:
                 continue
             seen.add(key)
-            length = _line_length_m(part)
+            length = line_length_m(part)
             if length <= 0:
                 continue
             section = dict(props)
@@ -129,7 +165,9 @@ def hld_layer_sections(project_id: str, layer_name: str) -> list[dict[str, Any]]
             # Per-section length replaces the group total so quantities are
             # section-wise and can never be counted twice.
             section["length_m"] = round(length, 2)
-            section["SLIVER"] = 1 if length < 1.0 else 0
+            section["SLIVER"] = 1 if length < SLIVER_M else 0
+            if not section.get("street_name"):
+                _apply_street(section, props, part)
             rows.append(section)
     return rows
 

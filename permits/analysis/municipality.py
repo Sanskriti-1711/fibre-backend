@@ -77,7 +77,7 @@ def attribute_municipality(project_id: str) -> dict:
             "SELECT count(*) FROM business.ftth_permit_matrix pm "
             f"WHERE pm.project_id = {_pid} "
             "  AND NULLIF(pm.municipality, '') IS NULL "
-            "  AND pm.route_section IN ("
+            "  AND split_part(pm.route_section, '#', 1) IN ("
             "      SELECT t.id::text FROM gis.trench_layer t "
             f"      WHERE t.project_id = {_pid})",
         )
@@ -90,7 +90,7 @@ def attribute_municipality(project_id: str) -> dict:
                 "SET municipality = m.muni "
                 "FROM (VALUES %s) AS m(route_id, muni) "
                 f"WHERE pm.project_id = {_pid} "
-                "  AND pm.route_section = m.route_id::text "
+                "  AND split_part(pm.route_section, '#', 1) = m.route_id::text "
                 "  AND NULLIF(pm.municipality, '') IS NULL",
                 rows,
                 template="(%s::bigint, %s)",
@@ -101,7 +101,7 @@ def attribute_municipality(project_id: str) -> dict:
                 "UPDATE business.ftth_permit_matrix pm "
                 "SET municipality = %s "
                 "WHERE pm.project_id = %s "
-                "  AND pm.route_section = %s "
+                "  AND split_part(pm.route_section, '#', 1) = %s "
                 "  AND NULLIF(pm.municipality, '') IS NULL",
                 [(muni, project_id, str(rid)) for rid, muni in rows],
             )
