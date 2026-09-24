@@ -13,6 +13,7 @@ LLD, etc.) to reuse the same FastAPI pipeline gateway.
 import io
 import json
 import logging
+import os
 import re
 import zipfile
 from pathlib import Path
@@ -139,6 +140,209 @@ def run_pipeline(excel_path: str, roads_path: str,
     _write_status(result)
 
     return result
+
+
+class EngineError(RuntimeError):
+    """An engine failure carrying the upstream status code and detail.
+
+    The engine distinguishes "area not found" (404) from "the OSM services are
+    unreachable" (502) from "too many premises for one run" (422).  Collapsing
+    those into a single 502 would tell the user the wrong thing — one is a
+    different area name, one is a retry — so the status travels with the
+    exception and the view passes it straight through.
+    """
+
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(detail)
+        self.status_code = int(status_code)
+        self.detail = detail
+
+
+def _engine_detail(resp) -> str:
+    try:
+        body = resp.json()
+    except Exception:
+        return resp.text[:500] or "Unknown engine error"
+    if isinstance(body, dict):
+        return body.get("detail") or body.get("message") or str(body)
+    return str(body)
+
+
+def _area_payload(area: str = "", country: str = "", city: str = "",
+                  postcode: str = "", area_name: str = "") -> dict:
+    """Structured area inputs for the engine, with the empty parts omitted.
+
+    The parts are forwarded as given rather than joined into a label here: the
+    engine owns the composition, and two composers would eventually disagree
+    about how "12105" plus "Berlin" becomes a search string.
+    """
+    payload: dict = {}
+    for key, value in (("area", area), ("country", country), ("city", city),
+                       ("postcode", postcode), ("area_name", area_name)):
+        text = str(value or "").strip()
+        if text:
+            payload[key] = text
+    return payload
+
+
+def resolve_area(area: str = "", boundary_only: bool = False,
+                 max_premises: int | None = None, timeout: int | None = None,
+                 country: str = "", city: str = "",
+                 postcode: str = "", area_name: str = "") -> dict:
+    """Area -> boundary, and (unless ``boundary_only``) its premise counts.
+
+    Resolving the boundary is one Nominatim call.  The counts additionally need
+    the area's OSM data, which the engine fetches on first use — measured at
+    ~2.5 minutes for a Berlin Ortsteil and **~16 minutes for Southampton**
+    (56 km²), and instant once cached — hence the ``boundary_only`` split rather
+    than holding the map render behind it.
+
+    The timeout used to be a flat 900 s, so a cold city-sized area came back as
+    a 502 with the boundary already drawn and nothing else: the page showed a
+    map and no data.  The boundary call now starts the download, and the full
+    call waits on that same download (the engine fetches each bbox once), so
+    the wait is shared rather than doubled — but a large area can still exceed
+    15 minutes, so the default is now 40.
+    """
+    if timeout is None:
+        timeout = int(os.environ.get("FTTH_RESOLVE_TIMEOUT", "2400"))
+    payload: dict = _area_payload(area, country, city, postcode, area_name)
+    payload["boundary_only"] = bool(boundary_only)
+    if max_premises:
+        payload["max_premises"] = int(max_premises)
+    try:
+        resp = requests.post(
+            _engine_url("/ftth/hld/resolve-area"), json=payload, timeout=timeout
+        )
+    except requests.RequestException as exc:
+        raise EngineError(502, f"Engine unreachable: {exc}") from exc
+    if resp.status_code != 200:
+        raise EngineError(resp.status_code, _engine_detail(resp))
+    return resp.json()
+
+
+def get_area_fetch(area: str = "", bbox: str = "") -> dict:
+    """What the engine's OSM download for an area is doing, for a progress poll.
+
+    Read-only and cheap: it never writes to the database, so the page can poll
+    it every few seconds while a cold area downloads.
+    """
+    params = {}
+    if area:
+        params["area"] = area
+    if bbox:
+        params["bbox"] = bbox
+    try:
+        resp = requests.get(
+            _engine_url("/ftth/hld/area-fetch"), params=params, timeout=30
+        )
+    except requests.RequestException as exc:
+        logger.warning("Engine unreachable for area-fetch: %s", exc)
+        return {"state": "unavailable", "label": "Could not reach the engine", "fetching": False}
+    if resp.status_code != 200:
+        return {"state": "unavailable", "label": "Could not reach the engine", "fetching": False}
+    return resp.json()
+
+
+def get_input_layer(area: str, layer: str, country: str = "", city: str = "",
+                    postcode: str = "", area_name: str = "") -> dict:
+    """Fetch one complete OSM/HLD input layer for the pre-run review map.
+
+    The 300 s timeout here was another reason a cold area showed a boundary and
+    nothing else: the first layer asked for waited on the same download the
+    preview had kicked off, and was cut before it returned.  Layers now join the
+    in-flight download rather than starting their own, so the wait is the one
+    the area actually needs — up to the same 40 minutes the preview allows.
+    """
+    payload = _area_payload(area, country, city, postcode, area_name)
+    payload["layer"] = layer
+    try:
+        resp = requests.post(
+            _engine_url("/ftth/hld/input-layers"),
+            json=payload,
+            timeout=int(os.environ.get("FTTH_INPUT_LAYER_TIMEOUT", "2400")),
+        )
+    except requests.RequestException as exc:
+        raise EngineError(502, f"Engine unreachable: {exc}") from exc
+    if resp.status_code != 200:
+        raise EngineError(resp.status_code, _engine_detail(resp))
+    return resp.json()
+
+
+def run_from_area(area: str, project_id: str, name: str = "",
+                  poly_method: int = 3, country: str = "", city: str = "",
+                  postcode: str = "", area_name: str = "") -> dict:
+    """Start a full HLD run from an area.
+
+    The engine generates the two input files from OSM and then runs the
+    untouched pipeline on them, so the run is identical to a manual upload from
+    the engine onwards.  Returns immediately (202) — input generation and the
+    design both happen in the engine's background task.
+    """
+    payload: dict = _area_payload(area, country, city, postcode, area_name)
+    payload["project_id"] = project_id
+    payload["poly_method"] = int(poly_method)
+    if name:
+        payload["name"] = name
+    try:
+        resp = requests.post(
+            _engine_url("/ftth/hld/run-from-area"), json=payload, timeout=120
+        )
+    except requests.RequestException as exc:
+        raise EngineError(502, f"Engine unreachable: {exc}") from exc
+    if resp.status_code not in (200, 201, 202):
+        raise EngineError(resp.status_code, _engine_detail(resp))
+    result = resp.json()
+    _write_status(result)
+    return result
+
+
+def osm_status() -> dict:
+    """What the engine's local OSM store holds (reported, not required)."""
+    try:
+        resp = requests.get(_engine_url("/ftth/hld/osm-status"), timeout=15)
+        if resp.status_code == 200:
+            return resp.json()
+    except requests.RequestException as exc:
+        logger.warning("Engine unreachable for osm-status: %s", exc)
+    return {"loaded": False, "unavailable": True}
+
+
+def list_countries() -> list[dict]:
+    """Country options for the area input's country dropdown.
+
+    An engine outage must not empty the dropdown — the country a planner picks
+    is what keeps a five-digit postcode from being read on the wrong continent —
+    so a failure returns an empty list rather than raising.
+    """
+    try:
+        resp = requests.get(_engine_url("/ftth/hld/countries"), timeout=15)
+        if resp.status_code == 200:
+            return resp.json().get("countries") or []
+    except requests.RequestException as exc:
+        logger.warning("Engine unreachable for countries: %s", exc)
+    return []
+
+
+def suggest_places(q: str, country: str = "", limit: int = 8) -> dict:
+    """City/town suggestions for the area input's city combobox.
+
+    Best-effort: an empty list is a normal answer while someone is typing, so a
+    failure is reported as ``reason: unavailable`` instead of a 502 that would
+    break the page they are still filling in.
+    """
+    params = {"q": q, "limit": int(limit)}
+    if country:
+        params["country"] = country
+    try:
+        resp = requests.get(_engine_url("/ftth/hld/places"), params=params, timeout=30)
+        if resp.status_code == 200:
+            return resp.json()
+        return {"query": q, "places": [], "reason": "engine_error",
+                "detail": _engine_detail(resp)}
+    except requests.RequestException as exc:
+        logger.warning("Engine unreachable for places: %s", exc)
+        return {"query": q, "places": [], "reason": "unavailable"}
 
 
 def get_status(project_id: str) -> dict:

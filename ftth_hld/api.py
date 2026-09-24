@@ -42,7 +42,15 @@ logger = logging.getLogger(__name__)
 
 from .pipeline import (
     HOST_OUTPUTS_DIR,
+    EngineError,
     delete_project,
+    get_area_fetch,
+    get_input_layer,
+    list_countries,
+    osm_status,
+    resolve_area,
+    run_from_area,
+    suggest_places,
     generate_design_package,
     generate_survey_package,
     get_download_file,
@@ -187,6 +195,269 @@ class RunPipelineView(APIView):
 
 
 # ======================================================================
+# POST /api/ftth/hld/resolve-area/  — area name -> boundary (+ counts)
+# ======================================================================
+
+def _area_inputs(data) -> dict:
+    """Structured area fields from a request body, empties dropped.
+
+    Accepts the structured form (country / city / postcode / area_name) and the
+    older single ``area`` label.  Nothing is joined here: the engine owns the
+    composition, so there is one implementation of how the parts become a
+    search string.
+    """
+    fields = {}
+    for key in ("country", "city", "postcode", "area_name", "area"):
+        value = str(data.get(key) or "").strip()
+        if value:
+            fields[key] = value
+    return fields
+
+
+def _has_locator(fields: dict) -> bool:
+    """A country on its own is not an area, and never was."""
+    return any(fields.get(k) for k in ("area", "city", "postcode", "area_name"))
+
+
+# A short display label for the project row, before the engine returns the
+# canonical composed label (which the row is updated with below).
+_DISPLAY_LABEL_KEYS = ("area_name", "postcode", "city")
+
+
+def _display_label(fields: dict) -> str:
+    parts = [fields[k] for k in _DISPLAY_LABEL_KEYS if fields.get(k)]
+    if fields.get("country"):
+        parts.append(str(fields["country"]).upper())
+    return ", ".join(parts) or fields.get("area", "")
+
+
+class ResolveAreaView(APIView):
+    """Resolve an area to its boundary, premises and household mix.
+
+    Read-only and pipeline-free.  ``boundary_only=true`` returns as soon as
+    Nominatim resolves the area so the map can draw the boundary immediately;
+    the premise counts need the area's OSM data and are a separate, slower
+    call (cached from then on).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        fields = _area_inputs(request.data)
+        if not _has_locator(fields):
+            return JsonResponse(
+                {"detail": "Give a postcode and/or a place, street or city name."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            payload = resolve_area(
+                fields.get("area", ""),
+                boundary_only=bool(request.data.get("boundary_only")),
+                max_premises=request.data.get("max_premises"),
+                country=fields.get("country", ""),
+                city=fields.get("city", ""),
+                postcode=fields.get("postcode", ""),
+                area_name=fields.get("area_name", ""),
+            )
+        except EngineError as exc:
+            return JsonResponse({"detail": exc.detail}, status=exc.status_code)
+        return JsonResponse(payload)
+
+
+# ======================================================================
+# POST /api/ftth/hld/input-layers/  — pre-run OSM/HLD input layer
+# ======================================================================
+
+class InputLayerView(APIView):
+    """Return buildings, premises, roads and OSM reference layers before HLD."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        fields = _area_inputs(request.data)
+        layer = str(request.data.get("layer") or "").strip()
+        if not _has_locator(fields) or not layer:
+            return JsonResponse(
+                {"detail": "Both 'layer' and an area (postcode and/or place) are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            return JsonResponse(get_input_layer(
+                fields.get("area", ""),
+                layer,
+                country=fields.get("country", ""),
+                city=fields.get("city", ""),
+                postcode=fields.get("postcode", ""),
+                area_name=fields.get("area_name", ""),
+            ))
+        except EngineError as exc:
+            return JsonResponse({"detail": exc.detail}, status=exc.status_code)
+
+
+# ======================================================================
+# GET /api/ftth/hld/area-fetch/  — progress of the area's OSM download
+# ======================================================================
+
+class AreaFetchView(APIView):
+    """What the engine's OSM download for an area is doing right now.
+
+    A cold area can take 10-16 minutes to download.  The page polls this while
+    it waits, so the wait says what it is doing ("downloading roads, 3 of 4
+    groups, 9 minutes in") instead of looking like a failure.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        area = str(request.query_params.get("area") or "").strip()
+        bbox = str(request.query_params.get("bbox") or "").strip()
+        if not area and not bbox:
+            return JsonResponse(
+                {"detail": "Give an 'area' or a 'bbox' (lon_w,lon_e,lat_s,lat_n)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return JsonResponse(get_area_fetch(area=area, bbox=bbox))
+
+
+# ======================================================================
+# POST /api/ftth/hld/run-from-area/  — area name -> a full HLD run
+# ======================================================================
+
+class RunFromAreaView(APIView):
+    """Start a full HLD run from an area name — no files to prepare.
+
+    Mirrors RunPipelineView (same project row, same status flow, same
+    response shape) so the existing status/results pages work untouched.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        fields = _area_inputs(request.data)
+        if not _has_locator(fields):
+            return JsonResponse(
+                {"detail": "Give a postcode and/or a place, street or city name."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        name = str(request.data.get("name") or "")
+        try:
+            poly_method = int(request.data.get("poly_method", 3))
+        except (TypeError, ValueError):
+            poly_method = 3
+
+        project_id = uuid.uuid4().hex
+        FtthProject.objects.create(
+            project_id=project_id,
+            name=name or _display_label(fields),
+            created_by=request.user if request.user.is_authenticated else None,
+            status=FtthProject.STATUS_QUEUED,
+        )
+
+        try:
+            engine_result = run_from_area(
+                fields.get("area", ""),
+                project_id=project_id,
+                name=name,
+                poly_method=poly_method,
+                country=fields.get("country", ""),
+                city=fields.get("city", ""),
+                postcode=fields.get("postcode", ""),
+                area_name=fields.get("area_name", ""),
+            )
+        except EngineError as exc:
+            # The row was already created, so mark it failed rather than leaving
+            # it queued forever behind a 502.
+            FtthProject.objects.filter(pk=project_id).update(
+                status=FtthProject.STATUS_FAILED, error=str(exc.detail)[:2000]
+            )
+            return JsonResponse(
+                {"detail": exc.detail, "project_id": project_id},
+                status=exc.status_code,
+            )
+
+        # The engine composes the canonical label from the parts; when the
+        # planner typed no project name, that label is what the project is called.
+        area_label = str(engine_result.get("area") or "") or _display_label(fields)
+        engine_status = engine_result.get("status", "queued")
+        updates = {"status": engine_status}
+        if not name:
+            updates["name"] = area_label
+        FtthProject.objects.filter(pk=project_id).update(**updates)
+
+        return JsonResponse({
+            "project_id": project_id,
+            "status": engine_status,
+            "stage": None,
+            "stage_index": 0,
+            "stage_count": len(STAGES),
+            "progress": 0,
+            "layers": [],
+            "downloads": [],
+            "messages": [],
+            "area": area_label,
+            "results_url": f"/api/ftth/hld/results/{project_id}/",
+            "tile_url_template": (
+                f"/tiles/{{layer}}/{{z}}/{{x}}/{{y}}.pbf?project_id={project_id}"
+            ),
+        }, status=status.HTTP_202_ACCEPTED)
+
+
+# ======================================================================
+# GET /api/ftth/hld/osm-status/  — what the local OSM store holds
+# ======================================================================
+
+class OsmStatusView(APIView):
+    """Report the engine's local OSM store (empty is normal, not an error)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return JsonResponse(osm_status())
+
+
+# ======================================================================
+# GET /api/ftth/hld/countries/  — country options for the area input
+# ======================================================================
+
+class CountriesView(APIView):
+    """Country options for the area input's country dropdown.
+
+    A static ISO 3166-1 list served by the engine.  This is what removed the
+    guesswork from a bare postcode: the country is chosen, not inferred, so a
+    five-digit code is no longer read as German by default.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return JsonResponse({"countries": list_countries()})
+
+
+# ======================================================================
+# GET /api/ftth/hld/places/  — city suggestions for the area input
+# ======================================================================
+
+class PlacesView(APIView):
+    """City/town suggestions for the city combobox, filtered by country.
+
+    Best-effort by design: an empty list is a normal answer while someone is
+    typing, and an engine outage is reported in ``reason`` rather than as a 5xx
+    on a form that is still being filled in.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        q = str(request.query_params.get("q") or "").strip()
+        country = str(request.query_params.get("country") or "").strip()
+        try:
+            limit = max(1, min(int(request.query_params.get("limit") or 8), 20))
+        except (TypeError, ValueError):
+            limit = 8
+        return JsonResponse(suggest_places(q, country=country, limit=limit))
+
+
+# ======================================================================
 # GET /api/ftth/hld/results/<project_id>/
 # ======================================================================
 
@@ -327,84 +598,28 @@ class PipelineStatusView(APIView):
             except Exception:
                 pass
 
-            # HLD-stage permit analysis: attribute the road classification
-            # from the project's roads input onto the trench segments, then
-            # run the permit rule engine (authority mapping + spatial rules).
-            # Guarded so it only runs once per project — never on later polls,
-            # and never allowed to break the HLD completion path.
+            # ── The post-HLD chain runs OFF this request ──────────────
+            # Road class -> street-attributed sections -> permit matrix ->
+            # preliminary package used to run right here, guarded by data the
+            # chain itself produces: "any gis.trench_layer row with a NULL
+            # fclass" (the engine's trench payload carries no fclass, so every
+            # fresh run re-arms it) and trenches.updated_at vs
+            # trench_sections.updated_at (any re-publish bumps the former).
+            # Measured cost of one re-armed poll: 234.7 s for the road
+            # attribution alone, against a 405,599-road extract.
+            #
+            # `schedule_post_hld` claims a durable HldPostProcess row keyed on
+            # the trench CONTENT revision and runs the steps in a background
+            # thread, so this request only reads back the state it left.
             try:
-                from permits.analysis.road_class import (
-                    ensure_road_class,
-                )
-                from permits.rules.engine import run_analysis as run_permit_analysis
+                from .posthld import post_hld_state, schedule_post_hld
 
-                from django.db import connection
-                with connection.cursor() as cur:
-                    cur.execute(
-                        "SELECT 1 FROM gis.trench_layer WHERE project_id = %s "
-                        "AND properties->>'fclass' IS NULL LIMIT 1",
-                        [project_id],
-                    )
-                    needs_fclass = cur.fetchone() is not None
-                if needs_fclass:
-                    summary = ensure_road_class(project_id)
-                    logger.info(
-                        "HLD fclass attribution for %s: %s",
-                        project_id, summary,
-                    )
-                # Expand the grouped trench features into street-attributed
-                # civil sections (one row per buildable section). The permit
-                # matrix, the street-wise summary tables and the BOQ reference
-                # all read this table; without it a street can only be resolved
-                # per 4 km grouped feature.
-                try:
-                    from permits.analysis.trench_sections import (
-                        build_trench_sections,
-                        sections_are_fresh,
-                    )
-                    if not sections_are_fresh(project_id):
-                        sec_summary = build_trench_sections(project_id)
-                        logger.info(
-                            "HLD trench sections for %s: %s",
-                            project_id, sec_summary,
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "HLD trench section build failed for %s: %s",
-                        project_id, exc,
-                    )
-                # Only re-run the (potentially expensive) analysis once per
-                # completed project — later polls skip it.
-                from permits.models import PermitMatrix
-                already = PermitMatrix.objects.filter(project_id=project_id).exists()
-                if not already:
-                    permit_summary = run_permit_analysis(project_id)
-                    logger.info(
-                        "Permit analysis auto-run after HLD completion %s: %s rules, %s rows",
-                        project_id,
-                        len(permit_summary.get("rules_fired", [])),
-                        permit_summary.get("rows_created", 0),
-                    )
-
-                # Generate the preliminary HLD permit-planning package once
-                # the matrix exists. This is intentionally separate from the
-                # final LLD package and must never block HLD completion.
-                from permits.models import PermitDocument
-                if not PermitDocument.objects.filter(
-                    permit__project_id=project_id,
-                    name__startswith="HLD detailed preliminary permit package",
-                ).exists():
-                    from permits.generators.hld_package import generate_hld_package
-                    hld_package = generate_hld_package(project_id, project.name or project_id)
-                    logger.info(
-                        "HLD preliminary permit package generated for %s: v%s, %s files",
-                        project_id,
-                        hld_package.get("version"),
-                        len(hld_package.get("files", [])),
-                    )
+                schedule_post_hld(project_id, project.name or project_id)
+                status_data["post_process"] = post_hld_state(project_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "HLD permit auto-analysis failed for %s: %s", project_id, exc
+                    "HLD post-process scheduling failed for %s: %s",
+                    project_id, exc,
                 )
 
         # Enrich layer counts from the persisted GIS table (fast, read-only).

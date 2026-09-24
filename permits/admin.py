@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import (
+    PermitAiDraft,
     PermitAuthority,
     PermitDocument,
     PermitEvent,
@@ -43,3 +44,10 @@ class PermitDocumentAdmin(admin.ModelAdmin):
 class PermitEventAdmin(admin.ModelAdmin):
     list_display = ("event", "permit", "created_at")
     list_filter = ("event",)
+
+
+@admin.register(PermitAiDraft)
+class PermitAiDraftAdmin(admin.ModelAdmin):
+    list_display = ("draft_type", "permit_type", "project", "is_ai_generated", "reviewed", "created_at")
+    list_filter = ("draft_type", "is_ai_generated", "reviewed")
+    search_fields = ("project_id", "permit_type", "permit_group")

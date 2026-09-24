@@ -12,16 +12,23 @@ from django.urls import path
 
 from .design_api import RunTrenchDesignView, TrenchDesignView
 from .api import (
+    AreaFetchView,
     BoqDownloadView,
     BoqRegenerateView,
     BoqView,
+    CountriesView,
     DeleteProjectView,
     DesignPackageView,
     DownloadFileView,
     FtthProjectAssignView,
     FtthProjectListView,
     LayerGeoJSONView,
+    InputLayerView,
+    OsmStatusView,
+    PlacesView,
     PipelineStatusView,
+    ResolveAreaView,
+    RunFromAreaView,
     RunPipelineView,
     SurveyPackageView,
 )
@@ -29,6 +36,27 @@ from .api import (
 urlpatterns = [
     # POST /api/ftth/hld/run/       — start pipeline (multipart upload)
     path("ftth/hld/run/", RunPipelineView.as_view(), name="ftth-run"),
+
+    # POST /api/ftth/hld/resolve-area/   — area name -> boundary (+ counts)
+    path("ftth/hld/resolve-area/", ResolveAreaView.as_view(), name="ftth-resolve-area"),
+
+    # GET  /api/ftth/hld/area-fetch/    — progress of the area's OSM download
+    path("ftth/hld/area-fetch/", AreaFetchView.as_view(), name="ftth-area-fetch"),
+
+    # POST /api/ftth/hld/input-layers/ — pre-run OSM/HLD input layer
+    path("ftth/hld/input-layers/", InputLayerView.as_view(), name="ftth-input-layer"),
+
+    # POST /api/ftth/hld/run-from-area/  — area name -> a full HLD run
+    path("ftth/hld/run-from-area/", RunFromAreaView.as_view(), name="ftth-run-from-area"),
+
+    # GET  /api/ftth/hld/countries/      — country options for the area input
+    path("ftth/hld/countries/", CountriesView.as_view(), name="ftth-countries"),
+
+    # GET  /api/ftth/hld/places/         — city suggestions for the area input
+    path("ftth/hld/places/", PlacesView.as_view(), name="ftth-places"),
+
+    # GET  /api/ftth/hld/osm-status/     — what the local OSM store holds
+    path("ftth/hld/osm-status/", OsmStatusView.as_view(), name="ftth-osm-status"),
 
     # GET  /api/ftth/hld/results/<id>/ — poll pipeline status & messages
     path("ftth/hld/results/<str:project_id>/", PipelineStatusView.as_view(), name="ftth-status"),

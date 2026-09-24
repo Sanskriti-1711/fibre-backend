@@ -398,3 +398,74 @@ class PermitEvent(models.Model):
 
     def __str__(self):
         return f"{self.event} ({self.permit_id})"
+
+
+class PermitAiDraft(models.Model):
+    """AI-generated advisory draft — advisory only, never authoritative.
+
+    Stores the text the copilot produced (cover paragraph, narrative,
+    extracted checklist, completeness explanation, risk note, timeline note)
+    so a reviewer can see what was suggested and what the deterministic
+    fallback was. Nothing here ever writes to ``PermitMatrix.status`` /
+    ``readiness_pct`` / ``required`` / ``blocks_construction`` — those are
+    owned by the deterministic rule engine.
+    """
+
+    DRAFT_COVER = "cover"
+    DRAFT_NARRATIVE = "narrative"
+    DRAFT_REQUIREMENTS = "requirements_extract"
+    DRAFT_COMPLETENESS = "completeness"
+    DRAFT_RISK = "risk"
+    DRAFT_TIMELINE = "timeline"
+
+    DRAFT_CHOICES = [
+        (DRAFT_COVER, "Cover text"),
+        (DRAFT_NARRATIVE, "Narrative"),
+        (DRAFT_REQUIREMENTS, "Requirements extract"),
+        (DRAFT_COMPLETENESS, "Completeness explainer"),
+        (DRAFT_RISK, "Risk note"),
+        (DRAFT_TIMELINE, "Timeline note"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(
+        "ftth_hld.FtthProject",
+        on_delete=models.CASCADE,
+        related_name="permit_ai_drafts",
+    )
+    permit = models.ForeignKey(
+        "PermitMatrix",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="ai_drafts",
+    )
+    permit_group = models.CharField(max_length=128, blank=True, default="")
+    permit_type = models.CharField(max_length=64, blank=True, default="")
+    draft_type = models.CharField(max_length=32, choices=DRAFT_CHOICES)
+    content = models.TextField(blank=True, default="")
+    deterministic_fallback = models.TextField(blank=True, default="")
+    is_ai_generated = models.BooleanField(default=False)
+    disclaimer = models.TextField(blank=True, default="")
+    meta = models.JSONField(default=dict)  # model, prompt summary, extracted items
+    created_by = models.ForeignKey(
+        "users.User", null=True, blank=True, on_delete=models.SET_NULL,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    reviewed = models.BooleanField(default=False)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        "users.User", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="reviewed_permit_drafts",
+    )
+
+    class Meta:
+        db_table = "ftth_permit_ai_drafts"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["project", "draft_type"]),
+            models.Index(fields=["permit", "draft_type"]),
+        ]
+
+    def __str__(self):
+        return f"{self.draft_type} {self.permit_type or '—'} ({self.project_id})"

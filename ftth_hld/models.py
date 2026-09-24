@@ -113,6 +113,13 @@ class FtthLayer(models.Model):
     name = models.CharField(max_length=255)  # canonical layer name
     geojson = models.JSONField(default=dict)  # FeatureCollection
     feature_count = models.IntegerField(default=0)
+    # The CONTENT revision of whatever this layer was derived from — set by the
+    # pass that builds it (trench sections record the trench revision they were
+    # built from). A derived layer must be rebuilt when its SOURCE CONTENT
+    # changed, and that cannot be judged from `updated_at`: re-publishing a
+    # layer rewrites its rows and bumps the timestamp even when the geometry is
+    # identical, which made `sections_are_fresh()` false after every re-ingest.
+    source_revision = models.CharField(max_length=64, blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -180,3 +187,54 @@ class BoqSnapshot(models.Model):
 
     def __str__(self):
         return f"BOQ snapshot for {self.ftth_project_id}"
+
+
+class HldPostProcess(models.Model):
+    """Durable guard for the work that follows a completed HLD run.
+
+    The chain — layer sync, road-class attribution, trench sections, permit
+    matrix, preliminary permit package — used to run **inside the status GET**,
+    guarded by *derived* data: "any ``gis.trench_layer`` row with a NULL
+    ``fclass``" and ``FtthLayer.updated_at``. Both guards are re-armed by
+    re-publishing layers, which is routine — the engine's own trench payload
+    carries no ``fclass``, and every re-publish bumps ``trenches.updated_at`` —
+    so a completed project re-ran the whole chain on every poll and the request
+    took **234.7 s** (544 trenches attributed against a 405,599-road extract).
+
+    This row is the guard that cannot be re-armed: it records what ran, against
+    which trench CONTENT revision (``ftth_hld.posthld.trench_content_revision``),
+    so re-publishing unchanged layers is a no-op and a genuinely changed
+    trench is what triggers a rebuild.
+    """
+
+    STATUS_PENDING = "pending"
+    STATUS_RUNNING = "running"
+    STATUS_DONE = "done"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_RUNNING, "Running"),
+        (STATUS_DONE, "Done"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project_id = models.CharField(max_length=64, unique=True, db_index=True)
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING
+    )
+    # trench content revision the chain completed against (empty = never run)
+    trench_revision = models.CharField(max_length=64, blank=True, default="")
+    # step name -> {"ok": bool, "seconds": float, "detail": str}
+    steps = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True, default="")
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ftth_hld_post_process"
+
+    def __str__(self):
+        return f"post-HLD {self.project_id}: {self.status}"

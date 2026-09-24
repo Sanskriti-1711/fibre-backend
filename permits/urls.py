@@ -7,6 +7,14 @@ their outputs), matching the separation rule in ``docs/subprojects/permit-engine
 
 from django.urls import path
 
+from .ai.views import (
+    PermitAiCompletenessView,
+    PermitAiDraftReviewView,
+    PermitAiDraftView,
+    PermitAiRequirementsView,
+    PermitAiRiskView,
+    PermitAiTimelineView,
+)
 from .views import (
     PermitAllView,
     PermitAnalyzeView,
@@ -47,4 +55,19 @@ urlpatterns = [
          PermitPackageDownloadView.as_view(), name="ftth-permits-package-download"),
     path("ftth/permits/permits/<str:permit_id>/",
          PermitDetailView.as_view(), name="ftth-permits-detail"),
+    # AI advisory (advisory-only; never mutates PermitMatrix readiness/status)
+    path("ftth/permits/projects/<str:project_id>/ai/draft/",
+         PermitAiDraftView.as_view(), name="ftth-permits-ai-draft"),
+    path("ftth/permits/projects/<str:project_id>/ai/requirements/",
+         PermitAiRequirementsView.as_view(), name="ftth-permits-ai-requirements"),
+    path("ftth/permits/projects/<str:project_id>/ai/risk/",
+         PermitAiRiskView.as_view(), name="ftth-permits-ai-risk"),
+    path("ftth/permits/projects/<str:project_id>/ai/timeline/",
+         PermitAiTimelineView.as_view(), name="ftth-permits-ai-timeline"),
+    path("ftth/permits/permits/<str:permit_id>/ai/completeness/",
+         PermitAiCompletenessView.as_view(), name="ftth-permits-ai-completeness"),
+    path("ftth/permits/ai/drafts/",
+         PermitAiDraftReviewView.as_view(), name="ftth-permits-ai-drafts"),
+    path("ftth/permits/ai/drafts/<uuid:draft_id>/review/",
+         PermitAiDraftReviewView.as_view(), name="ftth-permits-ai-draft-review"),
 ]

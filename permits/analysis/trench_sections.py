@@ -284,9 +284,18 @@ def build_trench_sections(project_id: str, roads_path: Path | None = None) -> di
     try:
         from ftth_hld.models import FtthLayer
         from ftth_hld.pipeline import persist_layer
+        from ftth_hld.posthld import trench_content_revision
 
         fc = {"type": "FeatureCollection", "features": section_features}
         persist_layer(project_id, SECTION_LAYER, fc)
+        # Stamp the trench CONTENT revision these sections were built from.
+        # `sections_are_fresh()` used to compare `updated_at`, which any
+        # re-publish of the trench layer bumps — the stamp is what makes
+        # freshness durable (see ftth_hld.posthld).
+        summary["trench_revision"] = trench_content_revision(project_id)
+        FtthLayer.objects.filter(
+            ftth_project__project_id=project_id, name=SECTION_LAYER
+        ).update(source_revision=summary["trench_revision"])
         summary["persisted"] = True
     except Exception:  # noqa: BLE001 - persistence is best-effort
         summary["persisted"] = False
@@ -299,21 +308,29 @@ def build_trench_sections(project_id: str, roads_path: Path | None = None) -> di
 
 
 def sections_are_fresh(project_id: str) -> bool:
-    """True when the persisted section layer matches the current trench layer.
+    """True when the persisted sections were built from the current trenches.
 
-    Cheap guard for the completion hook: rebuild only when the trench layer
-    has changed since the section layer was written.
+    Compares the trench CONTENT revision the sections were stamped with
+    against the revision now (``ftth_hld.posthld.trench_content_revision``).
+    The old guard compared ``trenches.updated_at`` with
+    ``trench_sections.updated_at``; every re-publish of the trench layer bumps
+    the former and the engine deliberately serves nothing for the latter, so
+    the comparison went false on its own and re-fired a 2.6 s rebuild on the
+    status path. Content cannot be re-armed that way: re-publishing unchanged
+    trenches leaves the revision alone.
+
+    A project with no ``gis.trench_layer`` rows (fresh project, test database
+    without the GIS schema) is reported fresh — there is nothing to build.
     """
     from ftth_hld.models import FtthLayer
+    from ftth_hld.posthld import trench_content_revision
 
-    project = FtthLayer.objects.filter(
-        ftth_project__project_id=project_id, name="trenches"
-    ).only("updated_at").first()
     sections = FtthLayer.objects.filter(
         ftth_project__project_id=project_id, name=SECTION_LAYER
-    ).only("updated_at", "feature_count").first()
-    if project is None or sections is None:
+    ).only("feature_count", "source_revision").first()
+    if sections is None or not sections.feature_count:
         return False
-    if not sections.feature_count:
-        return False
-    return sections.updated_at >= project.updated_at
+    revision = trench_content_revision(project_id)
+    if not revision:
+        return True
+    return (sections.source_revision or "") == revision
