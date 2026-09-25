@@ -32,13 +32,26 @@ def draft_cover_text(
     section_count: int,
     trench_summary: str = "",
 ) -> dict[str, Any]:
-    """Draft an authority cover letter intro for a street-level permit."""
+    """Draft an authority cover letter intro for a street-level permit.
+
+    Always returns both ``text`` (what the UI shows) and
+    ``deterministic_fallback`` (the template the AI enriches). When no LLM
+    is configured ``text`` *is* the template so the product stays useful
+    offline — the caller can still render a "Deterministic" badge.
+    """
+    # Submission-ready template — includes everything an authority clerk
+    # checks on the first pass: street, municipality, scope in metres,
+    # authority, and the document set that travels with the application.
+    street = permit_group or "this street section"
+    place = municipality or "the project area"
+    scope = trench_summary or "Trench dimensions and surface treatment are per the attached drawings and cross-sections"
+    authority = authority_name or "to be confirmed (check road class → authority mapping)"
+    checklist = "Enclosed: route drawing 1:500, trench cross-section, traffic management plan, reinstatement undertaking, utility coexistence statement."
     deterministic = (
-        f"Application for {permit_type} — {permit_group or 'this street section'} "
-        f"in {municipality or 'the project area'}.\n\n"
+        f"Application for {permit_type} — {street} in {place}.\n\n"
         f"Project {project_name} ({project_id}) comprises {section_count} civil section(s) on this street. "
-        f"Authority: {authority_name or 'to be confirmed'}. "
-        f"{trench_summary or 'Trench dimensions and surface treatment are per the attached drawings and cross-sections.'}"
+        f"Responsible authority: {authority}. {scope}.\n\n"
+        f"{checklist}"
     )
     system = (
         "You draft a covering paragraph for a German fibre civil-works permit application "
@@ -48,8 +61,8 @@ def draft_cover_text(
     )
     user = (
         f"Project: {project_name} ({project_id})\n"
-        f"Permit: {permit_type} — {permit_group or 'this street section'}\n"
-        f"Authority: {authority_name or 'to be confirmed'}\n"
+        f"Permit: {permit_type} — {street}\n"
+        f"Authority: {authority}\n"
         f"Municipality: {municipality or 'pending'}\n"
         f"Sections on this street: {section_count}\n"
         f"Trench summary: {trench_summary or 'per drawings/cross-sections'}\n\n"
@@ -63,7 +76,12 @@ def draft_cover_text(
             "is_ai_generated": True,
             "disclaimer": AI_DISCLAIMER,
         }
-    return {"text": deterministic, "is_ai_generated": False, "disclaimer": "Template — deterministic, no LLM used."}
+    return {
+        "text": deterministic,
+        "deterministic_fallback": deterministic,
+        "is_ai_generated": False,
+        "disclaimer": "Template — deterministic, no LLM used. Verify against the authority's current checklist before submitting.",
+    }
 
 
 def draft_narrative(
@@ -73,27 +91,53 @@ def draft_narrative(
     evidence: dict[str, Any] | None,
     trench_stats: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Draft a short narrative description for a permit (form field)."""
+    """Draft a short narrative description for a permit (form field).
+
+    Deterministic template stays factual and complete so the form field is
+    never empty — even offline the planner can copy, edit, and submit.
+    """
     present = [k for k, v in (evidence or {}).items() if isinstance(v, dict) and v.get("present")]
+    missing = [k for k, v in (evidence or {}).items() if isinstance(v, dict) and not v.get("present")]
+    by_surface = (trench_stats or {}).get("by_surface") or {}
+    surf_line = ", ".join(f"{k} {v} m" for k, v in by_surface.items()) if by_surface else ""
+    total_m = (trench_stats or {}).get("total_length_m")
+    street = permit_group or "the identified section"
+    evidence_line = f"Evidence on file: {', '.join(present) or 'pending'}." if present or not missing else "Evidence on file: pending."
+    # Keep missing out of the submitted narrative — it is for the completeness
+    # card, not the authority letter. The narrative only states what IS present.
+    surf_part = f" Trench lengths by surface: {surf_line}." if surf_line else ""
+    total_part = f" Total trench ~{total_m:.0f} m." if isinstance(total_m, (int, float)) and total_m else ""
     deterministic = (
-        f"Works for {permit_type} on {permit_group or 'the identified section'} as part of project {project_name}. "
-        f"Evidence on file: {', '.join(present) or 'pending'}. "
-        f"{('Trench lengths by surface: ' + ', '.join(f'{k} {v} m' for k, v in (trench_stats or {}).get('by_surface', {}).items())) if trench_stats else ''}"
+        f"Works for {permit_type} on {street} as part of project {project_name}. "
+        f"{evidence_line}{surf_part}{total_part}"
     ).strip()
+    # Ensure the deterministic text is never bare "pending" — add the checklist hint.
+    if not present:
+        deterministic += " See the authority checklist for the required evidence keys."
     system = (
         "You write a short factual narrative for a fibre permit application (3–5 sentences). "
         "Stay factual — use only the trench/evidence details provided. Do not invent measurements, dates, or authority outcomes."
     )
     user = (
-        f"Project: {project_name}\nPermit: {permit_type} — {permit_group or 'section'}\n"
+        f"Project: {project_name}\nPermit: {permit_type} — {street}\n"
         f"Evidence present: {', '.join(present) or 'none yet'}\n"
         f"Trench stats: {trench_stats or 'not available'}\n\n"
         "Draft the narrative."
     )
     ai_text = chat_completion(system, user, max_tokens=500, temperature=0.25)
     if ai_text:
-        return {"text": ai_text.strip(), "deterministic_fallback": deterministic, "is_ai_generated": True, "disclaimer": AI_DISCLAIMER}
-    return {"text": deterministic, "is_ai_generated": False, "disclaimer": "Template — deterministic, no LLM used."}
+        return {
+            "text": ai_text.strip(),
+            "deterministic_fallback": deterministic,
+            "is_ai_generated": True,
+            "disclaimer": AI_DISCLAIMER,
+        }
+    return {
+        "text": deterministic,
+        "deterministic_fallback": deterministic,
+        "is_ai_generated": False,
+        "disclaimer": "Template — deterministic, no LLM used. Verify against the authority's current checklist before submitting.",
+    }
 
 
 def extract_requirements_from_text(raw_text: str) -> dict[str, Any]:

@@ -55,7 +55,7 @@ class PermitAiDraftView(APIView):
         if permit_id:
             pm = PermitMatrix.objects.filter(permit_id=permit_id, project_id=project_id).select_related("authority", "rule").first()
             if pm is None:
-                return JsonResponse({"detail": "Permit not found for this project."}, status=404)
+                return JsonResponse({"detail": "Permit not found for this project.", "hint": "That permit id does not belong to this project — refresh the Permits tab and pick a row shown there."}, status=404)
         else:
             # Fallback: pick first row of permit_type/group if supplied.
             qs = PermitMatrix.objects.filter(project_id=project_id).select_related("authority", "rule")
@@ -67,39 +67,64 @@ class PermitAiDraftView(APIView):
                 qs = qs.filter(permit_group=grp)
             pm = qs.first()
             if pm is None:
-                return JsonResponse({"detail": "No matching permit row for drafting context."}, status=400)
+                hint = "No permit rows match that street/permit type for this project. "
+                hint += "Run Permit Analysis first, or pick a permit from the tracker — the Copilot mirrors your selection there."
+                if not PermitMatrix.objects.filter(project_id=project_id).exists():
+                    hint = "This project has no permit rows yet — run POST /api/ftth/permits/projects/<id>/permits/analyze/ or use the Permits → Overview → Run analysis button."
+                return JsonResponse({"detail": "No matching permit row for drafting context.", "hint": hint}, status=400)
 
         project_name = ftth.name or project_id
         permit_group = pm.permit_group or pm.route_section
         authority_name = pm.authority.name if pm.authority else ""
         # Count street siblings for context.
         group_count = PermitMatrix.objects.filter(project_id=project_id, permit_group=pm.permit_group, permit_type=pm.permit_type).count() if pm.permit_group else 1
+        # Build a submission-ready context summary — trench_stats is the source
+        # of metres/surface that the deterministic cover template cites.
+        # Any failure is recorded in meta, never 500s the draft.
         trench_summary = ""
+        ts_for_meta: dict | None = None
+        trench_error = ""
         try:
-            from ..generators.data import trench_stats
+            from ..generators.data import trench_stats as _trench_stats
 
-            ts = trench_stats(project_id)
+            ts = _trench_stats(project_id)
+            ts_for_meta = ts
             if ts.get("total_length_m"):
                 trench_summary = f"Total trench ~{ts['total_length_m']:.0f} m. "
             by_surf = ", ".join(f"{k} {v} m" for k, v in (ts.get("by_surface") or {}).items()) or ""
             if by_surf:
                 trench_summary += f"By surface: {by_surf}."
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            trench_error = f"{type(exc).__name__}: {exc}"
 
         if kind == "cover":
             res = draft_cover_text(project_name, project_id, pm.permit_type, permit_group, authority_name, pm.municipality or "", group_count, trench_summary)
             draft_type = PermitAiDraft.DRAFT_COVER
         else:
-            try:
-                from ..generators.data import trench_stats
+            # Re-use ts already fetched; fall back to a fresh call only if the
+            # first one failed (keeps one DB hit in the happy path).
+            ts_narr = ts_for_meta
+            if ts_narr is None and not trench_error:
+                try:
+                    from ..generators.data import trench_stats as _ts2
 
-                ts = trench_stats(project_id)
-            except Exception:
-                ts = None
-            res = draft_narrative(project_name, pm.permit_type, permit_group, pm.evidence, ts)
+                    ts_narr = _ts2(project_id)
+                except Exception:
+                    ts_narr = None
+            res = draft_narrative(project_name, pm.permit_type, permit_group, pm.evidence, ts_narr)
             draft_type = PermitAiDraft.DRAFT_NARRATIVE
 
+        # Why "No matching permit row" happens and what to do — the previous
+        # message left the user stuck. trench_error is surfaced in meta so a
+        # support review can see it without guessing.
+        meta = {
+            "permit_id": str(pm.permit_id),
+            "group_count": group_count,
+            "permit_group": permit_group,
+            "trench_summary": trench_summary,
+        }
+        if trench_error:
+            meta["trench_stats_error"] = trench_error[:400]
         draft = PermitAiDraft.objects.create(
             project_id=project_id,
             permit=pm,
@@ -110,7 +135,7 @@ class PermitAiDraftView(APIView):
             deterministic_fallback=res.get("deterministic_fallback") or "",
             is_ai_generated=bool(res.get("is_ai_generated")),
             disclaimer=res.get("disclaimer") or "",
-            meta={"permit_id": str(pm.permit_id), "group_count": group_count},
+            meta=meta,
             created_by=request.user if request.user and request.user.is_authenticated else None,
         )
         return JsonResponse(
@@ -145,6 +170,8 @@ class PermitAiRequirementsView(APIView):
         permit_type = (request.GET.get("permit_type") or "").strip()
         permit_id = (request.GET.get("permit_id") or "").strip()
         authority_name = ""
+        authority_code = ""
+        municipality = ""
         evidence = None
         project_name = ftth.name or project_id
         if permit_id:
@@ -152,11 +179,15 @@ class PermitAiRequirementsView(APIView):
             if pm:
                 permit_type = permit_type or pm.permit_type or ""
                 authority_name = pm.authority.name if pm.authority else ""
+                authority_code = pm.authority.code if pm.authority else ""
+                municipality = pm.municipality or ""
                 evidence = pm.evidence
         if not permit_type:
             return JsonResponse({"detail": "permit_type is required (or supply permit_id)."}, status=400)
-        # Deterministic baseline + optional AI enrichment.
-        enriched = enrich_requirements_with_ai(permit_type, authority_name, project_name, evidence)
+        # Deterministic baseline + optional AI enrichment (municipality-aware via bezirke).
+        enriched = enrich_requirements_with_ai(
+            permit_type, authority_name, project_name, evidence, municipality, authority_code
+        )
         # Persist as draft for audit.
         PermitAiDraft.objects.create(
             project_id=project_id,
@@ -167,7 +198,7 @@ class PermitAiRequirementsView(APIView):
             content="\n".join(enriched.get("items") or []),
             is_ai_generated=bool(enriched.get("is_ai_generated")),
             disclaimer=enriched.get("disclaimer") or "",
-            meta={"authority": authority_name, "ai_notes": enriched.get("ai_notes") or ""},
+            meta={"authority": authority_name, "municipality": municipality, "ai_notes": enriched.get("ai_notes") or ""},
             created_by=request.user if request.user and request.user.is_authenticated else None,
         )
         return JsonResponse({"project_id": project_id, **enriched})

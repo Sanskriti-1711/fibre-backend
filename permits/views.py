@@ -374,6 +374,14 @@ class PermitSummaryView(APIView):
         # by + MIN(priority)" reduction is easier in SQL than in the ORM.
         # We map status → priority in SQL so the database does the heavy
         # lifting; the Python side only counts the resulting groups.
+        #
+        # Why cursor and not Model.objects.raw(): raw() requires the PK as the
+        # first selected column (PermitMatrix PK is permit_id, not id) and the
+        # window query returns one row per segment that we dedupe in Python.
+        # Using a cursor avoids the "Raw query must include the primary key"
+        # 500 that broke /permits/summary/ on any DB with permit rows.
+        from django.db import connection as _conn  # local import to avoid cycle
+
         priority_case = (
             "CASE status "
             "WHEN 'rejected' THEN 9 "
@@ -390,27 +398,57 @@ class PermitSummaryView(APIView):
         group_sql = (
             "SELECT "
             "  pm.project_id, "
-            "  COALESCE(NULLIF(pm.permit_group, ''), pm.route_section) AS group_key, "
             "  pm.rule_id, "
+            "  COALESCE(NULLIF(pm.permit_group, ''), pm.route_section) AS group_key, "
             "  FIRST_VALUE(pm.status) OVER ("
             "    PARTITION BY pm.project_id, COALESCE(NULLIF(pm.permit_group, ''), pm.route_section), pm.rule_id "
             "    ORDER BY " + priority_case + " DESC, pm.permit_id"
             "  ) AS group_status "
             "FROM ftth_permit_matrix pm"
         )
-        group_rows = PermitMatrix.objects.raw(group_sql)
+        try:
+            with _conn.cursor() as cur:
+                cur.execute(group_sql)
+                _group_rows = cur.fetchall()  # (project_id, rule_id, group_key, group_status)
+        except Exception:
+            # Fallback: Python-side worst-first grouping — never 500 the KPI.
+            _group_rows = []
+            for pm in PermitMatrix.objects.values("project_id", "rule_id", "permit_group", "route_section", "status", "permit_id"):
+                gk = (pm["permit_group"] or "").strip() or pm["route_section"]
+                # priority lookup inline to avoid extra query
+                prio = _GROUP_STATUS_PRIORITY.get(pm["status"], 0)
+                _group_rows.append((pm["project_id"], pm["rule_id"], gk, pm["status"], prio, str(pm["permit_id"])))
+            # Reduce to worst per group in Python (max prio, tie-break permit_id)
+            _best: dict[tuple, tuple] = {}  # key -> (prio, permit_id, status)
+            for pid, rid, gk, st, prio, perm_id in _group_rows:
+                key = (str(pid), str(rid or ""), str(gk))
+                cur_best = _best.get(key)
+                if cur_best is None or prio > cur_best[0] or (prio == cur_best[0] and perm_id < cur_best[1]):
+                    _best[key] = (prio, perm_id, st)
+            _group_rows = [(k[0], k[1], k[2], v[2]) for k, v in _best.items()]
+            # mark as already-grouped so the loop below skips dedupe
+            _already_grouped = True
+        else:
+            _already_grouped = False
 
         group_counts: dict[str, int] = {}
         per_project_groups: dict[str, int] = {}
         seen_groups: set[tuple] = set()
-        for gr in group_rows:
-            key = (str(gr.project_id), str(gr.rule_id or ""), str(gr.group_key))
-            if key in seen_groups:
-                continue
-            seen_groups.add(key)
-            st = gr.group_status
-            group_counts[st] = group_counts.get(st, 0) + 1
-            per_project_groups[str(gr.project_id)] = per_project_groups.get(str(gr.project_id), 0) + 1
+        if _already_grouped:
+            for project_id, rule_id, group_key, group_status in _group_rows:
+                key = (str(project_id), str(rule_id or ""), str(group_key))
+                # rows are already one per group in fallback path
+                seen_groups.add(key)
+                group_counts[group_status] = group_counts.get(group_status, 0) + 1
+                per_project_groups[str(project_id)] = per_project_groups.get(str(project_id), 0) + 1
+        else:
+            for project_id, rule_id, group_key, group_status in _group_rows:
+                key = (str(project_id), str(rule_id or ""), str(group_key))
+                if key in seen_groups:
+                    continue
+                seen_groups.add(key)
+                group_counts[group_status] = group_counts.get(group_status, 0) + 1
+                per_project_groups[str(project_id)] = per_project_groups.get(str(project_id), 0) + 1
 
         ready = group_counts.get(PermitMatrix.STATUS_READY, 0) + group_counts.get(
             PermitMatrix.STATUS_APPROVED, 0

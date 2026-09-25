@@ -21,7 +21,7 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 
 from ..models import PermitDocument, PermitEvent, PermitMatrix
-from . import data, drawings, lld_summary, permit_forms, reports, traffic_plan
+from . import data, drawings, hdd_drawings, lld_summary, permit_forms, reports, traffic_plan
 
 
 def _latest_package_version(project_id: str) -> int:
@@ -34,9 +34,21 @@ def _latest_package_version(project_id: str) -> int:
     return (last or 0) + 1
 
 
-def _promote_evidence(project_id: str, generated_kinds: set[str]) -> dict[str, int]:
+def _promote_evidence(
+    project_id: str,
+    generated_kinds: set[str],
+    generated_filenames: set[str] | None = None,
+) -> dict[str, int]:
     """Readiness checker: mark document evidence satisfied where the package
-    actually generated the artifact. Returns counts of promoted rows."""
+    actually generated the artifact. Returns counts of promoted rows.
+
+    Crossing evidence (``hdd_design`` / ``profile_drawing`` /
+    ``crossing_drawing``) is only promoted when an HDD crossing drawing was
+    actually generated (``hdd_`` file present) — route drawings alone never
+    satisfy a crossing. This is the P16 guard.
+    """
+    generated_filenames = generated_filenames or set()
+    has_hdd = any("hdd_" in fn for fn in generated_filenames)
     promoted = 0
     for pm in PermitMatrix.objects.filter(project_id=project_id).select_related("rule"):
         rule = pm.rule
@@ -72,12 +84,13 @@ def _promote_evidence(project_id: str, generated_kinds: set[str]) -> dict[str, i
             if (
                 evidence_key in (rule.evidence_required or [])
                 and drawing_kinds & generated_kinds
+                and has_hdd
                 and not (ev.get(evidence_key) or {}).get("present")
             ):
                 ev[evidence_key] = {
                     "present": True,
-                    "value": "package:drawing",
-                    "refs": ["permit package"],
+                    "value": "package:hdd_drawing",
+                    "refs": ["permit package (HDD profile)"],
                 }
                 changed = True
 
@@ -120,6 +133,7 @@ def generate_package(
     for fn, kwargs in (
         (drawings.route_drawings, {}),
         (drawings.cross_sections, {}),
+        (hdd_drawings.hdd_crossing_drawings, {"project_name": project_name}),
         (traffic_plan.traffic_plans, {}),
         (permit_forms.application_forms, {"project_name": project_name}),
         (permit_forms.german_street_opening_form, {"project_name": project_name}),
@@ -209,7 +223,8 @@ def generate_package(
             })
 
         kinds = {g["kind"] for g in generated}
-        promotion = _promote_evidence(project_id, kinds)
+        filenames = {g["filename"] for g in generated}
+        promotion = _promote_evidence(project_id, kinds, filenames)
 
     return {
         "version": version,

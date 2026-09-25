@@ -14,6 +14,19 @@ from typing import Any
 
 from .provider import AI_DISCLAIMER, chat_completion
 
+# Bezirk contact/fee helpers — optional so advisory works even without the
+# bezirke module (tests / older checkouts).
+try:
+    from ..bezirke import bezirk_fee_note as _bezirk_fee_note  # type: ignore
+    from ..bezirke import bezirk_form_hint as _bezirk_form_hint  # type: ignore
+    from ..bezirke import get_bezirk as _get_bezirk  # type: ignore
+    _HAS_BEZIRKE = True
+except ImportError:  # pragma: no cover
+    _HAS_BEZIRKE = False
+    _bezirk_fee_note = lambda *_a, **_kw: ""  # type: ignore
+    _bezirk_form_hint = lambda *_a, **_kw: ""  # type: ignore
+    _get_bezirk = lambda *_a, **_kw: None  # type: ignore
+
 
 def _e(v: Any) -> str:
     return html.escape("" if v is None else str(v))
@@ -68,21 +81,46 @@ AUTHORITY_CHECKLISTS: dict[str, list[str]] = {
 }
 
 
-def authority_requirements(permit_type: str, authority_name: str = "") -> dict[str, Any]:
-    """Deterministic checklist for a permit type + authority."""
+def authority_requirements(
+    permit_type: str,
+    authority_name: str = "",
+    municipality: str = "",
+    authority_code: str = "",
+) -> dict[str, Any]:
+    """Deterministic checklist for a permit type + authority.
+
+    When a Berlin Bezirk can be resolved from ``municipality`` (via
+    ``permits.bezirke``), the tail carries the Bezirk-specific office/form/
+    fee note so the Copilot checklist is municipality-aware (P17).
+    """
     items = AUTHORITY_CHECKLISTS.get(permit_type) or [
         "Route drawing & schedule of works",
         "Construction method & reinstatement spec",
         "Authority-specific conditions (check local guidance)",
     ]
-    # A tiny authority-aware tail: Berlin road permits mention SenMVKU/Bezirksamt.
-    tail = []
-    low = (authority_name or "").lower()
-    if "bezirk" in low or "senmvku" in low or "berlin" in low:
-        tail = ["Berlin: confirm SenMVKU vs Bezirksamt responsibility by road class (fclass mapping)"]
+    # Bezirk-aware tail (P17) — falls back to the generic Berlin note.
+    tail: list[str] = []
+    if _HAS_BEZIRKE:
+        try:
+            hint = _bezirk_form_hint(municipality or "", permit_type, authority_code or authority_name or "")
+            # Only surface the Bezirk hint when it resolved a real contact;
+            # otherwise keep the old Berlin tail for generic Berlin authorities.
+            if municipality and _get_bezirk(municipality):
+                tail = [hint]
+            else:
+                low = (authority_name or "").lower()
+                if "bezirk" in low or "senmvku" in low or "berlin" in low:
+                    tail = [hint or "Berlin: confirm SenMVKU vs Bezirksamt responsibility by road class (fclass mapping)"]
+        except Exception:
+            tail = []
+    else:
+        low = (authority_name or "").lower()
+        if "bezirk" in low or "senmvku" in low or "berlin" in low:
+            tail = ["Berlin: confirm SenMVKU vs Bezirksamt responsibility by road class (fclass mapping)"]
     return {
         "permit_type": permit_type,
         "authority": authority_name or None,
+        "municipality": municipality or None,
         "items": items + tail,
         "source": "deterministic checklists (no LLM)",
         "is_ai_generated": False,
@@ -95,9 +133,11 @@ def enrich_requirements_with_ai(
     authority_name: str,
     project_name: str,
     evidence: dict[str, Any] | None,
+    municipality: str = "",
+    authority_code: str = "",
 ) -> dict[str, Any]:
     """Optionally enrich the checklist with an LLM paragraph (advisory only)."""
-    base = authority_requirements(permit_type, authority_name)
+    base = authority_requirements(permit_type, authority_name, municipality, authority_code)
     prompt_user = (
         f"Permit type: {permit_type}\n"
         f"Authority: {authority_name or 'unspecified'}\n"
