@@ -82,6 +82,7 @@ class LldAuthTests(LldApiTestCase):
             ("get", f"/api/ftth/lld/projects/{pid}/runs/LLD-V01/layers/trenches/"),
             ("get", f"/api/ftth/lld/projects/{pid}/runs/LLD-V01/download/"),
             ("get", f"/api/ftth/lld/projects/{pid}/versions/"),
+            ("get", f"/api/ftth/lld/projects/{pid}/versions/diff/"),
         ]
         for method, url in checks:
             with self.subTest(url=url, method=method):
@@ -566,6 +567,128 @@ class LldRunsViewTests(LldApiTestCase):
         self.assertEqual(len(body["runs"]), 2)
         self.assertEqual({r["project_id"] for r in body["runs"]},
                          {self.ftth.project_id, other.project_id})
+
+
+# ======================================================================
+# GET /api/ftth/lld/projects/<pid>/versions/diff/  — cross-run diff (A24)
+# ======================================================================
+
+class LldVersionsDiffViewTests(LldApiTestCase):
+    def _url(self, qs=""):
+        return f"/api/ftth/lld/projects/{self.ftth.project_id}/versions/diff/{qs}"
+
+    @staticmethod
+    def _fc(n):
+        return {"type": "FeatureCollection",
+                "features": [{"type": "Feature", "geometry": LINE,
+                              "properties": {"i": i}} for i in range(n)]}
+
+    def test_diffs_two_completed_runs_layer_by_layer(self):
+        older = make_lld_run(self.ftth, version="LLD-V05", status=LldRun.STATUS_COMPLETED)
+        make_lld_layer(older, name="final_trenches", geojson=self._fc(2), feature_count=2)
+        newer = make_lld_run(self.ftth, version="LLD-V06", status=LldRun.STATUS_COMPLETED)
+        make_lld_layer(newer, name="final_trenches", geojson=self._fc(3), feature_count=3)
+        make_lld_layer(newer, name="feeder_ducts", geojson=self._fc(5), feature_count=5)
+
+        # The AI paragraph is a rewrite of the deterministic numbers — keep
+        # the test offline and prove the field flows through.
+        with mock.patch("permits.ai.provider.chat_completion",
+                        return_value="Two layers grew."):
+            body = self.client.get(self._url("?from=LLD-V05&to=LLD-V06")).json()
+
+        self.assertEqual(body["from"]["lld_version"], "LLD-V05")
+        self.assertEqual(body["to"]["lld_version"], "LLD-V06")
+
+        by_name = {r["name"]: r for r in body["layers"]}
+        self.assertEqual(by_name["final_trenches"]["status"], "changed")
+        self.assertEqual(by_name["final_trenches"]["delta_count"], 1)
+        self.assertGreater(by_name["final_trenches"]["delta_length_m"], 0)
+        self.assertEqual(by_name["feeder_ducts"]["status"], "added")
+        self.assertEqual(by_name["feeder_ducts"]["delta_count"], 5)
+
+        totals = body["totals"]
+        self.assertEqual(totals["from_features"], 2)
+        self.assertEqual(totals["to_features"], 8)
+        self.assertEqual(totals["delta_features"], 6)
+        self.assertEqual(totals["layers_changed"], 1)
+        self.assertEqual(totals["layers_added"], 1)
+        self.assertIn("LLD-V05 → LLD-V06", body["summary"])
+        self.assertEqual(body["ai_summary"], "Two layers grew.")
+        self.assertTrue(body["ai_disclaimer"])  # every AI note carries the footer
+
+    def test_defaults_to_the_two_most_recent_completed_runs(self):
+        make_lld_run(self.ftth, version="LLD-V05", status=LldRun.STATUS_COMPLETED)
+        make_lld_run(self.ftth, version="LLD-V06", status=LldRun.STATUS_COMPLETED)
+        # A failed run must not be picked as either side of the default pair.
+        make_lld_run(self.ftth, version="LLD-V07", status=LldRun.STATUS_FAILED)
+
+        body = self.client.get(self._url()).json()
+        self.assertEqual(body["from"]["lld_version"], "LLD-V05")
+        self.assertEqual(body["to"]["lld_version"], "LLD-V06")
+
+    def test_identical_runs_summarise_as_identical(self):
+        make_lld_run(self.ftth, version="LLD-V01", status=LldRun.STATUS_COMPLETED)
+        make_lld_run(self.ftth, version="LLD-V02", status=LldRun.STATUS_COMPLETED)
+
+        body = self.client.get(self._url()).json()
+        self.assertIn("identical", body["summary"])
+        self.assertEqual(body["layers"], [])
+        self.assertNotIn("ai_summary", body)  # nothing changed → no AI note
+
+    def test_unknown_version_is_a_404(self):
+        make_lld_run(self.ftth, version="LLD-V01", status=LldRun.STATUS_COMPLETED)
+        response = self.client.get(self._url("?from=LLD-V01&to=LLD-V99"))
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("LLD-V99", response.json()["detail"])
+
+    def test_fewer_than_two_completed_runs_is_a_400(self):
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("two completed LLD runs", response.json()["detail"])
+
+
+# ======================================================================
+# Tier-1 A5 — the Approval Queue carries risk scores
+# ======================================================================
+
+class LldProjectsRiskTests(LldApiTestCase):
+    @skipUnlessDBFeature("supports_distinct_on_fields")
+    def test_changes_are_sorted_by_risk_and_carry_their_band(self):
+        # High risk: a feeder geometry reroute captured on a clean GPS fix.
+        high = make_survey_feature(
+            self.copy, self.engineer,
+            status=SurveyFeature.SurveyStatus.MODIFIED,
+            original_hld_feature=make_feature(self.copy),
+            survey_geometry=OTHER_LINE,          # geometry moved → severity 4
+            gps_quality="ok",
+        )
+        # Low risk: nothing material changed (same geometry and attributes),
+        # created LAST so the default -updated_at ordering would show it first.
+        make_survey_feature(
+            self.copy, self.engineer,
+            status=SurveyFeature.SurveyStatus.MODIFIED,
+            original_hld_feature=make_feature(self.copy),
+            survey_geometry=LINE, original_geometry=LINE,
+            survey_attributes={"depth_mm": 600}, original_attributes={"depth_mm": 600},
+            gps_quality="reject",
+        )
+
+        body = self.client.get("/api/ftth/lld/projects/").json()
+        block = next(p for p in body["projects"]
+                     if p["project_id"] == self.ftth.project_id)
+        changes = block["changes"]
+
+        self.assertEqual(len(changes), 2)
+        # Highest-risk first, regardless of insertion order.
+        self.assertEqual(changes[0]["change_id"], str(high.id))
+        self.assertGreater(changes[0]["risk"]["score"], changes[1]["risk"]["score"])
+        self.assertIn(changes[0]["risk"]["band"], ("high", "critical"))
+        self.assertEqual(changes[1]["risk"]["band"], "low")
+        self.assertTrue(changes[0]["risk"]["factors"])
+
+        bands = block["risk_bands"]
+        self.assertEqual(sum(bands.values()), 2)
+        self.assertEqual(bands["low"], 1)
 
 
 # ======================================================================

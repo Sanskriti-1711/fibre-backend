@@ -251,6 +251,15 @@ def _change_payload(sf, risk=None):
     }
 
 
+def _risk_band_counts(changes):
+    """{critical: n, high: n, medium: n, low: n} across a change payload list."""
+    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for c in changes:
+        band = (c.get("risk") or {}).get("band") or "low"
+        counts[band] = counts.get(band, 0) + 1
+    return counts
+
+
 def _survey_feature_collection(survey_copy):
     """Survey dataset: HLD baseline as edited by engineers + new features."""
     by_hld = {}
@@ -499,6 +508,15 @@ class LldProjectsView(APIView):
             rejected = c.get(SurveyFeature.SurveyStatus.REJECTED, 0)
 
             asv = asv_map.get(ftth.project_id)
+            sfs = list(sf_qs.select_related("engineer").iterator(chunk_size=500))
+            # Tier-1 A5 — risk-rank this project's queue (severity × likelihood
+            # × LLD impact); deterministic rules, no model involved.
+            from survey.risk_scoring import score_changes
+
+            risk_by_id = score_changes(sfs)
+            changes = [_change_payload(sf, risk_by_id.get(str(sf.id))) for sf in sfs]
+            # Highest-risk changes first — the review queue priority order.
+            changes.sort(key=lambda c: -c["risk"]["score"])
             projects.append({
                 "project_id": ftth.project_id,
                 "name": ftth.name or ftth.project_id,
@@ -510,10 +528,8 @@ class LldProjectsView(APIView):
                 "needs_correction": correction,
                 "ready": pending == 0 and correction == 0,
                 "approved_survey_version": asv.version if asv else None,
-                "changes": [
-                    _change_payload(sf)
-                    for sf in sf_qs.select_related("engineer").iterator(chunk_size=500)
-                ],
+                "risk_bands": _risk_band_counts(changes),
+                "changes": changes,
             })
         return JsonResponse({"projects": projects})
 
@@ -1320,6 +1336,38 @@ class LldVersionsView(APIView):
             },
             "runs": runs,
         })
+
+
+class LldVersionsDiffView(APIView):
+    """GET /api/ftth/lld/projects/<pid>/versions/diff/?from=LLD-V05&to=LLD-V06
+
+    Tier-1 A24 — "what changed between two LLD runs" (layers, counts,
+    lengths). Both versions are optional: with none given the two most
+    recent completed runs are compared.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id):
+        from .diff import diff_runs, latest_pair
+
+        get_object_or_404(FtthProject, pk=project_id)
+        from_v = (request.GET.get("from") or "").strip()
+        to_v = (request.GET.get("to") or "").strip()
+        if not from_v or not to_v:
+            pair = latest_pair(project_id)
+            if pair is None:
+                return JsonResponse(
+                    {"detail": "At least two completed LLD runs are required for a diff."},
+                    status=400,
+                )
+            pair_a, pair_b = pair
+            from_v = from_v or pair_a.lld_version
+            to_v = to_v or pair_b.lld_version
+        try:
+            result = diff_runs(project_id, from_v, to_v)
+        except ValueError as exc:
+            return JsonResponse({"detail": str(exc)}, status=404)
+        return JsonResponse(result)
 
 
 class LldRunStatusView(APIView):

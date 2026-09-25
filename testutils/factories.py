@@ -74,7 +74,8 @@ def make_survey_feature(project: Project, engineer: User, *, status: str = Surve
                         survey_attributes: dict | None = None,
                         original_attributes: dict | None = None,
                         change_reason: str = "field correction",
-                        is_removal: bool = False) -> SurveyFeature:
+                        is_removal: bool = False,
+                        gps_quality: str = "") -> SurveyFeature:
     return SurveyFeature.objects.create(
         project=project,
         engineer=engineer,
@@ -88,6 +89,7 @@ def make_survey_feature(project: Project, engineer: User, *, status: str = Surve
         survey_status=status,
         change_reason=change_reason,
         is_removal=is_removal,
+        gps_quality=gps_quality,
     )
 
 

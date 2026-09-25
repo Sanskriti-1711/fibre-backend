@@ -968,6 +968,47 @@ class DeleteProjectView(APIView):
 # GET /api/ftth/hld/results/<project_id>/boq/
 # ======================================================================
 
+def _boq_anomalies(project_id):
+    """Tier-1 A4: deterministic anomaly screening + optional AI summary.
+
+    Detection is always the deterministic rules in ``boq_anomalies`` — the
+    LLM only rewrites the flagged items in plain language for the reviewer
+    and is skipped entirely when unconfigured or failing.
+    """
+    from .boq_anomalies import detect_boq_anomalies
+
+    try:
+        result = detect_boq_anomalies(project_id)
+    except Exception:
+        return {"anomalies": [], "checked": 0, "basis": {}}
+
+    if result.get("anomalies"):
+        try:
+            from permits.ai.provider import AI_DISCLAIMER, chat_completion
+
+            lines = [
+                "- [%s] %s: %s"
+                % (a.get("severity", ""), a.get("item_name", ""), a.get("message", ""))
+                for a in result["anomalies"]
+            ]
+            note = chat_completion(
+                system=(
+                    "You are a fibre network quantity surveyor. In at most 3 short "
+                    "sentences, explain what these BOQ anomalies likely mean and what "
+                    "the reviewer should check first. Do not invent numbers."
+                ),
+                user="\n".join(lines),
+                max_tokens=400,
+                timeout_s=15.0,
+            )
+            if note:
+                result["ai_summary"] = note
+                result["ai_disclaimer"] = AI_DISCLAIMER
+        except Exception:
+            pass
+    return result
+
+
 class BoqView(APIView):
     """
     Return the computed BOQ/BOM for a completed HLD run.
@@ -1007,19 +1048,13 @@ class BoqView(APIView):
 
         # Tier-1 A4: anomaly screening — flags quantities that look wrong
         # (zero length items, dominant line items, outliers vs siblings).
-        from .boq_anomalies import detect_boq_anomalies
-        try:
-            anomalies = detect_boq_anomalies(project_id)
-        except Exception:
-            anomalies = {"anomalies": [], "checked": 0, "basis": {}}
-
         return JsonResponse({
             "project_id": project_id,
             "boq_rows": snapshot.boq_json,
             "bom_rows": snapshot.bom_json,
             "boq_totals": snapshot.boq_totals,
             "bom_totals": snapshot.bom_totals,
-            "anomalies": anomalies,
+            "anomalies": _boq_anomalies(project_id),
             "generated_at": snapshot.regenerated_at or snapshot.created_at,
         })
 
@@ -1055,6 +1090,7 @@ class BoqRegenerateView(APIView):
             "bom_rows": snapshot.bom_json,
             "boq_totals": snapshot.boq_totals,
             "bom_totals": snapshot.bom_totals,
+            "anomalies": _boq_anomalies(project_id),
             "generated_at": snapshot.regenerated_at or snapshot.created_at,
         })
 

@@ -60,10 +60,12 @@ STAGES = [
      "outputs": ["PDPs", "MFG"]},
     {"index": 3, "name": "Trench Layer",    "algorithm": "04_trench_layer",
      "outputs": ["Final_Trenches"]},
-    {"index": 4, "name": "Cable Layer",     "algorithm": "06_cable_layer",
-     "outputs": ["Feeder_Cable", "Distribution_Cable"]},
-    {"index": 5, "name": "Duct Layer",      "algorithm": "05_duct_layer",
+    # Phase C cascade (TRENCH_DESIGN.md §6.1): ducts are laid before the
+    # cables are pulled, so the duct stage carries the lower index.
+    {"index": 4, "name": "Duct Layer",      "algorithm": "05_duct_layer",
      "outputs": ["Feeder_Ducts", "Distribution_Ducts"]},
+    {"index": 5, "name": "Cable Layer",     "algorithm": "06_cable_layer",
+     "outputs": ["Feeder_Cable", "Distribution_Cable"]},
 ]
 
 # Maps API-friendly layer name → (GPKG stem, internal layer name).

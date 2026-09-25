@@ -19,6 +19,7 @@ from .views import (
     LldRunsView,
     LldRunStatusView,
     LldRunView,
+    LldVersionsDiffView,
     LldVersionsView,
     ProjectMemberRemoveView,
     ProjectMembersView,
@@ -54,4 +55,6 @@ urlpatterns = [
          LldDownloadView.as_view(), name="ftth-lld-run-download"),
     path("ftth/lld/projects/<str:project_id>/versions/",
          LldVersionsView.as_view(), name="ftth-lld-versions"),
+    path("ftth/lld/projects/<str:project_id>/versions/diff/",
+         LldVersionsDiffView.as_view(), name="ftth-lld-versions-diff"),
 ]
