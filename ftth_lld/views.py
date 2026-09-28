@@ -204,7 +204,7 @@ def _change_type(sf):
     return "attribute"
 
 
-def _change_payload(sf, risk=None):
+def _change_payload(sf, risk=None, anomalies=None):
     comments = []
     if sf.review_notes:
         comments.append({
@@ -235,6 +235,8 @@ def _change_payload(sf, risk=None):
             "score": 0, "band": "unknown", "severity": "none",
             "likelihood": 0, "lld_impact": 0, "factors": [],
         },
+        # Tier-1 A16 — attribute contradictions (surface vs road class, etc.).
+        "anomalies": anomalies or [],
         "comments": comments,
         "approval_history": [
             {
@@ -257,6 +259,18 @@ def _risk_band_counts(changes):
     for c in changes:
         band = (c.get("risk") or {}).get("band") or "low"
         counts[band] = counts.get(band, 0) + 1
+    return counts
+
+
+def _anomaly_counts(changes):
+    """{error: n, warn: n, flagged: n} over a change payload list (A16)."""
+    counts = {"error": 0, "warn": 0, "flagged": 0}
+    for c in changes:
+        for a in (c.get("anomalies") or []):
+            counts["flagged"] += 1
+            sev = a.get("severity")
+            if sev in counts:
+                counts[sev] += 1
     return counts
 
 
@@ -425,7 +439,17 @@ class LldReviewView(APIView):
                 .iterator(chunk_size=500)
             )
             risk_by_id = score_changes(sfs)
-            changes = [_change_payload(sf, risk_by_id.get(str(sf.id))) for sf in sfs]
+            # Tier-1 A16 — deterministic attribute-anomaly scan over the same
+            # pass (surface vs road class, construction, reinstatement and the
+            # surveyed majority on the street).
+            from survey.anomaly import detect_anomalies
+
+            anomalies_by_id = detect_anomalies(sfs)
+            changes = [
+                _change_payload(sf, risk_by_id.get(str(sf.id)),
+                                anomalies_by_id.get(str(sf.id)))
+                for sf in sfs
+            ]
             # Highest-risk changes first — the review queue priority order.
             changes.sort(key=lambda c: -c["risk"]["score"])
 
@@ -514,7 +538,15 @@ class LldProjectsView(APIView):
             from survey.risk_scoring import score_changes
 
             risk_by_id = score_changes(sfs)
-            changes = [_change_payload(sf, risk_by_id.get(str(sf.id))) for sf in sfs]
+            # Tier-1 A16 — deterministic attribute-anomaly scan (see above).
+            from survey.anomaly import detect_anomalies
+
+            anomalies_by_id = detect_anomalies(sfs)
+            changes = [
+                _change_payload(sf, risk_by_id.get(str(sf.id)),
+                                anomalies_by_id.get(str(sf.id)))
+                for sf in sfs
+            ]
             # Highest-risk changes first — the review queue priority order.
             changes.sort(key=lambda c: -c["risk"]["score"])
             projects.append({
@@ -529,6 +561,7 @@ class LldProjectsView(APIView):
                 "ready": pending == 0 and correction == 0,
                 "approved_survey_version": asv.version if asv else None,
                 "risk_bands": _risk_band_counts(changes),
+                "anomalies": _anomaly_counts(changes),
                 "changes": changes,
             })
         return JsonResponse({"projects": projects})
@@ -1033,6 +1066,30 @@ class LldApprovedVersionView(APIView):
                     "Cannot create Approved Survey Version: approved reroute "
                     "geometry is missing its original HLD baseline for feature(s): "
                     + ", ".join(missing_reroute_baseline[:10])
+                )
+            }, status=400)
+
+        # Tier-1 A16 — an attribute contradiction blocks the freeze exactly
+        # like a missing reroute baseline: freezing it would bake a physically
+        # impossible record into the authoritative dataset. Suspicions
+        # (severity "warn") are reported, never blocking.
+        from survey.anomaly import freeze_blockers
+
+        attr_blockers = freeze_blockers(
+            SurveyFeature.objects.filter(
+                project=copy,
+                survey_status__in=(
+                    SurveyFeature.SurveyStatus.APPROVED,
+                    SurveyFeature.SurveyStatus.COMPLETED,
+                ),
+            )
+        )
+        if attr_blockers:
+            return JsonResponse({
+                "detail": (
+                    "Cannot create Approved Survey Version: attribute "
+                    "contradiction(s) in approved change(s) — "
+                    + "; ".join(msg for _sid, msg in attr_blockers[:5])
                 )
             }, status=400)
 
