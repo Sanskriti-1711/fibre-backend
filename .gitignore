@@ -51,3 +51,5 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+run_lld_once.py
+permits/classify_labels.jsonl
