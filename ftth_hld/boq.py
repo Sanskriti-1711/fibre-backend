@@ -67,6 +67,14 @@ _TRENCH_RULES = [
     ("Drill_Trench", "2.6"),       # legacy per-tier sublayer tag
 ]
 
+# Surface attribution on Open Cut trenches drives restoration item codes.
+# 2.11 = carriageway (asphalt/road), 2.12 = footway (paving/pavement).
+_SURFACE_TO_RESTORATION_CODE = {
+    "asphalt": "2.11", "road": "2.11", "carriageway": "2.11", "tarmac": "2.11",
+    "footpath": "2.12", "footway": "2.12", "sidewalk": "2.12", "pavement": "2.12",
+}
+_DEFAULT_RESTORATION_CODE = "2.11"
+
 # Ducts (section 3) — from the ducts layer, keyed by DUCT_TYPE.
 _DUCT_RULES = [
     ("4-Way HDPE", "3.1"),   # Feeder duct HDPE 50/40
@@ -442,6 +450,33 @@ def _sum_by_trench_class(project_id: str) -> Dict[str, float]:
     return totals
 
 
+def _sum_open_cut_by_surface(project_id: str) -> Dict[str, float]:
+    """Open-cut metres split by SURFACE → restoration item code.
+
+    Reads the same Final_Trenches layer as ``_sum_by_trench_class`` but only
+    counts Open Cut features, grouping them by their SURFACE attribute. Missing
+    or unrecognised surfaces fall back to the asphalt restoration code (2.11)
+    so legacy projects without surface attribution keep the old behaviour.
+    """
+    totals: Dict[str, float] = {}
+    layer = _get_layer(project_id, "trenches")
+    for f in _iter_features(layer):
+        props = f.get("properties", {}) or {}
+        if _is_reused(props):
+            continue
+        # Only Open Cut has road/footpath restoration to split.
+        construct = str(props.get("trench_type") or
+                        props.get("CONSTRUCT") or
+                        props.get("USAGE_TYPE") or "")
+        if construct not in ("Open Cut", "Feeder_Trench", "Distribution_Trench"):
+            continue
+        surf = str(props.get("SURFACE") or "").strip().lower()
+        code = _SURFACE_TO_RESTORATION_CODE.get(surf, _DEFAULT_RESTORATION_CODE)
+        qty = _new_build_length(props, f)
+        totals[code] = totals.get(code, 0.0) + qty
+    return totals
+
+
 def reused_metres(project_id: str) -> Dict[str, float]:
     """Metres of trench/duct/cable riding existing infrastructure.
 
@@ -520,11 +555,13 @@ def compute_quantities(project_id: str) -> Dict[str, float]:
     for code, total in trench_totals.items():
         qty[code] = qty.get(code, 0.0) + total
 
-    # 2.11 Road restoration (asphalt) = the open-cut trench metres under the
-    #     road; 2.12 brick/paving has no data source.
-    road_cut = qty.get("2.1", 0.0)
-    if road_cut:
-        qty["2.11"] = qty.get("2.11", 0.0) + road_cut
+    # 2.11/2.12 Restoration = open-cut metres classified by SURFACE.
+    # Asphalt/carriageway spans restore the road (2.11); footway/pavement spans
+    # restore the sidewalk (2.12). Unrecognised or missing surface falls back
+    # to 2.11, preserving the legacy behaviour for pre-surface designs.
+    restoration = _sum_open_cut_by_surface(project_id)
+    for code, total in restoration.items():
+        qty[code] = qty.get(code, 0.0) + total
 
     # 2.13 Aerial drop legs — classified by the trench stage, NOT excavated.
     #     They are deliberately absent from Final_Trenches (nothing is dug), so
