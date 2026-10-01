@@ -17,6 +17,7 @@ import os
 import re
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 from typing import Optional
 
 import requests
@@ -574,11 +575,78 @@ def sync_project_layers(project_id: str, layer_names=None) -> dict:
     return counts
 
 
+def get_surface_ai_review(project_id: str) -> dict | None:
+    """Read the separate surface-AI review report from the engine, if present."""
+    url = _engine_url(
+        f"/ftth/hld/results/{quote(str(project_id), safe='')}/surface-ai-review"
+    )
+    try:
+        resp = requests.get(url, timeout=30)
+        if resp.status_code == 200:
+            return resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Could not load surface AI review for %s: %s", project_id, exc)
+    return None
+
+
+# A point classify fetches imagery and runs the vision model inside the engine,
+# which bounds slow local inference itself (SURFACE_AI_OLLAMA_TIMEOUT). This
+# timeout only guards transport, so it sits just above that bound.
+SURFACE_CLASSIFY_TIMEOUT_SECONDS = 300
+
+
+def classify_surface_at_point(project_id: str, coordinates, crs: str = "EPSG:4326",
+                              length_m=None, bearing=None) -> dict:
+    """Classify the surface at one clicked map coordinate (advisory only).
+
+    Returns the engine's single review item. Only transport failures or a
+    non-200 upstream status raise ``EngineError``; a refusal the engine chose
+    to report (for example ``review_status: "error"`` because the vision model
+    answered with unparseable JSON) is a normal 200 body.
+    """
+    url = _engine_url(
+        f"/ftth/hld/results/{quote(str(project_id), safe='')}"
+        "/surface-ai-review/classify"
+    )
+    payload = {
+        "coordinates": [float(coordinates[0]), float(coordinates[1])],
+        "crs": crs or "EPSG:4326",
+    }
+    if length_m is not None:
+        payload["length_m"] = length_m
+    if bearing is not None:
+        payload["bearing"] = bearing
+    try:
+        resp = requests.post(url, json=payload,
+                             timeout=SURFACE_CLASSIFY_TIMEOUT_SECONDS)
+    except requests.RequestException as exc:
+        logger.warning("Surface point classify failed for %s: %s", project_id, exc)
+        raise EngineError(
+            502, "The engine could not complete the surface review."
+        ) from exc
+    if resp.status_code != 200:
+        raise EngineError(resp.status_code, _engine_detail(resp))
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise EngineError(
+            502, "The engine returned an unreadable surface review."
+        ) from exc
+
+
 def get_download_file(project_id: str, file_path: str) -> bytes | None:
     """
     Download an output file from the FastAPI engine.
     """
-    url = _engine_url(f"/ftth/hld/download/{project_id}/{file_path}")
+    if not file_path or "\\" in file_path or ".." in Path(file_path).parts:
+        return None
+    clean_path = Path(file_path)
+    if clean_path.is_absolute():
+        return None
+    safe_path = clean_path.as_posix()
+    url = _engine_url(
+        f"/ftth/hld/download/{project_id}/{quote(safe_path, safe='/')}"
+    )
 
     try:
         resp = requests.get(url, timeout=60)
@@ -589,7 +657,7 @@ def get_download_file(project_id: str, file_path: str) -> bytes | None:
                        project_id, file_path, exc)
 
     # Fallback: try locally-cached file
-    host_file = HOST_OUTPUTS_DIR / project_id / file_path
+    host_file = HOST_OUTPUTS_DIR / project_id / safe_path
     if host_file.exists() and host_file.is_file():
         return host_file.read_bytes()
 

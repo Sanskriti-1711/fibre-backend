@@ -31,6 +31,8 @@ from .api import (
     RunFromAreaView,
     RunPipelineView,
     SurveyPackageView,
+    SurfaceAIReviewView,
+    SurfaceAIPointClassifyView,
 )
 
 urlpatterns = [
@@ -60,6 +62,14 @@ urlpatterns = [
 
     # GET  /api/ftth/hld/results/<id>/ — poll pipeline status & messages
     path("ftth/hld/results/<str:project_id>/", PipelineStatusView.as_view(), name="ftth-status"),
+
+    # GET  /api/ftth/hld/results/<id>/surface-ai-review/ — review-only suggestions
+    path("ftth/hld/results/<str:project_id>/surface-ai-review/",
+         SurfaceAIReviewView.as_view(), name="ftth-surface-ai-review"),
+
+    # POST /api/ftth/hld/results/<id>/surface-ai-review/classify/ — one clicked point
+    path("ftth/hld/results/<str:project_id>/surface-ai-review/classify/",
+         SurfaceAIPointClassifyView.as_view(), name="ftth-surface-ai-classify"),
 
     # GET  /api/ftth/hld/results/<id>/layers/<name>/ — GeoJSON for one layer
     path("ftth/hld/results/<str:project_id>/layers/<str:layer_name>/",

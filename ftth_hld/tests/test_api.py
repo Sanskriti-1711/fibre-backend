@@ -22,6 +22,7 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from ftth_hld.models import FtthLayer, FtthProject
+from ftth_hld.pipeline import EngineError
 from testutils.factories import (
     LINE,
     make_feature,
@@ -75,6 +76,8 @@ class HldAuthTests(HldApiTestCase):
             ("get", "/api/ftth/hld/results/%s/trench-design/" % project_id),
             ("post", "/api/ftth/hld/results/%s/trench-design/run/" % project_id),
             ("post", "/api/ftth/hld/run/"),
+            ("get", "/api/ftth/hld/results/%s/surface-ai-review/" % project_id),
+            ("post", "/api/ftth/hld/results/%s/surface-ai-review/classify/" % project_id),
         ]
         for method, url in checks:
             with self.subTest(url=url, method=method):
@@ -562,6 +565,75 @@ class EngineerAccessTests(HldApiTestCase):
         with mock.patch("ftth_hld.api.delete_project", return_value={"deleted": True}):
             response = self.client.delete(f"/api/ftth/hld/projects/{ftth.project_id}/")
         self.assertEqual(response.status_code, 200)
+
+
+# ======================================================================
+# POST /api/ftth/hld/results/<id>/surface-ai-review/classify/
+# ======================================================================
+
+class SurfaceAIPointClassifyViewTests(HldApiTestCase):
+    """Classify one clicked map coordinate (advisory only)."""
+
+    _URL = "/api/ftth/hld/results/%s/surface-ai-review/classify/"
+
+    def setUp(self):
+        super().setUp()
+        self.project = make_ftth_project()
+
+    def _post(self, payload, project_id=None):
+        return self.client.post(
+            self._URL % (project_id or self.project.pk),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def test_delegates_to_the_engine_and_returns_its_item(self):
+        item = {"AI_SURFACE": "road", "confidence": 0.8,
+                "review_status": "pending", "span_id": "CLICK-1.52490-49.07620"}
+        with mock.patch("ftth_hld.api.classify_surface_at_point",
+                        return_value=item) as engine:
+            response = self._post({"coordinates": [1.5249, 49.0762],
+                                   "crs": "EPSG:4326"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), item)
+        engine.assert_called_once()
+        args, kwargs = engine.call_args
+        self.assertEqual(args[0], self.project.pk)
+        self.assertEqual(args[1], [1.5249, 49.0762])
+        self.assertEqual(kwargs["crs"], "EPSG:4326")
+
+    def test_rejects_malformed_coordinates_without_calling_the_engine(self):
+        with mock.patch("ftth_hld.api.classify_surface_at_point") as engine:
+            for payload in ({}, {"coordinates": [1.0]},
+                            {"coordinates": ["a", "b"]}, {"coordinates": None}):
+                with self.subTest(payload=payload):
+                    response = self._post(payload)
+                    self.assertEqual(response.status_code, 400)
+        engine.assert_not_called()
+
+    def test_unknown_project_is_404(self):
+        with mock.patch("ftth_hld.api.classify_surface_at_point") as engine:
+            response = self._post({"coordinates": [1.0, 49.0]}, project_id="f" * 32)
+        self.assertEqual(response.status_code, 404)
+        engine.assert_not_called()
+
+    def test_engine_status_code_travels_to_the_caller(self):
+        with mock.patch(
+            "ftth_hld.api.classify_surface_at_point",
+            side_effect=EngineError(400, "coordinates must be [x, y]"),
+        ):
+            response = self._post({"coordinates": [1.0, 49.0]})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "coordinates must be [x, y]")
+
+    def test_vision_review_refusal_is_still_a_normal_200(self):
+        # The engine reports an unparseable model answer as a 200 with
+        # review_status "error" — a suggestion that failed, not a gateway fault.
+        item = {"review_status": "error", "reason": "ValueError", "AI_SURFACE": None}
+        with mock.patch("ftth_hld.api.classify_surface_at_point", return_value=item):
+            response = self._post({"coordinates": [1.5249, 49.0762]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["review_status"], "error")
 
 
 # Keep a reference so linters see the imported factory helpers as used by

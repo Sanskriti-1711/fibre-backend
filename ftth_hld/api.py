@@ -43,6 +43,8 @@ logger = logging.getLogger(__name__)
 from .pipeline import (
     HOST_OUTPUTS_DIR,
     EngineError,
+    classify_surface_at_point,
+    get_surface_ai_review,
     delete_project,
     get_area_fetch,
     get_input_layer,
@@ -55,6 +57,7 @@ from .pipeline import (
     generate_survey_package,
     get_download_file,
     get_layer_geojson,
+    get_surface_ai_review,
     ftth_project_payloads,
     get_status,
     persist_layer,
@@ -700,6 +703,73 @@ def _enrich_trench_layer(project_id: str, geojson: dict) -> dict:
             "properties": props,
         })
     return {"type": "FeatureCollection", "features": features}
+
+
+class SurfaceAIReviewView(APIView):
+    """Read the separate, review-only surface AI suggestions for an HLD run."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id):
+        try:
+            FtthProject.objects.only("pk").get(pk=project_id)
+        except FtthProject.DoesNotExist:
+            return JsonResponse(
+                {"detail": "Project not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        report = get_surface_ai_review(project_id)
+        if report is None:
+            return JsonResponse(
+                {"detail": "Surface AI review is not available."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return JsonResponse(report)
+
+
+class SurfaceAIPointClassifyView(APIView):
+    """Classify the surface under one clicked map coordinate (advisory only).
+
+    Proxies the engine's point classifier: fresh imagery for the clicked point,
+    one vision-model answer, never a design change. The engine bounds slow
+    local inference itself, so a request may legitimately take a while.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+        try:
+            FtthProject.objects.only("pk").get(pk=project_id)
+        except FtthProject.DoesNotExist:
+            return JsonResponse(
+                {"detail": "Project not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        payload = request.data if isinstance(request.data, dict) else {}
+        coordinates = payload.get("coordinates")
+        if not isinstance(coordinates, (list, tuple)) or len(coordinates) < 2:
+            return JsonResponse(
+                {"detail": "coordinates must be [x, y]."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            coordinates = [float(coordinates[0]), float(coordinates[1])]
+        except (TypeError, ValueError):
+            return JsonResponse(
+                {"detail": "coordinates must be numeric."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            item = classify_surface_at_point(
+                project_id,
+                coordinates,
+                crs=payload.get("crs") or "EPSG:4326",
+                length_m=payload.get("length_m"),
+                bearing=payload.get("bearing"),
+            )
+        except EngineError as exc:
+            return JsonResponse({"detail": exc.detail}, status=exc.status_code)
+        return JsonResponse(item)
 
 
 class LayerGeoJSONView(APIView):
