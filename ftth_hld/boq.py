@@ -94,7 +94,96 @@ _CABLE_RULES = [
     (("Distribution", "24"), "4.6"),
     (("Distribution", "12"), "4.7"),
     (("Distribution", "4"), "4.8"),
+    # Drop sizes are separate materials from shared distribution trunks.
+    # The legacy BOQ template has no line items for these, so build_boq_rows
+    # will keep their exact size in clearly named, unpriced extension rows.
+    (("Drop", "12"), "4.11"),
+    (("Drop", "24"), "4.12"),
+    (("Drop", "48"), "4.13"),
+    (("Drop", "72"), "4.14"),
+    (("Drop", "96"), "4.15"),
+    (("Drop", "144"), "4.16"),
+    (("Drop", "288"), "4.17"),
+    (("Aerial", "12"), "4.11"),
+    (("Aerial", "24"), "4.12"),
+    (("Aerial", "48"), "4.13"),
+    (("Aerial", "72"), "4.14"),
+    (("Aerial", "96"), "4.15"),
+    (("Aerial", "144"), "4.16"),
+    (("Aerial", "288"), "4.17"),
+    # Exact ladder capacities for distribution trunks not represented in the
+    # original rate card; emitted as unpriced extension rows, not mislabelled
+    # as 12/24F materials.
+    (("Distribution", "48"), "4.18"),
+    (("Distribution", "72"), "4.19"),
+    (("Distribution", "96"), "4.20"),
+    (("Distribution", "144"), "4.21"),
+    (("Distribution", "288"), "4.22"),
 ]
+_OVER_CAPACITY_CODE = "4.10"
+_CAPACITY_EXTENSION_NAMES = {
+    "4.10": "Over-capacity drops requiring engineering review",
+    "4.11": "Physical-location drop cable 12 FO",
+    "4.12": "Physical-location drop cable 24 FO",
+    "4.13": "Physical-location drop cable 48 FO",
+    "4.14": "Physical-location drop cable 72 FO",
+    "4.15": "Physical-location drop cable 96 FO",
+    "4.16": "Physical-location drop cable 144 FO",
+    "4.17": "Physical-location drop cable 288 FO",
+    "4.18": "Distribution trunk cable 48 FO",
+    "4.19": "Distribution trunk cable 72 FO",
+    "4.20": "Distribution trunk cable 96 FO",
+    "4.21": "Distribution trunk cable 144 FO",
+    "4.22": "Distribution trunk cable 288 FO",
+}
+
+
+def _capacity_review_features(project_id: str) -> List[Dict[str, Any]]:
+    """Cable features whose capacity metadata explicitly requires review."""
+    issues = []
+    for feature in _iter_features(_get_layer(project_id, "cables")):
+        props = feature.get("properties", {}) or {}
+        if str(props.get("CABLE_TYPE") or "").strip().lower() not in ("drop", "aerial"):
+            continue
+        try:
+            hh = int(float(props.get("HH_COUNT") or props.get("hhs") or 0))
+            capacity = int(float(props.get("FIBER_COUNT") or props.get("fiber_count") or 0))
+        except (TypeError, ValueError):
+            hh, capacity = 0, 0
+        over = (
+            str(props.get("CAPACITY_STATUS") or "").upper() == "OVER_CAPACITY"
+            or bool(props.get("REVIEW"))
+            or (capacity > 0 and hh + 2 > capacity)
+            or (hh + 2 > 288)
+        )
+        if over:
+            issues.append({
+                "feature_id": props.get("feature_id") or props.get("ADDR_ID") or props.get("addr_id"),
+                "hh_count": hh,
+                "fiber_count": capacity,
+                "capacity_warning": props.get("CAPACITY_WARNING") or "",
+            })
+    return issues
+
+
+def _cable_item_code(cable_type: str, fiber_count: str) -> Optional[str]:
+    """Return the exact cable-size BOQ code when the catalogue has a mapping."""
+    return dict(_CABLE_RULES).get((str(cable_type or "").strip().title(), str(fiber_count or "").strip()))
+
+
+def _cable_item_name(code: str) -> str:
+    if code in _CAPACITY_EXTENSION_NAMES:
+        return _CAPACITY_EXTENSION_NAMES[code]
+    return _fallback_name(code)
+
+
+def _boq_capacity_audit(project_id: str) -> Dict[str, Any]:
+    """Summarize drop capacity findings for inclusion in BOQ quantities."""
+    features = _capacity_review_features(project_id)
+    return {
+        "over_capacity_drop_count": len(features),
+        "over_capacity_drops": features,
+    }
 
 # OTB distribution (section 7) — premises per polygon decides the tier.
 _OTB_TIERS = [
@@ -533,14 +622,26 @@ def compute_quantities(project_id: str) -> Dict[str, float]:
     """
     qty: Dict[str, float] = {}
 
-    # 1. SUMMARY — home passes (access network) = Σ HH over the premises;
+    # 1. SUMMARY — home passes (access network) = Σ households over the premises;
     #    backhaul design (1.2) has no design input and stays 0.
     objects_layer = _get_layer(project_id, "objects")
     object_count = sum(1 for _ in _iter_features(objects_layer))
     home_passes = 0
+    _seen_buildings = set()
     for f in _iter_features(objects_layer):
         try:
-            home_passes += int((f.get("properties") or {}).get("HH") or 0)
+            _props = f.get("properties") or {}
+            # `households` is a building's total repeated on each of its service
+            # locations, so summing it per ROW would count a multi-address block
+            # more than once.  Count each building once.
+            _building = _props.get("OSM_ID") or _props.get("ADDR_ID")
+            if _building is not None:
+                if _building in _seen_buildings:
+                    continue
+                _seen_buildings.add(_building)
+            home_passes += int(
+                _props.get("households") or _props.get("HH") or 0
+            )
         except (TypeError, ValueError):
             pass
     if home_passes:
@@ -596,16 +697,44 @@ def compute_quantities(project_id: str) -> Dict[str, float]:
     cable_totals: Dict[str, float] = {}
     feeder_fo = 0
     cable_layer = _get_layer(project_id, "cables")
-    for f in _iter_features(cable_layer):
+    cable_features = list(_iter_features(cable_layer))
+    capacity_review = []
+    for f in cable_features:
         props = f.get("properties", {}) or {}
         if _is_reused(props):
             continue  # reused fibre — not new cable material
         ctype = str(props.get("CABLE_TYPE") or props.get("cable_type") or "")
         fibers = str(props.get("FIBER_COUNT") or props.get("fiber_count") or "")
+        if ctype.strip().lower() in ("drop", "aerial"):
+            try:
+                hh_load = int(float(props.get("HH_COUNT") or props.get("hhs") or 0))
+                fiber_load = int(float(fibers or 0))
+            except (TypeError, ValueError):
+                hh_load, fiber_load = 0, 0
+            if (
+                str(props.get("CAPACITY_STATUS") or "").upper() == "OVER_CAPACITY"
+                or bool(props.get("REVIEW"))
+                or hh_load + 2 > fiber_load
+                or hh_load + 2 > 288
+            ):
+                capacity_review.append({
+                    "feature_id": props.get("feature_id") or props.get("ADDR_ID") or props.get("addr_id"),
+                    "hh_count": hh_load,
+                    "fiber_count": fiber_load,
+                    "capacity_warning": props.get("CAPACITY_WARNING") or "",
+                })
         key = (ctype, fibers)
-        code = dict(_CABLE_RULES).get(key)
+        code = _cable_item_code(ctype, fibers)
+        if ctype.strip().lower() in ("drop", "aerial") and code is None:
+            code = _cable_item_code("Drop", fibers)
         if code is None:
-            code = "4.1" if ctype.lower().startswith("feeder") else "4.6"
+            # Unknown cable size remains visible as the most appropriate
+            # generic catalogue item, while known ladder sizes keep exact rows.
+            if ctype.strip().lower() in ("drop", "aerial"):
+                code = _cable_item_code("Drop", fibers) or "4.11"
+            else:
+                code = "4.1" if ctype.lower().startswith("feeder") else "4.6"
+
         raw = props.get("LENGTH_M") or props.get("length_m")
         try:
             length = float(raw) if raw is not None else _geometry_length(f.get("geometry"))
@@ -619,6 +748,9 @@ def compute_quantities(project_id: str) -> Dict[str, float]:
                 pass
     for code, total in cable_totals.items():
         qty[code] = qty.get(code, 0.0) + total
+
+    if capacity_review:
+        qty[_OVER_CAPACITY_CODE] = float(len(capacity_review))
 
     # Cable surplus (+2%) → 4.9
     cable_sum = sum(cable_totals.values())
@@ -801,12 +933,15 @@ def build_boq_rows(quantities: Dict[str, float]) -> List[Dict]:
         rows.append({
             "section": _section_for(code),
             "item_code": code,
-            "item_name": _fallback_name(code),
-            "unit": "m" if _is_length(code) else "ea",
+            "item_name": _cable_item_name(code),
+            "unit": "ea" if code == _OVER_CAPACITY_CODE else ("m" if _is_length(code) else "ea"),
             "quantity": quantities[code],
             "material_rate": 0.0, "labour_rate": 0.0, "rent_rate": 0.0,
             "material_total": 0.0, "labour_total": 0.0, "amount": 0.0,
-            "notes": "No rate card entry",
+            "notes": (
+                "Capacity review required — see cable CAPACITY_WARNING and REVIEW fields"
+                if code == _OVER_CAPACITY_CODE else "No rate card entry; add project pricing"
+            ),
         })
     return rows
 

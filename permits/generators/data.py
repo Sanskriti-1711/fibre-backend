@@ -280,7 +280,7 @@ def pdp_schedule(project_id: str) -> list[dict[str, Any]]:
             "equip_capacity": p.get("EQUIP_CAPACITY") or "",
             "split_ratio": p.get("SPLIT_RATIO") or "",
             "split_ports": p.get("SPL_PORTS") or "",
-            "hh": p.get("HH") or "",
+            "hh": p.get("households") or p.get("HH") or "",
             "power_required": p.get("POWER_REQ") or "",
             "location": p.get("LOCATION") or "",
         })
