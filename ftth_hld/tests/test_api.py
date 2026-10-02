@@ -78,6 +78,7 @@ class HldAuthTests(HldApiTestCase):
             ("post", "/api/ftth/hld/run/"),
             ("get", "/api/ftth/hld/results/%s/surface-ai-review/" % project_id),
             ("post", "/api/ftth/hld/results/%s/surface-ai-review/classify/" % project_id),
+            ("post", "/api/ftth/hld/results/%s/surface-ai-review/imagery/" % project_id),
         ]
         for method, url in checks:
             with self.subTest(url=url, method=method):
@@ -634,6 +635,104 @@ class SurfaceAIPointClassifyViewTests(HldApiTestCase):
             response = self._post({"coordinates": [1.5249, 49.0762]})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["review_status"], "error")
+
+    def test_span_payload_reaches_the_engine_with_its_own_route(self):
+        # A per-span opt-in sends the span's real geometry, so exactly one model
+        # call is spent on the span the reader chose.
+        item = {"AI_SURFACE": "garden", "review_status": "pending", "span_id": "TR-1"}
+        route = [[1.5249, 49.0762], [1.52492, 49.07618]]
+        with mock.patch("ftth_hld.api.classify_surface_at_point",
+                        return_value=item) as engine:
+            response = self._post({
+                "span_id": "TR-1",
+                "coordinates": route,
+                "coordinates_crs": "EPSG:25833",
+                "claimed_surface": "Footpath",
+                "include_imagery": True,
+            })
+        self.assertEqual(response.status_code, 200)
+        args, kwargs = engine.call_args
+        self.assertEqual(args[0], self.project.pk)
+        self.assertEqual(args[1], route)
+        self.assertEqual(kwargs["span_id"], "TR-1")
+        self.assertEqual(kwargs["coordinates_crs"], "EPSG:25833")
+        self.assertEqual(kwargs["claimed_surface"], "Footpath")
+        self.assertTrue(kwargs["include_imagery"])
+
+    def test_a_route_without_a_span_id_is_rejected(self):
+        with mock.patch("ftth_hld.api.classify_surface_at_point") as engine:
+            response = self._post({"coordinates": [[1.0, 49.0], [1.001, 49.001]]})
+        self.assertEqual(response.status_code, 400)
+        engine.assert_not_called()
+
+
+# ======================================================================
+# POST /api/ftth/hld/results/<id>/surface-ai-review/imagery/
+# ======================================================================
+
+class SurfaceAIImageryViewTests(HldApiTestCase):
+    """Show the imagery patch a detect would send, without calling the model."""
+
+    _URL = "/api/ftth/hld/results/%s/surface-ai-review/imagery/"
+
+    def setUp(self):
+        super().setUp()
+        self.project = make_ftth_project()
+
+    def _post(self, payload, project_id=None):
+        return self.client.post(
+            self._URL % (project_id or self.project.pk),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def test_delegates_to_the_engine_and_returns_the_patch(self):
+        item = {"review_status": "pending", "image_base64": "aGk=",
+                "imagery_source": "Esri World Imagery", "span_id": "TR-1"}
+        route = [[1.5249, 49.0762], [1.52492, 49.07618]]
+        with mock.patch("ftth_hld.api.preview_surface_imagery",
+                        return_value=item) as engine:
+            response = self._post({"span_id": "TR-1", "coordinates": route,
+                                   "coordinates_crs": "EPSG:25833"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), item)
+        args, _kwargs = engine.call_args
+        self.assertEqual(args[0], self.project.pk)
+        self.assertEqual(args[1]["coordinates"], route)
+        self.assertEqual(args[1]["coordinates_crs"], "EPSG:25833")
+        self.assertEqual(args[1]["span_id"], "TR-1")
+
+    def test_a_clicked_point_forwards_its_crs(self):
+        with mock.patch("ftth_hld.api.preview_surface_imagery",
+                        return_value={"review_status": "no_imagery"}) as engine:
+            response = self._post({"coordinates": [1.5249, 49.0762],
+                                   "crs": "EPSG:4326"})
+        self.assertEqual(response.status_code, 200)
+        args, _kwargs = engine.call_args
+        self.assertEqual(args[1]["crs"], "EPSG:4326")
+
+    def test_rejects_malformed_coordinates_without_calling_the_engine(self):
+        with mock.patch("ftth_hld.api.preview_surface_imagery") as engine:
+            for payload in ({}, {"coordinates": [1.0]}, {"coordinates": None}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(self._post(payload).status_code, 400)
+        engine.assert_not_called()
+
+    def test_unknown_project_is_404(self):
+        with mock.patch("ftth_hld.api.preview_surface_imagery") as engine:
+            response = self._post({"coordinates": [1.0, 49.0]}, project_id="f" * 32)
+        self.assertEqual(response.status_code, 404)
+        engine.assert_not_called()
+
+    def test_engine_status_code_travels_to_the_caller(self):
+        with mock.patch(
+            "ftth_hld.api.preview_surface_imagery",
+            side_effect=EngineError(502, "The engine could not fetch the surface imagery."),
+        ):
+            response = self._post({"coordinates": [1.0, 49.0]})
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"],
+                         "The engine could not fetch the surface imagery.")
 
 
 # Keep a reference so linters see the imported factory helpers as used by

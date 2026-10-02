@@ -596,26 +596,40 @@ SURFACE_CLASSIFY_TIMEOUT_SECONDS = 300
 
 
 def classify_surface_at_point(project_id: str, coordinates, crs: str = "EPSG:4326",
-                              length_m=None, bearing=None) -> dict:
-    """Classify the surface at one clicked map coordinate (advisory only).
+                              length_m=None, bearing=None, span_id=None,
+                              coordinates_crs=None, include_imagery=False,
+                              claimed_surface=None, geometry_reason=None,
+                              geometry_confidence=None, known_share=None) -> dict:
+    """Classify the surface at one clicked point or along one span (advisory only).
 
-    Returns the engine's single review item. Only transport failures or a
-    non-200 upstream status raise ``EngineError``; a refusal the engine chose
-    to report (for example ``review_status: "error"`` because the vision model
-    answered with unparseable JSON) is a normal 200 body.
+    ``coordinates`` is a point ``[x, y]`` for a map click, or a span's own route
+    ``[[x, y], ...]`` for a per-span opt-in; the engine tells the two apart by
+    shape, so a span caller only adds ``span_id`` and ``coordinates_crs``. Returns
+    the engine's single review item. Only transport failures or a non-200 upstream
+    status raise ``EngineError``; a refusal the engine chose to report (for
+    example ``review_status: "error"`` because the vision model answered with
+    unparseable JSON) is a normal 200 body.
     """
     url = _engine_url(
         f"/ftth/hld/results/{quote(str(project_id), safe='')}"
         "/surface-ai-review/classify"
     )
     payload = {
-        "coordinates": [float(coordinates[0]), float(coordinates[1])],
+        "coordinates": coordinates,
         "crs": crs or "EPSG:4326",
     }
-    if length_m is not None:
-        payload["length_m"] = length_m
-    if bearing is not None:
-        payload["bearing"] = bearing
+    for key, value in (
+        ("span_id", span_id), ("coordinates_crs", coordinates_crs),
+        ("length_m", length_m), ("bearing", bearing),
+        ("claimed_surface", claimed_surface),
+        ("geometry_reason", geometry_reason),
+        ("geometry_confidence", geometry_confidence),
+        ("known_share", known_share),
+    ):
+        if value is not None:
+            payload[key] = value
+    if include_imagery:
+        payload["include_imagery"] = True
     try:
         resp = requests.post(url, json=payload,
                              timeout=SURFACE_CLASSIFY_TIMEOUT_SECONDS)
@@ -631,6 +645,41 @@ def classify_surface_at_point(project_id: str, coordinates, crs: str = "EPSG:432
     except ValueError as exc:
         raise EngineError(
             502, "The engine returned an unreadable surface review."
+        ) from exc
+
+
+# An imagery preview fetches one patch and never calls the model, so it is bounded
+# by the imagery providers' own timeout plus a possible fallback retry.
+SURFACE_IMAGERY_TIMEOUT_SECONDS = 120
+
+
+def preview_surface_imagery(project_id: str, payload: dict) -> dict:
+    """Fetch the imagery patch a surface detect would send, without the model.
+
+    Imagery-only: it spends no vision-model quota, so the results page can show a
+    reader exactly what the model would be given before they opt a span or a point
+    into a detect. ``payload`` carries the same geometry as the classify route and
+    is forwarded as-is.
+    """
+    url = _engine_url(
+        f"/ftth/hld/results/{quote(str(project_id), safe='')}"
+        "/surface-ai-review/imagery"
+    )
+    try:
+        resp = requests.post(url, json=payload,
+                             timeout=SURFACE_IMAGERY_TIMEOUT_SECONDS)
+    except requests.RequestException as exc:
+        logger.warning("Surface imagery preview failed for %s: %s", project_id, exc)
+        raise EngineError(
+            502, "The engine could not fetch the surface imagery."
+        ) from exc
+    if resp.status_code != 200:
+        raise EngineError(resp.status_code, _engine_detail(resp))
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise EngineError(
+            502, "The engine returned an unreadable imagery preview."
         ) from exc
 
 

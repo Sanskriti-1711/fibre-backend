@@ -33,6 +33,7 @@ from .api import (
     SurveyPackageView,
     SurfaceAIReviewView,
     SurfaceAIPointClassifyView,
+    SurfaceAIImageryView,
 )
 
 urlpatterns = [
@@ -68,8 +69,14 @@ urlpatterns = [
          SurfaceAIReviewView.as_view(), name="ftth-surface-ai-review"),
 
     # POST /api/ftth/hld/results/<id>/surface-ai-review/classify/ — one clicked point
+    # or one opted-in span (advisory only)
     path("ftth/hld/results/<str:project_id>/surface-ai-review/classify/",
          SurfaceAIPointClassifyView.as_view(), name="ftth-surface-ai-classify"),
+
+    # POST /api/ftth/hld/results/<id>/surface-ai-review/imagery/ — patch preview,
+    # imagery only, no model call
+    path("ftth/hld/results/<str:project_id>/surface-ai-review/imagery/",
+         SurfaceAIImageryView.as_view(), name="ftth-surface-ai-imagery"),
 
     # GET  /api/ftth/hld/results/<id>/layers/<name>/ — GeoJSON for one layer
     path("ftth/hld/results/<str:project_id>/layers/<str:layer_name>/",

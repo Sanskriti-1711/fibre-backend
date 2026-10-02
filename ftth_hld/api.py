@@ -58,6 +58,7 @@ from .pipeline import (
     get_download_file,
     get_layer_geojson,
     get_surface_ai_review,
+    preview_surface_imagery,
     ftth_project_payloads,
     get_status,
     persist_layer,
@@ -728,11 +729,14 @@ class SurfaceAIReviewView(APIView):
 
 
 class SurfaceAIPointClassifyView(APIView):
-    """Classify the surface under one clicked map coordinate (advisory only).
+    """Classify the surface at one clicked point or along one span (advisory only).
 
-    Proxies the engine's point classifier: fresh imagery for the clicked point,
-    one vision-model answer, never a design change. The engine bounds slow
-    local inference itself, so a request may legitimately take a while.
+    Proxies the engine's classifier: fresh imagery for the geometry, one
+    vision-model answer, never a design change. A click sends a point
+    ``[x, y]``; a per-span opt-in sends the span's own route ``[[x, y], ...]``
+    with its ``span_id`` and ``coordinates_crs``, so exactly one span costs
+    exactly one call. The engine bounds slow local inference itself, so a request
+    may legitimately take a while.
     """
 
     permission_classes = [IsAuthenticated]
@@ -749,16 +753,24 @@ class SurfaceAIPointClassifyView(APIView):
         coordinates = payload.get("coordinates")
         if not isinstance(coordinates, (list, tuple)) or len(coordinates) < 2:
             return JsonResponse(
-                {"detail": "coordinates must be [x, y]."},
+                {"detail": "coordinates must be [x, y] or a span route."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        try:
-            coordinates = [float(coordinates[0]), float(coordinates[1])]
-        except (TypeError, ValueError):
-            return JsonResponse(
-                {"detail": "coordinates must be numeric."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if not isinstance(coordinates[0], (list, tuple)):
+            try:
+                coordinates = [float(coordinates[0]), float(coordinates[1])]
+            except (TypeError, ValueError):
+                return JsonResponse(
+                    {"detail": "coordinates must be numeric."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            span_id = payload.get("span_id")
+            if not span_id:
+                return JsonResponse(
+                    {"detail": "A span detect needs a span_id."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         try:
             item = classify_surface_at_point(
                 project_id,
@@ -766,7 +778,53 @@ class SurfaceAIPointClassifyView(APIView):
                 crs=payload.get("crs") or "EPSG:4326",
                 length_m=payload.get("length_m"),
                 bearing=payload.get("bearing"),
+                span_id=payload.get("span_id"),
+                coordinates_crs=payload.get("coordinates_crs"),
+                include_imagery=bool(payload.get("include_imagery")),
+                claimed_surface=payload.get("claimed_surface"),
+                geometry_reason=payload.get("geometry_reason"),
+                geometry_confidence=payload.get("geometry_confidence"),
+                known_share=payload.get("known_share"),
             )
+        except EngineError as exc:
+            return JsonResponse({"detail": exc.detail}, status=exc.status_code)
+        return JsonResponse(item)
+
+
+class SurfaceAIImageryView(APIView):
+    """Return the imagery patch a surface detect would send, without the model.
+
+    Imagery-only and free of vision-model quota, so the results page can show a
+    reader exactly what the model would be given before they opt a span or a
+    point into a detect. It forwards the same geometry as the classify route.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+        try:
+            FtthProject.objects.only("pk").get(pk=project_id)
+        except FtthProject.DoesNotExist:
+            return JsonResponse(
+                {"detail": "Project not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        payload = request.data if isinstance(request.data, dict) else {}
+        coordinates = payload.get("coordinates")
+        if not isinstance(coordinates, (list, tuple)) or len(coordinates) < 2:
+            return JsonResponse(
+                {"detail": "coordinates must be [x, y] or a span route."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        forwarded = {
+            "coordinates": coordinates,
+            "crs": payload.get("crs") or payload.get("coordinates_crs") or "EPSG:4326",
+        }
+        for key in ("span_id", "coordinates_crs", "length_m", "bearing"):
+            if payload.get(key) is not None:
+                forwarded[key] = payload[key]
+        try:
+            item = preview_surface_imagery(project_id, forwarded)
         except EngineError as exc:
             return JsonResponse({"detail": exc.detail}, status=exc.status_code)
         return JsonResponse(item)
