@@ -47,7 +47,9 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -160,13 +162,59 @@ class HttpPortalAdapter(SyncAdapter):
     }
 
     def is_enabled(self) -> bool:
-        import os
-
         return bool((os.getenv("PERMITS_PORTAL_URL") or "").strip())
 
-    def poll(self, submission: PermitSubmission) -> SyncResult | None:
-        import os
+    #: Our submission statuses, the only values a mapping may target.
+    OUR_STATUSES = frozenset({
+        PermitSubmission.STATUS_SUBMITTED,
+        PermitSubmission.STATUS_UNDER_REVIEW,
+        PermitSubmission.STATUS_APPROVED,
+        PermitSubmission.STATUS_REJECTED,
+        PermitSubmission.STATUS_CLOSED,
+    })
 
+    def _configured_status_map(self) -> dict[str, str]:
+        """Portal-specific vocabulary from ``PERMITS_PORTAL_STATUS_MAP`` (JSON).
+
+        Every portal names its states its own way, so the mapping is data, not
+        code: ``{"<remote status>": "<our status>"}``. This is what makes the
+        adapter portal-agnostic — pointing it at a real portal is a config
+        change, and no adapter edit is needed when that portal is chosen.
+        Malformed JSON, a non-object, or an entry targeting a status we do not
+        have is ignored (the built-in synonyms stay the fallback), because a bad
+        mapping must degrade to "no opinion", never to a wrong transition.
+        """
+        raw = (os.getenv("PERMITS_PORTAL_STATUS_MAP") or "").strip()
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            logger.info("http_portal: PERMITS_PORTAL_STATUS_MAP is not valid JSON — ignored")
+            return {}
+        if not isinstance(data, dict):
+            logger.info("http_portal: PERMITS_PORTAL_STATUS_MAP is not an object — ignored")
+            return {}
+        out: dict[str, str] = {}
+        for remote, mapped in data.items():
+            key = str(remote).strip().lower()
+            value = str(mapped).strip().lower()
+            if key and value in self.OUR_STATUSES:
+                out[key] = value
+            else:
+                logger.info(
+                    "http_portal: ignoring status-map entry %r -> %r (not one of ours)",
+                    remote, mapped,
+                )
+        return out
+
+    def status_map(self) -> dict[str, str]:
+        """Built-in synonyms, with any configured portal vocabulary on top."""
+        merged = dict(self.STATUS_MAP)
+        merged.update(self._configured_status_map())
+        return merged
+
+    def poll(self, submission: PermitSubmission) -> SyncResult | None:
         import requests  # already in requirements
 
         base = (os.getenv("PERMITS_PORTAL_URL") or "").strip()
@@ -191,7 +239,7 @@ class HttpPortalAdapter(SyncAdapter):
             remote_status = str((data.get("status") or data.get("state") or "")).strip().lower()
             if not remote_status:
                 return None
-            to_status = self.STATUS_MAP.get(remote_status)
+            to_status = self.status_map().get(remote_status)
             if not to_status:
                 logger.info("http_portal: unknown remote status %r for %s", remote_status, submission.reference)
                 return None

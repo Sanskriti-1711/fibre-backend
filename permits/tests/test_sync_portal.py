@@ -212,6 +212,49 @@ class PollTests(SimpleTestCase):
         self.assertIsNone(result)
 
 
+class ConfigurableStatusMapTests(SimpleTestCase):
+    """A portal is chosen later, so its vocabulary must be config, not code."""
+
+    def test_without_config_it_is_the_built_in_map(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(HttpPortalAdapter().status_map(), HttpPortalAdapter.STATUS_MAP)
+
+    def test_a_portal_specific_synonym_can_be_added(self):
+        env = {**PORTAL_ENV, "PERMITS_PORTAL_STATUS_MAP": '{"in Bearbeitung": "under_review"}'}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(
+                HttpPortalAdapter().status_map().get("in bearbeitung"),
+                PermitSubmission.STATUS_UNDER_REVIEW,
+            )
+
+    def test_config_overrides_a_built_in_synonym(self):
+        env = {**PORTAL_ENV, "PERMITS_PORTAL_STATUS_MAP": '{"granted": "closed"}'}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(HttpPortalAdapter().status_map()["granted"],
+                             PermitSubmission.STATUS_CLOSED)
+
+    def test_an_entry_targeting_an_unknown_status_is_ignored(self):
+        env = {**PORTAL_ENV, "PERMITS_PORTAL_STATUS_MAP": '{"weird": "not_a_status"}'}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertNotIn("weird", HttpPortalAdapter().status_map())
+
+    def test_malformed_config_is_ignored_not_raised(self):
+        for raw in ("{not json", "[]", '{"a": "b"}'):
+            with self.subTest(raw=raw):
+                env = {**PORTAL_ENV, "PERMITS_PORTAL_STATUS_MAP": raw}
+                with mock.patch.dict(os.environ, env, clear=True):
+                    self.assertEqual(HttpPortalAdapter().status_map(),
+                                     HttpPortalAdapter.STATUS_MAP)
+
+    def test_a_configured_status_drives_the_poll(self):
+        env = {**PORTAL_ENV, "PERMITS_PORTAL_STATUS_MAP": '{"freigegeben": "approved"}'}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("requests.get", return_value=_Resp(payload={"status": "Freigegeben"})):
+                result = HttpPortalAdapter().poll(
+                    _submission(PermitSubmission.STATUS_UNDER_REVIEW))
+        self.assertEqual(result.to_status, PermitSubmission.STATUS_APPROVED)
+
+
 class JsonPayloadRoundTripTests(SimpleTestCase):
     """The portal is conventionally JSON; make sure a real-ish body parses."""
 
