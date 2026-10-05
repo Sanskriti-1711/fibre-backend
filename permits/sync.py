@@ -30,9 +30,15 @@ Adapters
 * csv_inbox   — reads a CSV file (submission_id,status,reference,notes,
   conditions,expiry_date) and applies each line. Useful for email/portal
   exports without an API.
-* http_portal — placeholder for a real portal API (fetch status by reference
-  and map it onto our state machine). Disabled until a base URL + token are
-  configured (PERMITS_PORTAL_*). Returns None until then.
+* http_portal — the real portal client: GET {PERMITS_PORTAL_URL}/status
+  ?reference=... with bearer and/or X-API-Key auth, mapping the remote status
+  onto our state machine through STATUS_MAP and rejecting any transition the
+  state machine does not allow. It is fully implemented and simply INERT until
+  PERMITS_PORTAL_URL is set (no URL means is_enabled() is False and poll()
+  returns None) — it is not a stub.
+
+A portal that is down, slow or returns an unknown status is recorded and
+ignored, never raised: a sync failure must not fail a poll loop or a request.
 
 No DB mutation outside transition_submission. No LLM.
 """
