@@ -42,6 +42,10 @@ Authorization: Bearer <access_token>
 }
 ```
 
+> Example payload only — this is not a seeded account. Create it with
+> `python manage.py seed_dev_admin` (see the backend README). Without a real
+> user this endpoint answers `400 {"non_field_errors": ["Invalid credentials"]}`.
+
 **Response:**
 ```json
 {
