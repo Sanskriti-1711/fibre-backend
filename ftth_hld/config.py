@@ -77,6 +77,7 @@ LAYER_NAME_MAP = {
     "polygons":            ("Polygons",             "polygon_layer"),
     "pdps":                ("PDPs",                 "PDPs"),
     "mfg":                 ("MFG",                  "MFG"),
+    "mfg_service_areas":   ("MFG_Service_Areas",    "MFG_Service_Areas"),
     "feeder_cable":        ("Feeder_Cable",         "Feeder_Cable"),
     "distribution_cable":  ("Distribution_Cable",   "Distribution_Cable"),
     "feeder_ducts":        ("Feeder_Ducts",         "Feeder_Ducts"),
@@ -89,14 +90,18 @@ LAYER_NAME_MAP = {
     # decision, separate from the aerial drop the pole/aerial stage builds.
     "aerial_drops":        ("Aerial_Drops",         "aerial_drops"),
     # What the pole / aerial-drop stage BUILDS for those classified legs: the
-    # drop trench (a span on a pole, never dug) and the cable it carries. Both
-    # are published by the engine and ingested into `gis.aerial_drop_trench_layer`
-    # / `gis.aerial_cable_layer`, but they were missing from this map — and
-    # `LayerGeoJSONView` rejects any name that is not in it, so the two layers
-    # 404'd on the platform and could never be drawn, in any project. That is
-    # why the aerial routes were invisible on the map even on a run with a real
-    # aerial classification.
-    "aerial_drop_trenches": ("Aerial_Drop_Trenches", "aerial_drop_trenches"),
+    # overhead span (never dug) and the cable it carries. Both are published by
+    # the engine and ingested into `gis.aerial_span_layer` / `gis.aerial_cable_layer`,
+    # but they were missing from this map — and `LayerGeoJSONView` rejects any
+    # name that is not in it, so the two layers 404'd on the platform and could
+    # never be drawn, in any project. That is why the aerial routes were
+    # invisible on the map even on a run with a real aerial classification.
+    #
+    # Renamed from `aerial_drop_trenches` / `Aerial_Drop_Trenches`: a trench is
+    # an excavation and this is not (EXCAVATION=0, Overhead). The old public
+    # name is kept below as an alias so a stored FtthLayer row still resolves.
+    "aerial_spans":         ("Aerial_Spans",         "aerial_spans"),
+    "aerial_drop_trenches": ("Aerial_Spans",         "aerial_drop_trenches"),
     "aerial_cable":        ("Aerial_Cable",         "aerial_cable"),
     # The trench designer's structural nodes (HDD pits / junctions / PDPs /
     # bends / pulls): the evidence behind every planned chamber, and the layer
@@ -145,7 +150,7 @@ STEP_DEPENDENCIES = {
 # GPKG files to include in the field-survey package zip.
 SURVEY_PACKAGE_FILES = [
     "Objects.gpkg",
-    "Polygons.gpkg", "PDPs.gpkg",
+    "Polygons.gpkg", "PDPs.gpkg", "MFG_Service_Areas.gpkg",
     "Feeder_Cable.gpkg", "Distribution_Cable.gpkg",
     "Chambers.gpkg",
     # The field team must know which drop legs are on the pole line and why,
@@ -192,6 +197,7 @@ SURVEY_GEOJSON_FILES = {
 # GPKG files to include in the full design package zip.
 DESIGN_PACKAGE_FILES = [
     "Objects.gpkg", "Polygons.gpkg", "PDPs.gpkg", "MFG.gpkg",
+    "MFG_Service_Areas.gpkg",
     "Final_Trenches.gpkg", "Aerial_Drops.gpkg", "Trench_Nodes.gpkg", "Pseudo_HH.gpkg",
     "Feeder_Cable.gpkg", "Distribution_Cable.gpkg",
     "Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg",
@@ -208,6 +214,7 @@ DESIGN_GEOJSON_FILES = {
     "Polygons.geojson":             "polygons.geojson",
     "PDPs.geojson":                 "pdps.geojson",
     "MFG.geojson":                  "mfg.geojson",
+    "MFG_Service_Areas.geojson":    "mfg_service_areas.geojson",
     "Feeder_Cable.geojson":         "feeder_cable.geojson",
     "Distribution_Cable.geojson":   "distribution_cable.geojson",
     "Feeder_Ducts.geojson":         "feeder_ducts.geojson",
