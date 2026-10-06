@@ -2,8 +2,12 @@
 
 The permit engine's spatial rules intersect a project's route layers with
 these reference tables (railway crossing, waterway crossing, environmental
-review). The tables are global (not project-scoped) so one Berlin-wide load
-serves every project in the city.
+review). A row with ``project_id IS NULL`` is the shared/curated load that
+serves every project inside its bbox (the Berlin-wide default); a row tagged
+with a ``project_id`` is the load made for that project's own area, so a run
+somewhere else is never judged against Berlin's railways — and, more to the
+point, is not silently judged against nothing because nobody ran the command
+for that city. ``load_for_project`` is what the post-HLD chain calls.
 
 Run::
 
@@ -11,8 +15,12 @@ Run::
     python manage.py load_osm_reference_layers --bbox 13.29 52.38 13.46 52.48
     python manage.py load_osm_reference_layers --force     # reload even if populated
 
-Idempotent: creates the tables if missing, truncates and reloads the
-requested categories. Uses the Overpass API (https://overpass-api.de).
+    # For one project's own area (bbox taken from its own trenches):
+    python manage.py load_osm_reference_layers --project-id 4f2c...
+
+Idempotent: creates the tables if missing, then truncates and reloads the
+requested categories (a project load replaces only that project's rows). Uses
+the Overpass API (https://overpass-api.de).
 """
 
 from __future__ import annotations
@@ -79,7 +87,12 @@ DDL = (
     '  id BIGSERIAL PRIMARY KEY,'
     '  geom GEOMETRY(Geometry, 4326),'
     '  properties JSONB NOT NULL DEFAULT \'{{}}\'::jsonb,'
-    '  created_at TIMESTAMPTZ NOT NULL DEFAULT now())'
+    '  created_at TIMESTAMPTZ NOT NULL DEFAULT now());'
+    # Project scoping. NULL = the shared curated load (every project inside its
+    # bbox); a value = the load made for that one project's own area. Added as
+    # an ALTER so a table loaded before this column existed keeps its rows.
+    'ALTER TABLE gis."{table}" ADD COLUMN IF NOT EXISTS project_id TEXT;'
+    'CREATE INDEX IF NOT EXISTS "{table}_project_idx" ON gis."{table}" (project_id);'
 )
 
 
@@ -87,6 +100,29 @@ def _count(table: str) -> int:
     with connection.cursor() as cur:
         cur.execute(f'SELECT count(*) FROM gis."{table}"')
         return int(cur.fetchone()[0])
+
+
+def project_bbox(project_id: str) -> tuple | None:
+    """The bbox of a project's own trenches, ``(w, s, e, n)`` in lon/lat.
+
+    The reference load follows the area the project was actually designed in
+    rather than the Berlin default — that is the whole point of loading it for
+    a project. Returns None when the project has no trenches yet.
+    """
+    with connection.cursor() as cur:
+        cur.execute("SELECT to_regclass('gis.trench_layer')")
+        if cur.fetchone()[0] is None:
+            return None
+        cur.execute(
+            "SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e) FROM ("
+            "  SELECT ST_Extent(geom) AS e FROM gis.trench_layer "
+            "  WHERE project_id = %s) s WHERE e IS NOT NULL",
+            [project_id],
+        )
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return None
+        return tuple(float(v) for v in row)
 
 
 import re
@@ -216,16 +252,23 @@ def _fetch_layer(bbox: tuple, body: str) -> list[dict]:
     raise CommandError(f"Overpass request failed on all mirrors: {last_exc}") from last_exc
 
 
-def load_categories(bbox: tuple, categories: list[str], force: bool = False) -> dict:
+def load_categories(bbox: tuple, categories: list[str], force: bool = False,
+                    project_id: str | None = None) -> dict:
     """Load the requested reference categories. Returns per-table counts.
 
     Each layer is fetched and inserted independently so one slow layer never
-    blocks the others (Overpass rate-limits and times out per query).
+    blocks the others (Overpass rate-limits and times out per query). When
+    ``project_id`` is given the rows are tagged with it and only that
+    project's previous rows are replaced, so loading one project's area can
+    never delete another project's — or the shared curated — coverage.
     """
     with connection.cursor() as cur:
         for table in categories:
             cur.execute(DDL.format(table=table))
-            if force or _count(table) == 0:
+            if project_id:
+                cur.execute(f'DELETE FROM gis."{table}" WHERE project_id = %s',
+                            [project_id])
+            elif force or _count(table) == 0:
                 cur.execute(f'TRUNCATE gis."{table}" RESTART IDENTITY')
 
     counts: dict[str, int] = {}
@@ -243,13 +286,46 @@ def load_categories(bbox: tuple, categories: list[str], force: bool = False) -> 
             rows.append((json.dumps(geometry), json.dumps(_element_props(el))))
         with connection.cursor() as cur:
             if rows:
-                cur.executemany(
-                    f'INSERT INTO gis."{table}" (geom, properties) '
-                    "VALUES (ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), %s::jsonb)",
-                    rows,
-                )
+                if project_id:
+                    cur.executemany(
+                        f'INSERT INTO gis."{table}" (geom, properties, project_id) '
+                        "VALUES (ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), "
+                        "%s::jsonb, %s)",
+                        [(g, p, project_id) for g, p in rows],
+                    )
+                else:
+                    cur.executemany(
+                        f'INSERT INTO gis."{table}" (geom, properties) '
+                        "VALUES (ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), %s::jsonb)",
+                        rows,
+                    )
         counts[table] = len(rows)
     return counts
+
+
+def load_for_project(project_id: str, bbox: tuple | None = None,
+                     categories: list[str] | None = None,
+                     force: bool = False) -> dict:
+    """Load the reference layers for one project's own area.
+
+    The bbox defaults to the project's own trench extent (``project_bbox``), so
+    the reference data always matches where the design actually is. Returns a
+    summary dict the post-HLD chain can log — never raises for a project with
+    no trenches.
+    """
+    summary = {"project_id": project_id, "bbox": None, "counts": {},
+               "skipped": ""}
+    if bbox is None:
+        bbox = project_bbox(project_id)
+    if bbox is None:
+        summary["skipped"] = "no trenches — no area to load reference layers for"
+        return summary
+    summary["bbox"] = [round(float(v), 6) for v in bbox]
+    summary["counts"] = load_categories(
+        bbox, categories or list(REFERENCE_LAYERS.keys()), force=force,
+        project_id=project_id,
+    )
+    return summary
 
 
 class Command(BaseCommand):
@@ -262,12 +338,28 @@ class Command(BaseCommand):
                             help="Load only this layer")
         parser.add_argument("--force", action="store_true",
                             help="Truncate and reload even if a table already has rows")
+        parser.add_argument("--project-id", dest="project_id",
+                            help="Load for ONE project's own area (default bbox: "
+                                 "that project's trench extent). Replaces only "
+                                 "that project's rows.")
 
     def handle(self, *args, **opts):
-        bbox = tuple(opts["bbox"]) if opts["bbox"] else DEFAULT_BBOX
         categories = [opts["layer"]] if opts["layer"] else list(REFERENCE_LAYERS.keys())
-        self.stdout.write(f"Fetching OSM reference data for bbox {bbox} ...")
-        counts = load_categories(bbox, categories, force=opts["force"])
+        if opts["project_id"]:
+            bbox = tuple(opts["bbox"]) if opts["bbox"] else project_bbox(
+                opts["project_id"])
+            if bbox is None:
+                raise CommandError(
+                    "project has no trenches yet — pass --bbox explicitly")
+            self.stdout.write(
+                f"Fetching OSM reference data for project {opts['project_id']} "
+                f"at bbox {tuple(round(v, 6) for v in bbox)} ...")
+            counts = load_categories(bbox, categories, force=opts["force"],
+                                     project_id=opts["project_id"])
+        else:
+            bbox = tuple(opts["bbox"]) if opts["bbox"] else DEFAULT_BBOX
+            self.stdout.write(f"Fetching OSM reference data for bbox {bbox} ...")
+            counts = load_categories(bbox, categories, force=opts["force"])
         for table, n in counts.items():
             self.stdout.write(self.style.SUCCESS(f"  {table}: {n} features loaded"))
         self.stdout.write(self.style.SUCCESS("Done."))

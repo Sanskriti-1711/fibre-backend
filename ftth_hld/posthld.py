@@ -47,11 +47,13 @@ from .models import HldPostProcess
 logger = logging.getLogger(__name__)
 
 # Ordered steps. The order is load-bearing: sections read the road attribution,
-# the matrix reads the sections, the package reads the matrix.
+# the reference layers must exist before the matrix reads them, and the package
+# reads the matrix.
 STEP_ORDER = (
     "layers",
     "road_class",
     "trench_sections",
+    "reference_layers",
     "permit_matrix",
     "permit_package",
 )
@@ -60,6 +62,7 @@ STEP_LABELS = {
     "layers": "Sync HLD layers into the GIS database",
     "road_class": "Attribute OSM road class onto the trench segments",
     "trench_sections": "Expand trenches into street-attributed sections",
+    "reference_layers": "Load OSM reference layers for the project's own area",
     "permit_matrix": "Run the permit rule engine",
     "permit_package": "Generate the preliminary permit package",
 }
@@ -147,6 +150,20 @@ def _package_exists(project_id: str) -> bool:
     ).exists()
 
 
+def _reference_layers_done(row) -> bool:
+    """Has the reference-layer load already succeeded for this row?
+
+    Keyed on the step's own recorded outcome rather than on a table count: an
+    area with no railway legitimately has zero railway rows, so counting rows
+    would re-fetch from Overpass on every poll forever, while a *failed* load
+    (Overpass down) must stay pending until it succeeds. A new trench revision
+    re-runs the step anyway (the bbox follows the trenches), which is what the
+    ``stale`` arm of the caller covers.
+    """
+    step = ((row.steps or {}) if row is not None else {}).get("reference_layers") or {}
+    return bool(step.get("ok"))
+
+
 def _matrix_exists(project_id: str) -> bool:
     from permits.models import PermitMatrix
 
@@ -201,6 +218,8 @@ def _pending_steps(project_id: str, row, revision: str,
 
     if stale or not sections_are_fresh(project_id):
         pending.append("trench_sections")
+    if stale or not _reference_layers_done(row):
+        pending.append("reference_layers")
     if stale or not _matrix_exists(project_id):
         pending.append("permit_matrix")
     if stale or not _package_exists(project_id):
@@ -239,6 +258,29 @@ def _step_trench_sections(project_id: str, project_name: str = "") -> str:
     )
 
 
+def _step_reference_layers(project_id: str, project_name: str = "") -> str:
+    """Load the OSM permit reference layers for this project's own area.
+
+    Without this step the railway/waterway/protected-area/tree rules can only
+    ever record a gap: their ``gis.osm_*`` tables are filled by a management
+    command nobody runs per project, and its default bbox covers one city — so
+    a permit package built from an area input anywhere else silently "found no"
+    waterways, railways and protected areas. The bbox is the project's own
+    trench extent, and only this project's rows are replaced.
+    """
+    from permits.management.commands.load_osm_reference_layers import (
+        load_for_project,
+    )
+
+    summary = load_for_project(project_id)
+    if summary.get("skipped"):
+        return summary["skipped"]
+    counts = summary.get("counts") or {}
+    return "%s feature(s) across %s layer(s) for bbox %s" % (
+        sum(counts.values()), len(counts), summary.get("bbox"),
+    )
+
+
 def _step_permit_matrix(project_id: str, project_name: str = "") -> str:
     from permits.rules.engine import run_analysis
 
@@ -261,6 +303,7 @@ STEP_FUNCS = {
     "layers": _step_layers,
     "road_class": _step_road_class,
     "trench_sections": _step_trench_sections,
+    "reference_layers": _step_reference_layers,
     "permit_matrix": _step_permit_matrix,
     "permit_package": _step_permit_package,
 }

@@ -190,6 +190,15 @@ def run_analysis(project_id: str, user=None) -> dict:
         # ── LLD attribute rules (traffic / utility reuse) ────────────────
         if rule_def.rule_id in _LLD_ROUTE_RULES:
             rows = _latest_lld_layer_rows(project_id, "final_trenches")
+            route_layer = "final_trenches"
+            if not rows and rule_def.rule_id == "TRAFFIC_001":
+                # An HLD-only project still has to manage traffic. The civil
+                # sections (from the trench_sections step) carry the trench's
+                # own SURFACE/CONSTRUCT, one row per buildable section, so the
+                # rule is decided from the HLD design per street instead of
+                # reporting a gap the project cannot close without an LLD run.
+                rows = hld_layer_sections(project_id, "trench_layer")
+                route_layer = "trench_layer"
             if not rows:
                 summary["gaps"].append(
                     f"{rule_def.rule_id}: no final_trenches LLD output for project"
@@ -214,10 +223,21 @@ def run_analysis(project_id: str, user=None) -> dict:
                         "reuse_source": {"present": True, "value": reuse},
                         "capacity_check": {"present": bool(props.get("INFRA_STATUS") == "Reused"), "value": props.get("INFRA_STATUS")},
                     }
-                route_section = str(props.get("feature_id") or props.get("id") or "unknown")
+                if route_layer == "trench_layer":
+                    # The same section identity the road-authority rows use, so
+                    # a section's permits trace back to its parent trench.
+                    parent = str(props.get("PARENT_FEATURE_ID") or "").strip()
+                    section_id = str(props.get("SECTION_ID") or "").strip() or "section"
+                    route_section = (
+                        f"{parent}#{section_id}" if parent else section_id
+                    )[:128]
+                else:
+                    route_section = str(
+                        props.get("feature_id") or props.get("id") or "unknown"
+                    )
                 _upsert_permit(
                     project_id, rule, route_section,
-                    layer="final_trenches", evidence=evidence,
+                    layer=route_layer, evidence=evidence,
                 )
                 fired += 1
             summary["rules_fired"].append({"rule_id": rule_def.rule_id, "rows": fired})

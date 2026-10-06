@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from django.db import connection
 
+from .spatial_intersection import reference_scope_clause
+
 
 def attribute_municipality(project_id: str) -> dict:
     """Resolve and persist municipality for a project's HLD trenches.
@@ -45,17 +47,21 @@ def attribute_municipality(project_id: str) -> dict:
         # (most specific admin level: Bezirk/Gemeinde over Kreis/state).
         # DISTINCT ON keeps exactly one municipality per trench; the bbox
         # ``&&`` prefilter uses the gist index before the exact contains.
+        # The scope clause keeps the shared curated boundaries plus this
+        # project's own load — a project outside the curated bbox has no
+        # Gemeinde otherwise.
+        scope_sql, _ = reference_scope_clause("osm_admin_boundary", alias="a")
         cur.execute(
-            """
+            f"""
             SELECT DISTINCT ON (t.id) t.id, a.properties->>'name' AS muni
             FROM gis.trench_layer t
             JOIN gis.osm_admin_boundary a
               ON a.geom && ST_Expand(t.geom, 0.001)
-             AND ST_Contains(a.geom, ST_PointOnSurface(t.geom))
+             AND ST_Contains(a.geom, ST_PointOnSurface(t.geom)){scope_sql}
             WHERE t.project_id = %s
             ORDER BY t.id, ST_Area(a.geom) ASC
             """,
-            [project_id],
+            ([project_id, project_id] if scope_sql else [project_id]),
         )
         rows = cur.fetchall()
         if not rows:

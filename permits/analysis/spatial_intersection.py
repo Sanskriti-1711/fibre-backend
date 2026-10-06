@@ -26,6 +26,35 @@ def gis_table_exists(table: str) -> bool:
     return _table_exists("gis", table)
 
 
+def _has_column(schema: str, table: str, column: str) -> bool:
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = %s AND table_name = %s AND column_name = %s",
+            [schema, table, column],
+        )
+        return cur.fetchone() is not None
+
+
+def reference_scope_clause(reference_table: str, alias: str = "ref") -> tuple:
+    """(sql fragment, extra params) scoping a reference layer to the shared
+    load plus this project's own load.
+
+    ``gis.osm_*`` carries a nullable ``project_id``: NULL is the shared/curated
+    load that serves every project inside its bbox, a value is the load made
+    for one project's own area (``load_osm_reference_layers --project-id``,
+    which the post-HLD chain runs). Filtering on it matters because the rows of
+    other cities are in the same table — without the clause a project would be
+    judged against whichever city was loaded last.
+
+    Returns ``("", [])`` when the table predates project scoping, so the query
+    stays valid against an older install.
+    """
+    if not _has_column("gis", reference_table, "project_id"):
+        return "", []
+    return f" AND ({alias}.project_id IS NULL OR {alias}.project_id = %s)", []
+
+
 def project_feature_count(table: str, project_id: str) -> int:
     """Number of rows for a project in a ``gis`` output table."""
     with connection.cursor() as cur:
@@ -56,6 +85,11 @@ def intersections_with(
     if not geom_col or not ref_geom:
         return []
 
+    scope_sql, _ = reference_scope_clause(reference_table)
+    # The scope clause takes the project id in the JOIN condition, ahead of the
+    # WHERE's — so the params follow the SQL order, not the caller's.
+    scope_params = [project_id] if scope_sql else []
+
     sql = f"""
         SELECT r.id::text,
                r.fid::text AS route_id,
@@ -65,12 +99,12 @@ def intersections_with(
                ST_Y(ST_Centroid(ST_Intersection(r.{geom_col}, ref.{ref_geom}))) AS y
         FROM gis."{route_table}" r
         JOIN gis."{reference_table}" ref
-          ON ST_Intersects(r.{geom_col}, ref.{ref_geom})
+          ON ST_Intersects(r.{geom_col}, ref.{ref_geom}){scope_sql}
         WHERE r.project_id = %s
         LIMIT %s
     """
     with connection.cursor() as cur:
-        cur.execute(sql, [project_id, limit])
+        cur.execute(sql, scope_params + [project_id, limit])
         return [
             {
                 # route_id is the per-project fid, matching the ``id`` the

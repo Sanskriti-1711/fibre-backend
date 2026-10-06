@@ -74,14 +74,21 @@ class TrenchRevisionTests(TestCase):
             self.assertEqual(posthld._pending_steps(self.ftth.project_id, row, ""), [])
 
     def test_a_first_ever_row_defers_to_each_step_own_guard(self):
-        """Deploying this must not re-run a matrix/package that already exists."""
+        """Deploying this must not re-run a matrix/package that already exists.
+
+        The one exception is the reference-layer load: a project whose permit
+        matrix predates that step has never had its railways, waterways and
+        protected areas read at all, so it is scheduled once (the recorded
+        outcome then makes it a no-op — see the test below).
+        """
         with mock.patch.object(posthld, "_missing_layers", return_value=[]), \
              mock.patch(_SECTIONS + ".sections_are_fresh", return_value=True), \
              mock.patch.object(posthld, "road_class_gaps", return_value=0), \
              mock.patch.object(posthld, "_matrix_exists", return_value=True), \
              mock.patch.object(posthld, "_package_exists", return_value=True):
             self.assertEqual(
-                posthld._pending_steps(self.ftth.project_id, None, "544:now"), []
+                posthld._pending_steps(self.ftth.project_id, None, "544:now"),
+                ["reference_layers"],
             )
 
     def test_a_changed_trench_revision_re_arms_every_trench_step(self):
@@ -97,13 +104,15 @@ class TrenchRevisionTests(TestCase):
                 self.ftth.project_id, row, "544:after"
             )
         self.assertEqual(pending, [
-            "road_class", "trench_sections", "permit_matrix", "permit_package",
+            "road_class", "trench_sections", "reference_layers",
+            "permit_matrix", "permit_package",
         ])
 
     def test_an_unchanged_revision_leaves_a_fresh_chain_alone(self):
         """The point of the content guard: re-publishing unchanged is a no-op."""
         row = posthld.HldPostProcess.objects.create(
             project_id=self.ftth.project_id, trench_revision="544:same",
+            steps={"reference_layers": {"ok": True}},
         )
         with mock.patch.object(posthld, "_missing_layers", return_value=[]), \
              mock.patch(_SECTIONS + ".sections_are_fresh", return_value=True), \
