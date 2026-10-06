@@ -62,18 +62,41 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+
           gh label create stack-monitor \
             --color B60205 --description "Automated stack check failure" --force || true
+
+          # Fingerprint just the FAIL/WARN lines, so a repeat of the SAME
+          # failure does not add another comment. Without this the monitor
+          # comments on every run for as long as an outage lasts — at a
+          # 15-minute schedule that is ~96 comments a day on one issue, which
+          # trains everyone to ignore it. A *changed* failure still comments,
+          # because the fingerprint changes with it.
+          fp=$( (grep -E '^(FAIL|WARN)' report.txt || echo 'no-fail-lines') \
+                | sha256sum | cut -c1-12 )
+          marker="<!-- stack-monitor-fp:${fp} -->"
+
           num=$(gh issue list --label stack-monitor --state open \
                   --limit 1 --json number --jq '.[0].number // empty')
-          if [ -n "$num" ]; then
-            gh issue comment "$num" --body-file report.txt
-          else
-            gh issue create \
-              --title "Stack check failing" \
-              --label stack-monitor \
-              --body-file report.txt
+
+          if [ -z "$num" ]; then
+            { echo "$marker"; echo; cat report.txt; } > payload.md
+            gh issue create --title "Stack check failing" \
+              --label stack-monitor --body-file payload.md
+            echo "opened an issue for fingerprint ${fp}"
+            exit 0
           fi
+
+          if gh issue view "$num" --json comments \
+               --jq '.comments[].body' | grep -qF "$marker"; then
+            echo "fingerprint ${fp} already reported on #${num}; not commenting again"
+            exit 0
+          fi
+
+          { echo "$marker"; echo; cat report.txt; } > payload.md
+          gh issue comment "$num" --body-file payload.md
+          echo "reported fingerprint ${fp} on #${num}"
 
       - name: Close the alert issue on recovery
         if: steps.probe.outcome == 'success'
