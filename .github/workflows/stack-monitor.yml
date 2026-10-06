@@ -1,0 +1,96 @@
+# ─────────────────────────────────────────────────────────────────────────
+# fibre-backend — stack monitor
+#
+# Runs tools/check_stack.py on a schedule and opens/updates a GitHub issue
+# when anything FAILs, closing it again on recovery.
+#
+# Why this exists: on 2026-10-06 the frontend and the backend were both
+# healthy while every browser call failed, because the backend's CORS
+# allowlist did not contain the frontend's origin.  Component liveness
+# checks all passed.  The CORS preflight check in check_stack.py is the
+# one that fails in that situation, so an outage like that becomes an
+# issue within 15 minutes instead of a user report.
+#
+# No third-party monitoring account is needed: failures surface as a
+# GitHub issue and as a failed scheduled run (which emails the actor).
+#
+# ⚠️ Scheduled workflows only run from the DEFAULT branch, and GitHub
+#    disables them after 60 days of repository inactivity — re-enable from
+#    the Actions tab if the monitor goes quiet.
+# ─────────────────────────────────────────────────────────────────────────
+
+name: Stack monitor
+
+on:
+  schedule:
+    # Every 15 minutes.  GitHub's shortest supported interval is 5, and
+    # scheduled runs are best-effort (they can be delayed under load).
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: stack-monitor
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Probe live stack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe the live stack
+        id: probe
+        continue-on-error: true
+        # stdlib-only, so there is nothing to install.
+        run: python3 tools/check_stack.py | tee report.txt
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stack-report
+          path: report.txt
+          retention-days: 7
+
+      - name: Open or update the alert issue
+        if: steps.probe.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create stack-monitor \
+            --color B60205 --description "Automated stack check failure" --force || true
+          num=$(gh issue list --label stack-monitor --state open \
+                  --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body-file report.txt
+          else
+            gh issue create \
+              --title "Stack check failing" \
+              --label stack-monitor \
+              --body-file report.txt
+          fi
+
+      - name: Close the alert issue on recovery
+        if: steps.probe.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          num=$(gh issue list --label stack-monitor --state open \
+                  --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "Recovered — all checks pass again."
+            gh issue close "$num"
+          fi
+
+      # Make the run itself fail, so a red X appears in the Actions tab
+      # and GitHub notifies whoever the scheduled workflow is attributed to.
+      - name: Fail the run when a check failed
+        if: steps.probe.outcome == 'failure'
+        run: |
+          echo "::error::stack check failed — see the job summary and report.txt"
+          exit 1

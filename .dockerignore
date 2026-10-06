@@ -1,0 +1,28 @@
+# Keep the build context small and, more importantly, keep local state and
+# secrets out of the image.
+.git
+.gitignore
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Local-only data and logs
+db.sqlite3
+*.log
+media/
+staticfiles/
+pipeline_samples/
+
+# Never bake a local .env into an image
+.env
+.env.*
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -493,19 +493,30 @@ class LldProjectsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from django.db.models import Count
+        from django.db.models import Count, OuterRef, Subquery
 
         # Bulk-fetch approved survey versions so we don't do one query per
         # project inside the loop.
+        #
+        # One row per project: the latest version by created_at.
+        #
+        # This deliberately no longer uses `.distinct("ftth_project_id")`.
+        # That is PostgreSQL's DISTINCT ON and it raises
+        # `NotSupportedError: DISTINCT ON fields is not supported by this
+        # database backend` on SQLite, which is what config/test_settings.py
+        # uses — so the whole local suite failed to run. A correlated subquery
+        # returns the same rows on both backends, which is worth more here than
+        # the marginal planning win of DISTINCT ON.
+        latest_version_for_project = ApprovedSurveyVersion.objects.filter(
+            ftth_project=OuterRef("ftth_project")
+        ).order_by("-created_at")
         asv_map = {
             a.ftth_project_id: a
             for a in ApprovedSurveyVersion.objects.filter(
-                ftth_project__in=FtthProject.objects.all()
+                pk__in=Subquery(
+                    latest_version_for_project.values("pk")[:1]
+                )
             )
-            # DISTINCT ON (ftth_project_id) requires ORDER BY to start with
-            # the same expression (PostgreSQL) — latest version per project.
-            .order_by("ftth_project_id", "-created_at")
-            .distinct("ftth_project_id")
         }
 
         projects = []

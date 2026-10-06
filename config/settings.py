@@ -20,7 +20,9 @@ SECRET_KEY = os.getenv(
 # Default: DEBUG on (original behavior); set DJANGO_DEBUG=false in production.
 DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
 
-ALLOWED_HOSTS = ["*"]
+# Comma-separated at deploy time. Falls back to the previous permissive "*"
+# so local development is unaffected.
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",") if h.strip()]
 
 
 # Application definition
@@ -47,6 +49,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -159,6 +162,30 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# collectstatic had no target directory, so a container build could not gather
+# the admin/DRF assets. Pinned explicitly for deploy.
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# WhiteNoise serves the collected static files straight from gunicorn, so the
+# container needs no separate web server or CDN for /static/.
+# CompressedStaticFilesStorage (not the Manifest variant) is used on purpose:
+# the manifest variant hard-fails the build if a template references a missing
+# file, which would make deploys brittle for a repo this size.
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage',
+    },
+}
+
+# Development never runs collectstatic, so WhiteNoise would warn about the
+# missing STATIC_ROOT on every boot. Autorefresh makes it read through the app
+# finders instead. It evaluates to False in production (DEBUG=false), where it
+# serves the collected STATIC_ROOT as normal.
+WHITENOISE_AUTOREFRESH = DEBUG
+
 # Media files (user uploads)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
@@ -186,6 +213,10 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8123",
 ]
 
+# Extra browser origins supplied at deploy time (comma-separated), so moving
+# the frontend to a new host needs an env var rather than a code change.
+CORS_ALLOWED_ORIGINS += [o.strip() for o in os.getenv("EXTRA_CORS_ORIGINS", "").split(",") if o.strip()]
+
 # Allow any https *.zeabur.app subdomain (future frontend/other services on
 # Zeabur).  Explicit origins above still take precedence for non-Zeabur domains.
 CORS_ALLOWED_ORIGIN_REGEXES = [
@@ -205,6 +236,9 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:8081",
     "http://127.0.0.1:8123",
 ]
+
+# Extra CSRF-trusted origins at deploy time (comma-separated).
+CSRF_TRUSTED_ORIGINS += [o.strip() for o in os.getenv("EXTRA_CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()]
 
 # REST Framework + JWT Config
 REST_FRAMEWORK = {
