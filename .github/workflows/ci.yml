@@ -1,7 +1,13 @@
 # ─────────────────────────────────────────────────────────────────────────
-# fibre-backend — CI
+# fibre-backend — CI + CD
 #
 # Runs on every push to main and every pull request.
+#
+# main is the single deploy point: code travels branch -> PR -> main, and the
+# `deploy` job at the bottom of this file is what ships main onward. Point the
+# host at `main`, never at a feature branch — a branch can be deleted or
+# force-pushed, and a host tracking one would deploy code that never went
+# through this gate.
 #
 # The suite runs against a REAL PostgreSQL + PostGIS service, not SQLite.
 # That is deliberate: `ftth_lld/views.py` uses `.distinct("<field>")`, which is
@@ -200,3 +206,83 @@ jobs:
 
       - name: Report models without a migration
         run: python manage.py makemigrations --check --dry-run || true
+
+  # ── CD ───────────────────────────────────────────────────────────────────
+  # main is the single deploy point, and this is the only thing that deploys.
+  #
+  # It is deliberately NOT the host's own "deploy on push" integration: that
+  # would ship whatever lands on main regardless of whether the tests passed.
+  # Gating on `needs` means a release can only follow a green main — the test
+  # suite AND the image smoke-test — which is the whole point of routing the
+  # code through main in the first place.
+  #
+  # Two repository secrets wire it up; neither is required to merge this:
+  #
+  #   DEPLOY_HOOK_URL    the host's deploy hook (Render/Zeabur deploy hook, a
+  #                      Cloud Run trigger URL, or any endpoint that starts a
+  #                      release). Until it is set this job reports what is
+  #                      missing and exits successfully.
+  #   DEPLOY_HEALTH_URL  optional. A URL that must answer 200 after the
+  #                      release, e.g. https://<host>/healthz. If set, the
+  #                      job fails when the service does not come back, so a
+  #                      broken deploy is visible as a red run rather than as
+  #                      a quietly dead service.
+  deploy:
+    name: Deploy main
+    needs: [tests, image]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the host deploy
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.DEPLOY_HOOK_URL }}
+          DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+
+          # `${VAR:-}` throughout: this job must SKIP cleanly when the secrets
+          # are absent, not die on `set -u` — an unconfigured deploy must not
+          # turn main red.
+          if [ -z "${DEPLOY_HOOK_URL:-}" ]; then
+            {
+              echo "### Nothing is wired up to deploy to yet"
+              echo
+              echo "Tests and the image smoke-test passed, so main is releasable."
+              echo "Add a repository secret \`DEPLOY_HOOK_URL\` (the deploy hook of"
+              echo "whichever host you pick) and this job will call it on every"
+              echo "push to main. Add \`DEPLOY_HEALTH_URL\` as well and it will also"
+              echo "verify the service came back before going green."
+            } >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+            echo "DEPLOY_HOOK_URL is not set; skipping. main is still releasable."
+            exit 0
+          fi
+
+          # One POST, deliberately, and no --retry: retrying a hook that
+          # starts a release can trigger a SECOND build when the first
+          # response is merely lost. A failure here shows as a red run on
+          # main, which is the correct signal and is cheap to re-run.
+          echo "Triggering deploy..."
+          curl --silent --show-error --fail --output /dev/null \
+            --max-time 60 -X POST "${DEPLOY_HOOK_URL:-}"
+          echo "Deploy triggered."
+
+          if [ -z "${DEPLOY_HEALTH_URL:-}" ]; then
+            echo "DEPLOY_HEALTH_URL is not set; not verifying the release."
+            exit 0
+          fi
+
+          # Hosts build asynchronously, so poll rather than assume.
+          echo "Waiting for ${DEPLOY_HEALTH_URL} to answer 200..."
+          for attempt in $(seq 1 30); do
+            code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+                     --max-time 5 "${DEPLOY_HEALTH_URL:-}" || true)
+            if [ "$code" = "200" ]; then
+              echo "Service is healthy after ${attempt} attempt(s)."
+              exit 0
+            fi
+            echo "  attempt ${attempt}: HTTP ${code}"
+            sleep 10
+          done
+
+          echo "::error::the deployed service never answered 200 at ${DEPLOY_HEALTH_URL}"
+          exit 1
