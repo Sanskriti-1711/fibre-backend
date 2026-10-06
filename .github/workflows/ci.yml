@@ -211,12 +211,12 @@ jobs:
   # Cheap and dependency-free, and it protects the property that is easy to
   # lose silently: repeats stay quiet but a NEW failure still alerts.
   monitor-test:
-    name: Monitor alert logic
+    name: Monitor workflow tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Test the alert dedupe
-        run: bash tools/test_monitor_dedupe.sh
+      - name: Test the monitor workflow
+        run: bash tools/test_stack_monitor.sh
 
   # ── CD ───────────────────────────────────────────────────────────────────
   # main is the single deploy point, and this is the only thing that deploys.

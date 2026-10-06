@@ -47,7 +47,16 @@ jobs:
         id: probe
         continue-on-error: true
         # stdlib-only, so there is nothing to install.
-        run: python3 tools/check_stack.py | tee report.txt
+        #
+        # `set -o pipefail` is load-bearing, not decoration. Without it a
+        # pipeline's exit status is the LAST command's — `tee`, which is
+        # always 0 — so this step reports success no matter what the check
+        # found. The alert step then never runs and the monitor is silently
+        # decorative. Observed on a real dispatch before this fix:
+        # report.txt said "1 FAILED" while the step concluded success.
+        run: |
+          set -o pipefail
+          python3 tools/check_stack.py | tee report.txt
 
       - name: Keep the report
         if: always()
