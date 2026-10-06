@@ -207,6 +207,17 @@ jobs:
       - name: Report models without a migration
         run: python manage.py makemigrations --check --dry-run || true
 
+  # The monitor's alerting rules are shell, so they are tested with shell.
+  # Cheap and dependency-free, and it protects the property that is easy to
+  # lose silently: repeats stay quiet but a NEW failure still alerts.
+  monitor-test:
+    name: Monitor alert logic
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test the alert dedupe
+        run: bash tools/test_monitor_dedupe.sh
+
   # ── CD ───────────────────────────────────────────────────────────────────
   # main is the single deploy point, and this is the only thing that deploys.
   #
