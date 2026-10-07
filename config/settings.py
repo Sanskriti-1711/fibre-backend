@@ -201,6 +201,12 @@ CORS_ALLOWED_ORIGINS = [
     "https://fiber.zeabur.app",
     "https://fe.dippuzen.com",
     "https://qadmin.dippuzen.com",
+    # The admin/engineer UI's GitLab Pages home.  It is the origin
+    # fibre-fe deploys to, so a preflight from it must not depend on a host
+    # env var being set correctly: leaving it out is what made every browser
+    # call fail while both services were healthy.  `EXTRA_CORS_ORIGINS`
+    # below stays the mechanism for a host that moves.
+    "https://fibre-fe-98f8e0.gitlab.io",
     "http://127.0.0.1:5500",
     "http://localhost:5500",
     "http://localhost:8765",
@@ -227,6 +233,9 @@ CSRF_TRUSTED_ORIGINS = [
     "https://fiberbackend.zeabur.app",
     "https://fe.dippuzen.com",
     "https://qadmin.dippuzen.com",
+    # Same origin as above: a cross-origin POST from the Pages UI is rejected
+    # by CSRF before it reaches a view unless it is trusted here too.
+    "https://fibre-fe-98f8e0.gitlab.io",
     "http://127.0.0.1:5500",
     "http://localhost:5500",
     "http://localhost:3000",
