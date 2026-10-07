@@ -18,6 +18,14 @@
 #      lines - and its own danger is over-suppressing, going quiet when
 #      something NEW breaks. Both halves are asserted.
 #
+#   3. THE ENGINE HEALTH GRADE. check_stack.py grades the engine's /health
+#      payload, and both flags it reads are NESTED: postgis is db_info(),
+#      i.e. {"available": false}, and qgis_process is a path or null. Reading
+#      the outer level is always truthy, so a dead database link and a missing
+#      qgis_process both graded PASS. That is not hypothetical - the live
+#      Zeabur engine answered {"postgis": {"available": false}} from
+#      2026-07-17 while this monitor printed "postgis ok".
+#
 # Step bodies are read out of the workflow file, so this exercises the
 # artifact that ships rather than a copy of it.
 #
@@ -169,6 +177,47 @@ run_case "C. same failure again          -> silent"  NONE    "7" \
   "<!-- stack-monitor-fp:${fp} -->" "$work/fixtures/report.txt"
 run_case "D. failure changed since last  -> comment" COMMENT "7" \
   "<!-- stack-monitor-fp:${fp} -->" "$work/fixtures/report-changed.txt"
+
+echo
+echo "── 3. the engine health grade reads the nested flags ───────────────────"
+
+# Each case below is a payload shape the engine actually produces. The live
+# one is first: 81 days up, qgis found, no database.
+engine_case() {
+  local label="$1" payload="$2" want="$3" got
+  got=$("$REAL_PY" - "$repo_dir" "$payload" <<'PY'
+import importlib.util, json, pathlib, sys
+repo, payload = pathlib.Path(sys.argv[1]), sys.argv[2]
+# check_stack.py is a script under tools/, not an installed module; import it by path.
+spec = importlib.util.spec_from_file_location("check_stack", repo / "tools" / "check_stack.py")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+r = mod.engine_health_result(json.loads(payload), 288.0)
+print(f"{r.status}|{r.detail}")
+PY
+)
+  if [ "$got" = "$want" ]; then
+    pass "$label"
+  else
+    fail "$label — expected '$want', got '$got'"
+  fi
+}
+
+engine_case "postgis.available=false is DOWN/WARN, never a silent 'postgis ok'" \
+  '{"uptime_seconds":7000725,"qgis_process":"/usr/bin/qgis_process","postgis":{"available":false}}' \
+  'WARN|up 81.0d, qgis ok, postgis DOWN, 288ms'
+engine_case "postgis.available=true still PASSes" \
+  '{"uptime_seconds":7000725,"qgis_process":"/usr/bin/qgis_process","postgis":{"available":true}}' \
+  'PASS|up 81.0d, qgis ok, postgis ok, 288ms'
+engine_case "a bare boolean from an older engine build still reads" \
+  '{"postgis":false}' \
+  'WARN|qgis MISSING, postgis DOWN, 288ms'
+engine_case "a null qgis_process is reported, not dropped" \
+  '{"qgis_process":null,"postgis":{"available":true}}' \
+  'WARN|qgis MISSING, postgis ok, 288ms'
+engine_case "neither key present is not a PASS" \
+  '{}' \
+  'WARN|qgis MISSING, 288ms'
 
 echo
 if [ "$failures" -eq 0 ]; then
