@@ -5,14 +5,16 @@ hazards, field evidence, and survey change version control.
 """
 
 import uuid
+
 from django.db import models
 from django.utils import timezone
 
-
 # ── GPS Trace ──────────────────────────────────────────────────────────────
+
 
 class GPSTrace(models.Model):
     """A recorded GPS trace during field survey."""
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     engineer = models.ForeignKey(
         'users.User',
@@ -28,7 +30,9 @@ class GPSTrace(models.Model):
     )
     started_at = models.DateTimeField(default=timezone.now)
     ended_at = models.DateTimeField(null=True, blank=True)
-    total_distance_m = models.FloatField(null=True, blank=True, help_text='Total distance in meters')
+    total_distance_m = models.FloatField(
+        null=True, blank=True, help_text='Total distance in meters'
+    )
     point_count = models.PositiveIntegerField(default=0)
 
     class Meta:
@@ -42,6 +46,7 @@ class GPSTrace(models.Model):
 
 class GPSPoint(models.Model):
     """Individual GPS point within a trace."""
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     trace = models.ForeignKey(
         GPSTrace,
@@ -61,13 +66,15 @@ class GPSPoint(models.Model):
         verbose_name_plural = 'GPS Points'
 
     def __str__(self):
-        return f"Point {self.order} @ ({self.latitude:.6f}, {self.longitude:.6f})"
+        return f'Point {self.order} @ ({self.latitude:.6f}, {self.longitude:.6f})'
 
 
 # ── Trench Classifications ─────────────────────────────────────────────────
 
+
 class TrenchSurvey(models.Model):
     """Engineering classification of a trench during survey."""
+
     class TrenchType(models.TextChoices):
         NEW_TRENCH = 'new_trench', 'New Trench'
         EXISTING_DUCT = 'existing_duct', 'Existing Duct'
@@ -107,11 +114,17 @@ class TrenchSurvey(models.Model):
         on_delete=models.CASCADE,
         related_name='trench_surveys',
     )
-    trench_type = models.CharField(max_length=50, choices=TrenchType.choices, default=TrenchType.NEW_TRENCH)
-    construction_method = models.CharField(max_length=30, choices=ConstructionMethod.choices, null=True, blank=True)
+    trench_type = models.CharField(
+        max_length=50, choices=TrenchType.choices, default=TrenchType.NEW_TRENCH
+    )
+    construction_method = models.CharField(
+        max_length=30, choices=ConstructionMethod.choices, null=True, blank=True
+    )
     depth_mm = models.PositiveIntegerField(null=True, blank=True, help_text='Depth in millimeters')
     width_mm = models.PositiveIntegerField(null=True, blank=True, help_text='Width in millimeters')
-    surface_type = models.CharField(max_length=30, choices=SurfaceType.choices, null=True, blank=True)
+    surface_type = models.CharField(
+        max_length=30, choices=SurfaceType.choices, null=True, blank=True
+    )
     road_crossing = models.BooleanField(default=False)
     footpath_crossing = models.BooleanField(default=False)
     rail_crossing = models.BooleanField(default=False)
@@ -129,11 +142,12 @@ class TrenchSurvey(models.Model):
         verbose_name_plural = 'Trench Surveys'
 
     def __str__(self):
-        return f"Trench {self.id} — {self.get_trench_type_display()}"
+        return f'Trench {self.id} — {self.get_trench_type_display()}'
 
 
 class ExistingAsset(models.Model):
     """Validation of existing infrastructure found during survey."""
+
     class AssetType(models.TextChoices):
         DUCT = 'duct', 'Existing Duct'
         CHAMBER = 'chamber', 'Existing Chamber'
@@ -166,7 +180,9 @@ class ExistingAsset(models.Model):
         blank=True,
     )
     asset_type = models.CharField(max_length=20, choices=AssetType.choices)
-    condition = models.CharField(max_length=20, choices=Condition.choices, default=Condition.UNKNOWN)
+    condition = models.CharField(
+        max_length=20, choices=Condition.choices, default=Condition.UNKNOWN
+    )
     latitude = models.FloatField()
     longitude = models.FloatField()
     description = models.TextField(blank=True, default='')
@@ -178,13 +194,15 @@ class ExistingAsset(models.Model):
         verbose_name_plural = 'Existing Assets'
 
     def __str__(self):
-        return f"{self.get_asset_type_display()} — {self.get_condition_display()}"
+        return f'{self.get_asset_type_display()} — {self.get_condition_display()}'
 
 
 # ── CRM / Risk Assessment ──────────────────────────────────────────────────
 
+
 class RiskAssessment(models.Model):
     """Risk assessment attached to any survey asset."""
+
     class RiskCategory(models.TextChoices):
         TRAFFIC = 'traffic', 'Traffic'
         PEDESTRIAN = 'pedestrian', 'Pedestrian'
@@ -243,7 +261,9 @@ class RiskAssessment(models.Model):
     )
     category = models.CharField(max_length=30, choices=RiskCategory.choices)
     severity = models.CharField(max_length=10, choices=Severity.choices, default=Severity.MEDIUM)
-    probability = models.CharField(max_length=10, choices=Probability.choices, default=Probability.POSSIBLE)
+    probability = models.CharField(
+        max_length=10, choices=Probability.choices, default=Probability.POSSIBLE
+    )
     mitigation = models.TextField(blank=True, default='')
     notes = models.TextField(blank=True, default='')
     status = models.CharField(max_length=15, choices=Status.choices, default=Status.OPEN)
@@ -256,11 +276,12 @@ class RiskAssessment(models.Model):
         verbose_name_plural = 'Risk Assessments'
 
     def __str__(self):
-        return f"Risk: {self.get_category_display()} ({self.get_severity_display()})"
+        return f'Risk: {self.get_category_display()} ({self.get_severity_display()})'
 
 
 class Hazard(models.Model):
     """Hazards identified during survey."""
+
     class HazardType(models.TextChoices):
         WORKING_AT_HEIGHT = 'working_at_height', 'Working at Height'
         CONFINED_SPACE = 'confined_space', 'Confined Space'
@@ -302,7 +323,9 @@ class Hazard(models.Model):
         related_name='hazards',
     )
     hazard_type = models.CharField(max_length=30, choices=HazardType.choices)
-    mitigation_template = models.CharField(max_length=20, choices=MitigationTemplate.choices, null=True, blank=True)
+    mitigation_template = models.CharField(
+        max_length=20, choices=MitigationTemplate.choices, null=True, blank=True
+    )
     notes = models.TextField(blank=True, default='')
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(default=timezone.now)
@@ -313,13 +336,15 @@ class Hazard(models.Model):
         verbose_name_plural = 'Hazards'
 
     def __str__(self):
-        return f"Hazard: {self.get_hazard_type_display()}"
+        return f'Hazard: {self.get_hazard_type_display()}'
 
 
 # ── Field Evidence ─────────────────────────────────────────────────────────
 
+
 class FieldEvidence(models.Model):
     """Photos, videos, voice notes, and measurements captured in the field."""
+
     class EvidenceType(models.TextChoices):
         PHOTO = 'photo', 'Photo'
         VIDEO = 'video', 'Video'
@@ -341,7 +366,9 @@ class FieldEvidence(models.Model):
         null=True,
         blank=True,
     )
-    evidence_type = models.CharField(max_length=20, choices=EvidenceType.choices, default=EvidenceType.PHOTO)
+    evidence_type = models.CharField(
+        max_length=20, choices=EvidenceType.choices, default=EvidenceType.PHOTO
+    )
     file = models.FileField(upload_to='survey/evidence/', null=True, blank=True)
     description = models.TextField(blank=True, default='')
     latitude = models.FloatField(null=True, blank=True)
@@ -361,8 +388,10 @@ class FieldEvidence(models.Model):
 
 # ── Survey Change / Version Control ────────────────────────────────────────
 
+
 class SurveyEditLog(models.Model):
     """Audit trail of every edit made during survey."""
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     engineer = models.ForeignKey(
         'users.User',
@@ -393,8 +422,10 @@ class SurveyEditLog(models.Model):
 
 # ── Survey Status Tracking ─────────────────────────────────────────────────
 
+
 class SurveyStatus(models.Model):
     """Overall survey status for a feature."""
+
     class StatusChoice(models.TextChoices):
         NOT_STARTED = 'not_started', 'Not Started'
         VISITED = 'visited', 'Visited'
@@ -416,7 +447,9 @@ class SurveyStatus(models.Model):
         on_delete=models.CASCADE,
         related_name='survey_status',
     )
-    status = models.CharField(max_length=20, choices=StatusChoice.choices, default=StatusChoice.NOT_STARTED)
+    status = models.CharField(
+        max_length=20, choices=StatusChoice.choices, default=StatusChoice.NOT_STARTED
+    )
     notes = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
@@ -427,13 +460,15 @@ class SurveyStatus(models.Model):
         verbose_name_plural = 'Survey Statuses'
 
     def __str__(self):
-        return f"Feature {self.feature_id} — {self.get_status_display()}"
+        return f'Feature {self.feature_id} — {self.get_status_display()}'
 
 
 # ── Offline Sync Queue ─────────────────────────────────────────────────────
 
+
 class SyncQueueItem(models.Model):
     """Tracks items pending sync from offline mobile app."""
+
     class ItemType(models.TextChoices):
         FEATURE_UPDATE = 'feature_update', 'Feature Update'
         PHOTO_UPLOAD = 'photo_upload', 'Photo Upload'
@@ -469,10 +504,11 @@ class SyncQueueItem(models.Model):
         verbose_name_plural = 'Sync Queue Items'
 
     def __str__(self):
-        return f"Sync: {self.get_item_type_display()} — {self.get_status_display()}"
+        return f'Sync: {self.get_item_type_display()} — {self.get_status_display()}'
 
 
 # ── Survey Feature (HLD/Survey Separation) ────────────────────────────────
+
 
 class SurveyFeature(models.Model):
     """A survey-engineer copy of an HLD feature.
@@ -506,17 +542,17 @@ class SurveyFeature(models.Model):
     # (LLD) both mean "send back for correction" → NEEDS_CORRECTION, NOT a
     # rejection. Keeping one map here prevents the two endpoints diverging.
     DECISION_STATUS = {
-        "approve": "APPROVED",
-        "reject": "REJECTED",
-        "correction": "NEEDS_CORRECTION",
-        "redo": "NEEDS_CORRECTION",
-        "request_correction": "NEEDS_CORRECTION",
+        'approve': 'APPROVED',
+        'reject': 'REJECTED',
+        'correction': 'NEEDS_CORRECTION',
+        'redo': 'NEEDS_CORRECTION',
+        'request_correction': 'NEEDS_CORRECTION',
     }
 
     @classmethod
     def status_for_decision(cls, decision):
         """Return the SurveyStatus value for a review decision, or None."""
-        key = (decision or "").strip().lower()
+        key = (decision or '').strip().lower()
         member = cls.DECISION_STATUS.get(key)
         return getattr(cls.SurveyStatus, member) if member else None
 
@@ -554,8 +590,12 @@ class SurveyFeature(models.Model):
     layer_name = models.CharField(max_length=255)
 
     # Frozen copies from the HLD feature — never change after creation
-    original_geometry = models.JSONField(null=True, blank=True, help_text='Frozen geometry from the HLD feature')
-    original_attributes = models.JSONField(null=True, blank=True, help_text='Frozen attributes from the HLD feature')
+    original_geometry = models.JSONField(
+        null=True, blank=True, help_text='Frozen geometry from the HLD feature'
+    )
+    original_attributes = models.JSONField(
+        null=True, blank=True, help_text='Frozen attributes from the HLD feature'
+    )
 
     # Engineer-edited geometry and attributes
     survey_geometry = models.JSONField(help_text='Engineer-edited geometry')
@@ -587,8 +627,12 @@ class SurveyFeature(models.Model):
         choices=SyncState.choices,
         default=SyncState.PENDING,
     )
-    change_reason = models.TextField(blank=True, default='', help_text='Why the engineer made this change')
-    review_notes = models.TextField(blank=True, default='', help_text='Planner/approver notes from the approval decision')
+    change_reason = models.TextField(
+        blank=True, default='', help_text='Why the engineer made this change'
+    )
+    review_notes = models.TextField(
+        blank=True, default='', help_text='Planner/approver notes from the approval decision'
+    )
 
     # GPS capture quality (Tier-1 A2) — recorded at capture time so the
     # LLD can downweight or re-verify features captured on a poor fix.
@@ -599,7 +643,8 @@ class SurveyFeature(models.Model):
         ('unknown', 'Unknown accuracy'),
     ]
     gps_accuracy_m = models.FloatField(
-        null=True, blank=True,
+        null=True,
+        blank=True,
         help_text='Device-reported horizontal accuracy (metres) at capture time',
     )
     gps_quality = models.CharField(
@@ -613,7 +658,9 @@ class SurveyFeature(models.Model):
     # Photo classification tags (Tier-1 A1) — e.g.
     # ["trench", "road", "cable"] produced by the heuristic classifier on
     # upload; used by the survey form for field auto-fill suggestions (A3).
-    photo_tags = models.JSONField(default=list, blank=True, help_text='Classified tags for the attached photo')
+    photo_tags = models.JSONField(
+        default=list, blank=True, help_text='Classified tags for the attached photo'
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -631,7 +678,7 @@ class SurveyFeature(models.Model):
 
     def __str__(self):
         hld = str(self.original_hld_feature_id) if self.original_hld_feature_id else 'new'
-        return f"SurveyFeature {self.id} — HLD:{hld} — {self.get_survey_status_display()}"
+        return f'SurveyFeature {self.id} — HLD:{hld} — {self.get_survey_status_display()}'
 
 
 class ApprovalRecord(models.Model):
@@ -669,4 +716,4 @@ class ApprovalRecord(models.Model):
         verbose_name_plural = 'Approval Records'
 
     def __str__(self):
-        return f"{self.survey_feature_id} — {self.get_decision_display()}"
+        return f'{self.survey_feature_id} — {self.get_decision_display()}'

@@ -7,6 +7,7 @@ All settings can be overridden via environment variables prefixed with
 
 import os
 
+
 # ---------------------------------------------------------------------------
 # FastAPI Engine — the single pipeline orchestrator
 # ---------------------------------------------------------------------------
@@ -27,20 +28,21 @@ import os
 #   3. Production default → https://ftth-planning.onrender.com (the live
 #      engine built from the sanskriti17/ftth_planning Docker image).
 def _default_engine_url() -> str:
-    if os.getenv("FTTH_DB", "").lower() in ("local", "dev", "docker"):
-        return "http://127.0.0.1:8080"
+    if os.getenv('FTTH_DB', '').lower() in ('local', 'dev', 'docker'):
+        return 'http://127.0.0.1:8080'
     # Local development (DEBUG on) defaults to the local FastAPI engine so the
     # results map works even when the server is started without FTTH_ENGINE_URL.
     try:
         from django.conf import settings
-        if getattr(settings, "DEBUG", False):
-            return "http://127.0.0.1:8080"
+
+        if getattr(settings, 'DEBUG', False):
+            return 'http://127.0.0.1:8080'
     except Exception:
         pass
-    return "https://ftth-planning.onrender.com"
+    return 'https://ftth-planning.onrender.com'
 
 
-FTTH_ENGINE_URL = os.getenv("FTTH_ENGINE_URL", _default_engine_url()).rstrip("/")
+FTTH_ENGINE_URL = os.getenv('FTTH_ENGINE_URL', _default_engine_url()).rstrip('/')
 
 # ---------------------------------------------------------------------------
 # Pipeline stages
@@ -52,20 +54,34 @@ FTTH_ENGINE_URL = os.getenv("FTTH_ENGINE_URL", _default_engine_url()).rstrip("/"
 #                as complete)
 # ---------------------------------------------------------------------------
 STAGES = [
-    {"index": 0, "name": "Object Layer",    "algorithm": "01_object_layer",
-     "outputs": ["Objects"]},
-    {"index": 1, "name": "Polygon Layer",   "algorithm": "02_polygon_layer",
-     "outputs": ["Polygons"]},
-    {"index": 2, "name": "Network Layer",   "algorithm": "03_network_layer",
-     "outputs": ["PDPs", "MFG"]},
-    {"index": 3, "name": "Trench Layer",    "algorithm": "04_trench_layer",
-     "outputs": ["Final_Trenches"]},
+    {'index': 0, 'name': 'Object Layer', 'algorithm': '01_object_layer', 'outputs': ['Objects']},
+    {'index': 1, 'name': 'Polygon Layer', 'algorithm': '02_polygon_layer', 'outputs': ['Polygons']},
+    {
+        'index': 2,
+        'name': 'Network Layer',
+        'algorithm': '03_network_layer',
+        'outputs': ['PDPs', 'MFG'],
+    },
+    {
+        'index': 3,
+        'name': 'Trench Layer',
+        'algorithm': '04_trench_layer',
+        'outputs': ['Final_Trenches'],
+    },
     # Phase C cascade (TRENCH_DESIGN.md §6.1): ducts are laid before the
     # cables are pulled, so the duct stage carries the lower index.
-    {"index": 4, "name": "Duct Layer",      "algorithm": "05_duct_layer",
-     "outputs": ["Feeder_Ducts", "Distribution_Ducts"]},
-    {"index": 5, "name": "Cable Layer",     "algorithm": "06_cable_layer",
-     "outputs": ["Feeder_Cable", "Distribution_Cable"]},
+    {
+        'index': 4,
+        'name': 'Duct Layer',
+        'algorithm': '05_duct_layer',
+        'outputs': ['Feeder_Ducts', 'Distribution_Ducts'],
+    },
+    {
+        'index': 5,
+        'name': 'Cable Layer',
+        'algorithm': '06_cable_layer',
+        'outputs': ['Feeder_Cable', 'Distribution_Cable'],
+    },
 ]
 
 # Maps API-friendly layer name → (GPKG stem, internal layer name).
@@ -73,22 +89,22 @@ STAGES = [
 # their own entry so the frontend can fetch them independently by name.
 LAYER_NAME_MAP = {
     # Canonical names matching the backend ONECLICK_OUTPUTS
-    "objects":             ("Objects",              "object_layer"),
-    "polygons":            ("Polygons",             "polygon_layer"),
-    "pdps":                ("PDPs",                 "PDPs"),
-    "mfg":                 ("MFG",                  "MFG"),
-    "mfg_service_areas":   ("MFG_Service_Areas",    "MFG_Service_Areas"),
-    "feeder_cable":        ("Feeder_Cable",         "Feeder_Cable"),
-    "distribution_cable":  ("Distribution_Cable",   "Distribution_Cable"),
-    "feeder_ducts":        ("Feeder_Ducts",         "Feeder_Ducts"),
-    "distribution_ducts":  ("Distribution_Ducts",   "Distribution_Ducts"),
-    "drop_ducts":          ("Drop_Ducts",             "Drop_Ducts"),
-    "coupleurs":           ("Coupleurs",              "Coupleurs"),
-    "chambers":            ("Chambers",             "Chambers"),
-    "poles":               ("Poles",                "Poles"),
+    'objects': ('Objects', 'object_layer'),
+    'polygons': ('Polygons', 'polygon_layer'),
+    'pdps': ('PDPs', 'PDPs'),
+    'mfg': ('MFG', 'MFG'),
+    'mfg_service_areas': ('MFG_Service_Areas', 'MFG_Service_Areas'),
+    'feeder_cable': ('Feeder_Cable', 'Feeder_Cable'),
+    'distribution_cable': ('Distribution_Cable', 'Distribution_Cable'),
+    'feeder_ducts': ('Feeder_Ducts', 'Feeder_Ducts'),
+    'distribution_ducts': ('Distribution_Ducts', 'Distribution_Ducts'),
+    'drop_ducts': ('Drop_Ducts', 'Drop_Ducts'),
+    'coupleurs': ('Coupleurs', 'Coupleurs'),
+    'chambers': ('Chambers', 'Chambers'),
+    'poles': ('Poles', 'Poles'),
     # Aerial legs the trench stage classified (never excavated): a design
     # decision, separate from the aerial drop the pole/aerial stage builds.
-    "aerial_drops":        ("Aerial_Drops",         "aerial_drops"),
+    'aerial_drops': ('Aerial_Drops', 'aerial_drops'),
     # What the pole / aerial-drop stage BUILDS for those classified legs: the
     # overhead span (never dug) and the cable it carries. Both are published by
     # the engine and ingested into `gis.aerial_span_layer` / `gis.aerial_cable_layer`,
@@ -100,45 +116,74 @@ LAYER_NAME_MAP = {
     # Renamed from `aerial_drop_trenches` / `Aerial_Drop_Trenches`: a trench is
     # an excavation and this is not (EXCAVATION=0, Overhead). The old public
     # name is kept below as an alias so a stored FtthLayer row still resolves.
-    "aerial_spans":         ("Aerial_Spans",         "aerial_spans"),
-    "aerial_drop_trenches": ("Aerial_Spans",         "aerial_drop_trenches"),
-    "aerial_cable":        ("Aerial_Cable",         "aerial_cable"),
+    'aerial_spans': ('Aerial_Spans', 'aerial_spans'),
+    'aerial_drop_trenches': ('Aerial_Spans', 'aerial_drop_trenches'),
+    'aerial_cable': ('Aerial_Cable', 'aerial_cable'),
     # The trench designer's structural nodes (HDD pits / junctions / PDPs /
     # bends / pulls): the evidence behind every planned chamber, and the layer
     # the map draws the structures' real positions from.
-    "trench_nodes":        ("Trench_Nodes",         "trench_nodes"),
-    "brownfield":          ("Existing_Infrastructure", "brownfield"),
-    "trenches":            ("Final_Trenches",       "trench_layer"),
+    'trench_nodes': ('Trench_Nodes', 'trench_nodes'),
+    'brownfield': ('Existing_Infrastructure', 'brownfield'),
+    'trenches': ('Final_Trenches', 'trench_layer'),
     # Backward-compatible aliases
-    "network":             ("Network",              "network_layer"),
-    "cables":              ("Feeder_Cable",         "cable_layer"),
-    "ducts":               ("Feeder_Ducts",         "duct_layer"),
+    'network': ('Network', 'network_layer'),
+    'cables': ('Feeder_Cable', 'cable_layer'),
+    'ducts': ('Feeder_Ducts', 'duct_layer'),
 }
 
 # Pipeline steps for step-by-step execution (matches HLD_Planning_01 ONECLICK_OUTPUTS)
 PIPELINE_STEPS = [
-    {"name": "object",  "alg_id": "hldplanning:01_object_layer",  "label": "Object Layer",
-     "outputs": ["Objects.gpkg"]},
-    {"name": "polygon", "alg_id": "hldplanning:02_polygon_layer", "label": "Polygon Layer",
-     "outputs": ["Polygons.gpkg"]},
-    {"name": "network", "alg_id": "hldplanning:03_network_layer", "label": "Network Layer",
-     "outputs": ["PDPs.gpkg", "MFG.gpkg"]},
-    {"name": "trench",  "alg_id": "hldplanning:04_trench_layer",  "label": "Trench Layer",
-     "outputs": ["Final_Trenches.gpkg"]},
-    {"name": "cable",   "alg_id": "hldplanning:06_cable_layer",   "label": "Cable Layer",
-     "outputs": ["Feeder_Cable.gpkg", "Distribution_Cable.gpkg"]},
-    {"name": "duct",    "alg_id": "hldplanning:05_duct_layer",    "label": "Duct Layer",
-     "outputs": ["Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg", "Coupleurs.gpkg"]},
+    {
+        'name': 'object',
+        'alg_id': 'hldplanning:01_object_layer',
+        'label': 'Object Layer',
+        'outputs': ['Objects.gpkg'],
+    },
+    {
+        'name': 'polygon',
+        'alg_id': 'hldplanning:02_polygon_layer',
+        'label': 'Polygon Layer',
+        'outputs': ['Polygons.gpkg'],
+    },
+    {
+        'name': 'network',
+        'alg_id': 'hldplanning:03_network_layer',
+        'label': 'Network Layer',
+        'outputs': ['PDPs.gpkg', 'MFG.gpkg'],
+    },
+    {
+        'name': 'trench',
+        'alg_id': 'hldplanning:04_trench_layer',
+        'label': 'Trench Layer',
+        'outputs': ['Final_Trenches.gpkg'],
+    },
+    {
+        'name': 'cable',
+        'alg_id': 'hldplanning:06_cable_layer',
+        'label': 'Cable Layer',
+        'outputs': ['Feeder_Cable.gpkg', 'Distribution_Cable.gpkg'],
+    },
+    {
+        'name': 'duct',
+        'alg_id': 'hldplanning:05_duct_layer',
+        'label': 'Duct Layer',
+        'outputs': [
+            'Feeder_Ducts.gpkg',
+            'Distribution_Ducts.gpkg',
+            'Drop_Ducts.gpkg',
+            'Coupleurs.gpkg',
+        ],
+    },
 ]
 
 # Step dependency chain: which step must be completed before this one
 STEP_DEPENDENCIES = {
-    "object": None,
-    "polygon": "object",
-    "network": "polygon",
-    "trench": "network",
-    "cable": "trench",
-    "duct": "trench",
+    'object': None,
+    'polygon': 'object',
+    'network': 'polygon',
+    'trench': 'network',
+    'cable': 'trench',
+    'duct': 'trench',
 }
 
 # ======================================================================
@@ -149,17 +194,23 @@ STEP_DEPENDENCIES = {
 
 # GPKG files to include in the field-survey package zip.
 SURVEY_PACKAGE_FILES = [
-    "Objects.gpkg",
-    "Polygons.gpkg", "PDPs.gpkg", "MFG_Service_Areas.gpkg",
-    "Feeder_Cable.gpkg", "Distribution_Cable.gpkg",
-    "Chambers.gpkg",
+    'Objects.gpkg',
+    'Polygons.gpkg',
+    'PDPs.gpkg',
+    'MFG_Service_Areas.gpkg',
+    'Feeder_Cable.gpkg',
+    'Distribution_Cable.gpkg',
+    'Chambers.gpkg',
     # The field team must know which drop legs are on the pole line and why,
     # otherwise an aerial leg looks like a missing trench on the map.
-    "Aerial_Drops.gpkg",
-    "Final_Trenches.gpkg",
-    "Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg",
-    "Coupleurs.gpkg",
-    "Existing_Infrastructure.gpkg", "Existing_Infrastructure_Points.gpkg",
+    'Aerial_Drops.gpkg',
+    'Final_Trenches.gpkg',
+    'Feeder_Ducts.gpkg',
+    'Distribution_Ducts.gpkg',
+    'Drop_Ducts.gpkg',
+    'Coupleurs.gpkg',
+    'Existing_Infrastructure.gpkg',
+    'Existing_Infrastructure_Points.gpkg',
 ]
 
 # GeoJSON files to include in the field-survey package zip.
@@ -172,21 +223,21 @@ SURVEY_PACKAGE_FILES = [
 # GeoJSON ``crs`` field, defaulting to EPSG:25833) to EPSG:4326 (WGS84)
 # so MapLibre can render them correctly.
 SURVEY_GEOJSON_FILES = {
-    "Objects.geojson":              "objects.geojson",
-    "Polygons.geojson":             "polygons.geojson",
-    "PDPs.geojson":                 "pdps.geojson",
-    "Feeder_Cable.geojson":         "feeder_cable.geojson",
-    "Distribution_Cable.geojson":   "distribution_cable.geojson",
-    "Chambers.geojson":             "chambers.geojson",
-    "Aerial_Drops.geojson":         "aerial_drops.geojson",
-    "Trench_Nodes.geojson":         "trench_nodes.geojson",
-    "Final_Trenches.geojson":       "final_trenches.geojson",
-    "Feeder_Ducts.geojson":         "feeder_ducts.geojson",
-    "Distribution_Ducts.geojson":   "distribution_ducts.geojson",
-    "Drop_Ducts.geojson":           "drop_ducts.geojson",
-    "Coupleurs.geojson":            "coupleurs.geojson",
-    "Existing_Infrastructure.geojson":       "existing_infrastructure.geojson",
-    "Existing_Infrastructure_Points.geojson": "existing_infrastructure_points.geojson",
+    'Objects.geojson': 'objects.geojson',
+    'Polygons.geojson': 'polygons.geojson',
+    'PDPs.geojson': 'pdps.geojson',
+    'Feeder_Cable.geojson': 'feeder_cable.geojson',
+    'Distribution_Cable.geojson': 'distribution_cable.geojson',
+    'Chambers.geojson': 'chambers.geojson',
+    'Aerial_Drops.geojson': 'aerial_drops.geojson',
+    'Trench_Nodes.geojson': 'trench_nodes.geojson',
+    'Final_Trenches.geojson': 'final_trenches.geojson',
+    'Feeder_Ducts.geojson': 'feeder_ducts.geojson',
+    'Distribution_Ducts.geojson': 'distribution_ducts.geojson',
+    'Drop_Ducts.geojson': 'drop_ducts.geojson',
+    'Coupleurs.geojson': 'coupleurs.geojson',
+    'Existing_Infrastructure.geojson': 'existing_infrastructure.geojson',
+    'Existing_Infrastructure_Points.geojson': 'existing_infrastructure_points.geojson',
 }
 
 # ======================================================================
@@ -196,41 +247,53 @@ SURVEY_GEOJSON_FILES = {
 
 # GPKG files to include in the full design package zip.
 DESIGN_PACKAGE_FILES = [
-    "Objects.gpkg", "Polygons.gpkg", "PDPs.gpkg", "MFG.gpkg",
-    "MFG_Service_Areas.gpkg",
-    "Final_Trenches.gpkg", "Aerial_Drops.gpkg", "Trench_Nodes.gpkg", "Pseudo_HH.gpkg",
-    "Feeder_Cable.gpkg", "Distribution_Cable.gpkg",
-    "Feeder_Ducts.gpkg", "Distribution_Ducts.gpkg", "Drop_Ducts.gpkg",
-    "Coupleurs.gpkg",
-    "Chambers.gpkg", "Poles.gpkg",
-    "Existing_Infrastructure.gpkg", "Existing_Infrastructure_Points.gpkg",
-    "BOQ.xlsx", "BOM.xlsx",
+    'Objects.gpkg',
+    'Polygons.gpkg',
+    'PDPs.gpkg',
+    'MFG.gpkg',
+    'MFG_Service_Areas.gpkg',
+    'Final_Trenches.gpkg',
+    'Aerial_Drops.gpkg',
+    'Trench_Nodes.gpkg',
+    'Pseudo_HH.gpkg',
+    'Feeder_Cable.gpkg',
+    'Distribution_Cable.gpkg',
+    'Feeder_Ducts.gpkg',
+    'Distribution_Ducts.gpkg',
+    'Drop_Ducts.gpkg',
+    'Coupleurs.gpkg',
+    'Chambers.gpkg',
+    'Poles.gpkg',
+    'Existing_Infrastructure.gpkg',
+    'Existing_Infrastructure_Points.gpkg',
+    'BOQ.xlsx',
+    'BOM.xlsx',
 ]
 
 # GeoJSON files to include in the full design package zip (reprojected to
 # WGS84 so they open anywhere, including web viewers).
 DESIGN_GEOJSON_FILES = {
-    "Objects.geojson":              "objects.geojson",
-    "Polygons.geojson":             "polygons.geojson",
-    "PDPs.geojson":                 "pdps.geojson",
-    "MFG.geojson":                  "mfg.geojson",
-    "MFG_Service_Areas.geojson":    "mfg_service_areas.geojson",
-    "Feeder_Cable.geojson":         "feeder_cable.geojson",
-    "Distribution_Cable.geojson":   "distribution_cable.geojson",
-    "Feeder_Ducts.geojson":         "feeder_ducts.geojson",
-    "Distribution_Ducts.geojson":   "distribution_ducts.geojson",
-    "Drop_Ducts.geojson":           "drop_ducts.geojson",
-    "Coupleurs.geojson":            "coupleurs.geojson",
-    "Final_Trenches.geojson":       "final_trenches.geojson",
-    "Aerial_Drops.geojson":         "aerial_drops.geojson",
-    "Trench_Nodes.geojson":         "trench_nodes.geojson",
-    "Chambers.geojson":             "chambers.geojson",
-    "Poles.geojson":                "poles.geojson",
-    "Existing_Infrastructure.geojson":       "existing_infrastructure.geojson",
-    "Existing_Infrastructure_Points.geojson": "existing_infrastructure_points.geojson",
+    'Objects.geojson': 'objects.geojson',
+    'Polygons.geojson': 'polygons.geojson',
+    'PDPs.geojson': 'pdps.geojson',
+    'MFG.geojson': 'mfg.geojson',
+    'MFG_Service_Areas.geojson': 'mfg_service_areas.geojson',
+    'Feeder_Cable.geojson': 'feeder_cable.geojson',
+    'Distribution_Cable.geojson': 'distribution_cable.geojson',
+    'Feeder_Ducts.geojson': 'feeder_ducts.geojson',
+    'Distribution_Ducts.geojson': 'distribution_ducts.geojson',
+    'Drop_Ducts.geojson': 'drop_ducts.geojson',
+    'Coupleurs.geojson': 'coupleurs.geojson',
+    'Final_Trenches.geojson': 'final_trenches.geojson',
+    'Aerial_Drops.geojson': 'aerial_drops.geojson',
+    'Trench_Nodes.geojson': 'trench_nodes.geojson',
+    'Chambers.geojson': 'chambers.geojson',
+    'Poles.geojson': 'poles.geojson',
+    'Existing_Infrastructure.geojson': 'existing_infrastructure.geojson',
+    'Existing_Infrastructure_Points.geojson': 'existing_infrastructure_points.geojson',
 }
 
 # Fallback CRS when the GeoJSON has no ``crs`` field.
 # EPSG:25833 = UTM Zone 33N (used for Berlin / central Europe test data).
 # This should match the CRS of the input road network.
-DEFAULT_SOURCE_CRS = "EPSG:25833"
+DEFAULT_SOURCE_CRS = 'EPSG:25833'

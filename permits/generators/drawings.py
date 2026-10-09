@@ -9,62 +9,61 @@ persisted layer attributes (DEPTH_MM / WIDTH_MM / trench_type / SURFACE).
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 from . import data
-
 
 # Default construction spec per trench type (mm) — used only when the layer
 # carries no DEPTH_MM / WIDTH_MM. Mirrors the HLD/LLD engine's construction
 # specs (see docs/stages/LLD.md).
 TRENCH_SPECS = {
-    "Feeder": {"depth_mm": 900, "width_mm": 450},
-    "Distribution": {"depth_mm": 600, "width_mm": 300},
-    "Garden": {"depth_mm": 450, "width_mm": 150},
-    "Duct": {"depth_mm": 600, "width_mm": 300},
-    "Unknown": {"depth_mm": 600, "width_mm": 300},
+    'Feeder': {'depth_mm': 900, 'width_mm': 450},
+    'Distribution': {'depth_mm': 600, 'width_mm': 300},
+    'Garden': {'depth_mm': 450, 'width_mm': 150},
+    'Duct': {'depth_mm': 600, 'width_mm': 300},
+    'Unknown': {'depth_mm': 600, 'width_mm': 300},
 }
 
 _SVG_FILL = {
-    "Asphalt": "#374151",
-    "Footpath": "#D1D5DB",
-    "Concrete": "#9CA3AF",
-    "Grass": "#86B87C",
-    "Paving": "#D1D5DB",
+    'Asphalt': '#374151',
+    'Footpath': '#D1D5DB',
+    'Concrete': '#9CA3AF',
+    'Grass': '#86B87C',
+    'Paving': '#D1D5DB',
 }
 
 
-def route_drawings(project_id: str, lld_run_id: Optional[str] = None) -> list[dict[str, Any]]:
+def route_drawings(project_id: str, lld_run_id: str | None = None) -> list[dict[str, Any]]:
     """GeoJSON FeatureCollection extracts of the final design layers."""
     drawings = []
     for layer in data.PACKAGE_LAYERS:
         feats = data.lld_layer_features(project_id, layer, lld_run_id)
         if not feats:
             continue
-        fc = {"type": "FeatureCollection", "features": feats}
-        drawings.append({
-            "name": f"drawing_{layer}",
-            "kind": "DRAWING",
-            "filename": f"drawings/{layer}.geojson",
-            "content": json.dumps(fc, indent=1),
-            "description": f"Route drawing — {layer}",
-        })
+        fc = {'type': 'FeatureCollection', 'features': feats}
+        drawings.append(
+            {
+                'name': f'drawing_{layer}',
+                'kind': 'DRAWING',
+                'filename': f'drawings/{layer}.geojson',
+                'content': json.dumps(fc, indent=1),
+                'description': f'Route drawing — {layer}',
+            }
+        )
     return drawings
 
 
-def _svg_cross_section(
-    trench_type: str, surface: str, depth_mm: int, width_mm: int
-) -> str:
+def _svg_cross_section(trench_type: str, surface: str, depth_mm: int, width_mm: int) -> str:
     """Dimensioned cross-section SVG for one trench type/surface combo."""
     # Scale: 1 mm -> 0.5 px, capped so the SVG stays readable.
     w = max(120, min(int(width_mm * 0.5), 480))
     h = max(120, min(int(depth_mm * 0.5), 420))
-    fill = _SVG_FILL.get(surface, "#D1D5DB")
+    fill = _SVG_FILL.get(surface, '#D1D5DB')
     margin = 46
     x0, y0 = margin, margin  # top-left of the trench opening
 
     def esc(v: str) -> str:
-        return v.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return v.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
     svg = []
     svg.append(
@@ -121,8 +120,8 @@ def _svg_cross_section(
         f'<text x="{x0}" y="{y0 + h + 44}" font-size="10" fill="#6B7280">'
         f'Typical cross-section (not to scale)</text>'
     )
-    svg.append("</svg>")
-    return "\n".join(svg)
+    svg.append('</svg>')
+    return '\n'.join(svg)
 
 
 def cross_sections(project_id: str) -> list[dict[str, Any]]:
@@ -130,21 +129,29 @@ def cross_sections(project_id: str) -> list[dict[str, Any]]:
     present in the project's final_trenches."""
     stats = data.trench_stats(project_id)
     combos: set[tuple[str, str]] = set()
-    for f in data.lld_layer_features(project_id, "final_trenches"):
+    for f in data.lld_layer_features(project_id, 'final_trenches'):
         p = data._props(f)
-        ttype = (p.get("trench_type") or "Unknown").strip() or "Unknown"
-        surf = (p.get("SURFACE") or "Unknown").strip() or "Unknown"
+        ttype = (p.get('trench_type') or 'Unknown').strip() or 'Unknown'
+        surf = (p.get('SURFACE') or 'Unknown').strip() or 'Unknown'
         combos.add((ttype, surf))
     out = []
     for ttype, surf in sorted(combos):
-        depth = int((stats.get("max_depth_mm") or TRENCH_SPECS.get(ttype, TRENCH_SPECS["Unknown"])["depth_mm"]))
-        width = int((stats.get("max_width_mm") or TRENCH_SPECS.get(ttype, TRENCH_SPECS["Unknown"])["width_mm"]))
+        depth = int(
+            stats.get('max_depth_mm')
+            or TRENCH_SPECS.get(ttype, TRENCH_SPECS['Unknown'])['depth_mm']
+        )
+        width = int(
+            stats.get('max_width_mm')
+            or TRENCH_SPECS.get(ttype, TRENCH_SPECS['Unknown'])['width_mm']
+        )
         slug = f"{ttype.lower().replace(' ', '_')}_{surf.lower().replace(' ', '_')}"
-        out.append({
-            "name": f"cross_section_{slug}",
-            "kind": "CROSS_SECTION",
-            "filename": f"drawings/cross_section_{slug}.svg",
-            "content": _svg_cross_section(ttype, surf, depth, width),
-            "description": f"Trench cross-section — {ttype} / {surf}",
-        })
+        out.append(
+            {
+                'name': f'cross_section_{slug}',
+                'kind': 'CROSS_SECTION',
+                'filename': f'drawings/cross_section_{slug}.svg',
+                'content': _svg_cross_section(ttype, surf, depth, width),
+                'description': f'Trench cross-section — {ttype} / {surf}',
+            }
+        )
     return out

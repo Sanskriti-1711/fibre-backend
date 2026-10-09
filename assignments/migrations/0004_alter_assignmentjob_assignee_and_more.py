@@ -6,7 +6,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('assignments', '0003_rename_assignment_rule_to_job'),
         ('projects', '0003_rename_feature_proj_layer_idx_features_project_24b9e2_idx_and_more'),
@@ -17,16 +16,30 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='assignmentjob',
             name='assignee',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='assignment_jobs', to=settings.AUTH_USER_MODEL),
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name='assignment_jobs',
+                to=settings.AUTH_USER_MODEL,
+            ),
         ),
         migrations.AlterField(
             model_name='assignmentjob',
             name='feature',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='assignment_jobs', to='projects.feature'),
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name='assignment_jobs',
+                to='projects.feature',
+            ),
         ),
         migrations.AlterField(
             model_name='assignmentjob',
             name='project',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='assignment_jobs', to='projects.project'),
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name='assignment_jobs',
+                to='projects.project',
+            ),
         ),
     ]

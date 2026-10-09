@@ -78,8 +78,8 @@ class SyncResult:
 class SyncAdapter:
     """Base class — subclass and implement poll()."""
 
-    name: str = "base"
-    description: str = ""
+    name: str = 'base'
+    description: str = ''
 
     def poll(self, submission: PermitSubmission) -> SyncResult | None:
         """Return a SyncResult if the adapter wants to move this submission,
@@ -102,27 +102,31 @@ class MockBezirkAdapter(SyncAdapter):
     Terminal states (approved/rejected/closed) are never polled.
     """
 
-    name = "mock_bezirk"
-    description = "Time-based mock: 1d -> under_review, 3d -> approved (demo only)."
+    name = 'mock_bezirk'
+    description = 'Time-based mock: 1d -> under_review, 3d -> approved (demo only).'
 
     def poll(self, submission: PermitSubmission) -> SyncResult | None:
         now = timezone.now()
-        age = (now - submission.submission_date).total_seconds() / 86400 if submission.submission_date else 999
+        age = (
+            (now - submission.submission_date).total_seconds() / 86400
+            if submission.submission_date
+            else 999
+        )
         if submission.status == PermitSubmission.STATUS_SUBMITTED and age >= 1:
             return SyncResult(
                 to_status=PermitSubmission.STATUS_UNDER_REVIEW,
-                reference=submission.reference or f"MOCK-{submission.id.hex[:8].upper()}",
-                notes="Mock adapter: auto-acknowledged by Bezirk (demo).",
-                detail={"adapter": self.name, "age_days": round(age, 1)},
+                reference=submission.reference or f'MOCK-{submission.id.hex[:8].upper()}',
+                notes='Mock adapter: auto-acknowledged by Bezirk (demo).',
+                detail={'adapter': self.name, 'age_days': round(age, 1)},
             )
         if submission.status == PermitSubmission.STATUS_UNDER_REVIEW and age >= 3:
             # Synthetic approval: expiry 365d out, street-specific conditions where possible
             expiry = (now + timedelta(days=365)).date().isoformat()
             return SyncResult(
                 to_status=PermitSubmission.STATUS_APPROVED,
-                conditions="Mock approval: work 22:00-06:00, reinstatement per ZTV A-StB (demo).",
+                conditions='Mock approval: work 22:00-06:00, reinstatement per ZTV A-StB (demo).',
                 expiry_date=expiry,
-                detail={"adapter": self.name, "age_days": round(age, 1)},
+                detail={'adapter': self.name, 'age_days': round(age, 1)},
             )
         return None
 
@@ -132,8 +136,8 @@ class CsvInboxAdapter(SyncAdapter):
     management command can drive it uniformly. poll() always returns None;
     ingest is via ingest_csv()."""
 
-    name = "csv_inbox"
-    description = "CSV inbox: submission_id,status,reference,notes,conditions,expiry_date"
+    name = 'csv_inbox'
+    description = 'CSV inbox: submission_id,status,reference,notes,conditions,expiry_date'
 
     def poll(self, submission: PermitSubmission) -> SyncResult | None:
         return None
@@ -146,32 +150,34 @@ class HttpPortalAdapter(SyncAdapter):
     and maps the remote status string onto our state machine via STATUS_MAP.
     """
 
-    name = "http_portal"
-    description = "HTTP portal: maps remote status onto transition_submission (requires env)."
+    name = 'http_portal'
+    description = 'HTTP portal: maps remote status onto transition_submission (requires env).'
 
     STATUS_MAP: dict[str, str] = {
-        "acknowledged": PermitSubmission.STATUS_UNDER_REVIEW,
-        "under_review": PermitSubmission.STATUS_UNDER_REVIEW,
-        "in_progress": PermitSubmission.STATUS_UNDER_REVIEW,
-        "approved": PermitSubmission.STATUS_APPROVED,
-        "granted": PermitSubmission.STATUS_APPROVED,
-        "rejected": PermitSubmission.STATUS_REJECTED,
-        "denied": PermitSubmission.STATUS_REJECTED,
-        "closed": PermitSubmission.STATUS_CLOSED,
-        "completed": PermitSubmission.STATUS_CLOSED,
+        'acknowledged': PermitSubmission.STATUS_UNDER_REVIEW,
+        'under_review': PermitSubmission.STATUS_UNDER_REVIEW,
+        'in_progress': PermitSubmission.STATUS_UNDER_REVIEW,
+        'approved': PermitSubmission.STATUS_APPROVED,
+        'granted': PermitSubmission.STATUS_APPROVED,
+        'rejected': PermitSubmission.STATUS_REJECTED,
+        'denied': PermitSubmission.STATUS_REJECTED,
+        'closed': PermitSubmission.STATUS_CLOSED,
+        'completed': PermitSubmission.STATUS_CLOSED,
     }
 
     def is_enabled(self) -> bool:
-        return bool((os.getenv("PERMITS_PORTAL_URL") or "").strip())
+        return bool((os.getenv('PERMITS_PORTAL_URL') or '').strip())
 
     #: Our submission statuses, the only values a mapping may target.
-    OUR_STATUSES = frozenset({
-        PermitSubmission.STATUS_SUBMITTED,
-        PermitSubmission.STATUS_UNDER_REVIEW,
-        PermitSubmission.STATUS_APPROVED,
-        PermitSubmission.STATUS_REJECTED,
-        PermitSubmission.STATUS_CLOSED,
-    })
+    OUR_STATUSES = frozenset(
+        {
+            PermitSubmission.STATUS_SUBMITTED,
+            PermitSubmission.STATUS_UNDER_REVIEW,
+            PermitSubmission.STATUS_APPROVED,
+            PermitSubmission.STATUS_REJECTED,
+            PermitSubmission.STATUS_CLOSED,
+        }
+    )
 
     def _configured_status_map(self) -> dict[str, str]:
         """Portal-specific vocabulary from ``PERMITS_PORTAL_STATUS_MAP`` (JSON).
@@ -184,16 +190,16 @@ class HttpPortalAdapter(SyncAdapter):
         have is ignored (the built-in synonyms stay the fallback), because a bad
         mapping must degrade to "no opinion", never to a wrong transition.
         """
-        raw = (os.getenv("PERMITS_PORTAL_STATUS_MAP") or "").strip()
+        raw = (os.getenv('PERMITS_PORTAL_STATUS_MAP') or '').strip()
         if not raw:
             return {}
         try:
             data = json.loads(raw)
         except (TypeError, ValueError):
-            logger.info("http_portal: PERMITS_PORTAL_STATUS_MAP is not valid JSON — ignored")
+            logger.info('http_portal: PERMITS_PORTAL_STATUS_MAP is not valid JSON — ignored')
             return {}
         if not isinstance(data, dict):
-            logger.info("http_portal: PERMITS_PORTAL_STATUS_MAP is not an object — ignored")
+            logger.info('http_portal: PERMITS_PORTAL_STATUS_MAP is not an object — ignored')
             return {}
         out: dict[str, str] = {}
         for remote, mapped in data.items():
@@ -203,8 +209,9 @@ class HttpPortalAdapter(SyncAdapter):
                 out[key] = value
             else:
                 logger.info(
-                    "http_portal: ignoring status-map entry %r -> %r (not one of ours)",
-                    remote, mapped,
+                    'http_portal: ignoring status-map entry %r -> %r (not one of ours)',
+                    remote,
+                    mapped,
                 )
         return out
 
@@ -217,45 +224,60 @@ class HttpPortalAdapter(SyncAdapter):
     def poll(self, submission: PermitSubmission) -> SyncResult | None:
         import requests  # already in requirements
 
-        base = (os.getenv("PERMITS_PORTAL_URL") or "").strip()
-        token = (os.getenv("PERMITS_PORTAL_TOKEN") or "").strip()
+        base = (os.getenv('PERMITS_PORTAL_URL') or '').strip()
+        token = (os.getenv('PERMITS_PORTAL_TOKEN') or '').strip()
         if not base or not submission.reference:
             return None
         # Never fail the poll loop — portal downtime is recorded, not raised.
         try:
-            headers = {"Accept": "application/json"}
+            headers = {'Accept': 'application/json'}
             if token:
-                headers["Authorization"] = f"Bearer {token}"
+                headers['Authorization'] = f'Bearer {token}'
             # Also try X-API-Key for portals that use it
-            alt_token = (os.getenv("PERMITS_PORTAL_API_KEY") or "").strip()
+            alt_token = (os.getenv('PERMITS_PORTAL_API_KEY') or '').strip()
             if alt_token:
-                headers["X-API-Key"] = alt_token
-            url = base.rstrip("/") + "/status"
-            resp = requests.get(url, params={"reference": submission.reference}, headers=headers, timeout=12)
+                headers['X-API-Key'] = alt_token
+            url = base.rstrip('/') + '/status'
+            resp = requests.get(
+                url, params={'reference': submission.reference}, headers=headers, timeout=12
+            )
             if resp.status_code < 200 or resp.status_code >= 300:
-                logger.info("http_portal: non-2xx for %s — %s %s", submission.reference, resp.status_code, resp.text[:300])
+                logger.info(
+                    'http_portal: non-2xx for %s — %s %s',
+                    submission.reference,
+                    resp.status_code,
+                    resp.text[:300],
+                )
                 return None
-            data = resp.json() if "json" in (resp.headers.get("content-type") or "").lower() else {}
-            remote_status = str((data.get("status") or data.get("state") or "")).strip().lower()
+            data = resp.json() if 'json' in (resp.headers.get('content-type') or '').lower() else {}
+            remote_status = str(data.get('status') or data.get('state') or '').strip().lower()
             if not remote_status:
                 return None
             to_status = self.status_map().get(remote_status)
             if not to_status:
-                logger.info("http_portal: unknown remote status %r for %s", remote_status, submission.reference)
+                logger.info(
+                    'http_portal: unknown remote status %r for %s',
+                    remote_status,
+                    submission.reference,
+                )
                 return None
             # Only return a result if it is a legal edge from current status
             if to_status not in ALLOWED_TRANSITIONS.get(submission.status, frozenset()):
                 return None
             return SyncResult(
                 to_status=to_status,
-                reference=data.get("reference") or None,
-                notes=data.get("notes") or data.get("reason") or None,
-                conditions=data.get("conditions") or None,
-                expiry_date=data.get("expiry_date") or data.get("expiry") or None,
-                detail={"adapter": self.name, "remote_status": remote_status, "raw": {k: str(v)[:300] for k, v in data.items()}},
+                reference=data.get('reference') or None,
+                notes=data.get('notes') or data.get('reason') or None,
+                conditions=data.get('conditions') or None,
+                expiry_date=data.get('expiry_date') or data.get('expiry') or None,
+                detail={
+                    'adapter': self.name,
+                    'remote_status': remote_status,
+                    'raw': {k: str(v)[:300] for k, v in data.items()},
+                },
             )
         except Exception as exc:  # pragma: no cover — network failures are normal
-            logger.warning("http_portal poll failed for %s: %s", submission.reference, exc)
+            logger.warning('http_portal poll failed for %s: %s', submission.reference, exc)
             return None
 
 
@@ -276,9 +298,9 @@ def enabled_adapters(names: list[str] | None = None) -> list[SyncAdapter]:
                 out.append(a)
         return out
     # Default enabled set: mock_bezirk always; http_portal only when configured
-    out = [ADAPTERS["mock_bezirk"]]
-    if ADAPTERS["http_portal"].is_enabled():
-        out.append(ADAPTERS["http_portal"])
+    out = [ADAPTERS['mock_bezirk']]
+    if ADAPTERS['http_portal'].is_enabled():
+        out.append(ADAPTERS['http_portal'])
     return out
 
 
@@ -296,11 +318,17 @@ def poll_all(
     adapters = enabled_adapters(adapter_names)
     now = timezone.now()
 
-    qs = PermitSubmission.objects.filter(status__in=(
-        PermitSubmission.STATUS_SUBMITTED,
-        PermitSubmission.STATUS_UNDER_REVIEW,
-        PermitSubmission.STATUS_REJECTED,
-    )).select_related("authority", "project").order_by("submission_date")
+    qs = (
+        PermitSubmission.objects.filter(
+            status__in=(
+                PermitSubmission.STATUS_SUBMITTED,
+                PermitSubmission.STATUS_UNDER_REVIEW,
+                PermitSubmission.STATUS_REJECTED,
+            )
+        )
+        .select_related('authority', 'project')
+        .order_by('submission_date')
+    )
     if project_id:
         qs = qs.filter(project_id=project_id)
 
@@ -313,7 +341,6 @@ def poll_all(
     errors: list[dict[str, Any]] = []
 
     # Optional actor label for audit (e.g. "poller:mock_bezirk")
-    from django.contrib.auth import get_user_model  # type: ignore
 
     for sub in rows:
         opinion: SyncResult | None = None
@@ -324,32 +351,48 @@ def poll_all(
             try:
                 opinion = adapter.poll(sub)
             except Exception as exc:
-                errors.append({"submission_id": str(sub.id), "adapter": adapter.name, "error": str(exc)[:300]})
+                errors.append(
+                    {'submission_id': str(sub.id), 'adapter': adapter.name, 'error': str(exc)[:300]}
+                )
                 continue
             if opinion is not None:
                 chosen_adapter = adapter
                 break
         if opinion is None:
-            skipped.append({"submission_id": str(sub.id), "status": sub.status, "reference": sub.reference or ""})
+            skipped.append(
+                {
+                    'submission_id': str(sub.id),
+                    'status': sub.status,
+                    'reference': sub.reference or '',
+                }
+            )
             continue
         attempted += 1
         # Validate the edge before calling transition_submission so the error
         # message is poller-specific, not just the state machine's ValueError.
         if opinion.to_status not in ALLOWED_TRANSITIONS.get(sub.status, frozenset()):
-            errors.append({"submission_id": str(sub.id), "adapter": chosen_adapter.name if chosen_adapter else "?", "error": f"Adapter proposed illegal edge {sub.status} -> {opinion.to_status}"})
+            errors.append(
+                {
+                    'submission_id': str(sub.id),
+                    'adapter': chosen_adapter.name if chosen_adapter else '?',
+                    'error': f'Adapter proposed illegal edge {sub.status} -> {opinion.to_status}',
+                }
+            )
             continue
         before_status = sub.status
         if dry_run:
-            applied.append({
-                "submission_id": str(sub.id),
-                "project_id": str(sub.project_id),
-                "from": before_status,
-                "to": opinion.to_status,
-                "adapter": chosen_adapter.name if chosen_adapter else "?",
-                "reference": opinion.reference or sub.reference or "",
-                "dry_run": True,
-                "detail": opinion.detail or {},
-            })
+            applied.append(
+                {
+                    'submission_id': str(sub.id),
+                    'project_id': str(sub.project_id),
+                    'from': before_status,
+                    'to': opinion.to_status,
+                    'adapter': chosen_adapter.name if chosen_adapter else '?',
+                    'reference': opinion.reference or sub.reference or '',
+                    'dry_run': True,
+                    'detail': opinion.detail or {},
+                }
+            )
             continue
         try:
             transition_submission(
@@ -360,32 +403,40 @@ def poll_all(
                 notes=opinion.notes,
                 conditions=opinion.conditions,
                 expiry_date=opinion.expiry_date,
-                sync_source=chosen_adapter.name if chosen_adapter else "portal",
+                sync_source=chosen_adapter.name if chosen_adapter else 'portal',
             )
-            applied.append({
-                "submission_id": str(sub.id),
-                "project_id": str(sub.project_id),
-                "from": before_status,
-                "to": opinion.to_status,
-                "adapter": chosen_adapter.name if chosen_adapter else "?",
-                "reference": opinion.reference or sub.reference or "",
-                "detail": opinion.detail or {},
-            })
+            applied.append(
+                {
+                    'submission_id': str(sub.id),
+                    'project_id': str(sub.project_id),
+                    'from': before_status,
+                    'to': opinion.to_status,
+                    'adapter': chosen_adapter.name if chosen_adapter else '?',
+                    'reference': opinion.reference or sub.reference or '',
+                    'detail': opinion.detail or {},
+                }
+            )
         except Exception as exc:  # pragma: no cover
-            errors.append({"submission_id": str(sub.id), "adapter": chosen_adapter.name if chosen_adapter else "?", "error": str(exc)[:500]})
-            logger.warning("poll transition failed for %s: %s", sub.id, exc)
+            errors.append(
+                {
+                    'submission_id': str(sub.id),
+                    'adapter': chosen_adapter.name if chosen_adapter else '?',
+                    'error': str(exc)[:500],
+                }
+            )
+            logger.warning('poll transition failed for %s: %s', sub.id, exc)
 
     return {
-        "now": now.isoformat(),
-        "project_id": project_id,
-        "adapters": [a.name for a in adapters],
-        "total_non_terminal": total,
-        "scanned": len(rows),
-        "attempted": attempted,
-        "applied": applied,
-        "skipped": skipped[:50],
-        "errors": errors,
-        "dry_run": dry_run,
+        'now': now.isoformat(),
+        'project_id': project_id,
+        'adapters': [a.name for a in adapters],
+        'total_non_terminal': total,
+        'scanned': len(rows),
+        'attempted': attempted,
+        'applied': applied,
+        'skipped': skipped[:50],
+        'errors': errors,
+        'dry_run': dry_run,
     }
 
 
@@ -397,7 +448,7 @@ def ingest_inbound(
     notes: str | None = None,
     conditions: str | None = None,
     expiry_date: Any = None,
-    sync_source: str = "portal",
+    sync_source: str = 'portal',
 ) -> PermitSubmission:
     """Shared inbound path for webhook + CSV + manual inbox.
 
@@ -405,9 +456,11 @@ def ingest_inbound(
     sync_source so the audit trail records how the state arrived.
     """
     if to_status not in ALLOWED_TRANSITIONS:
-        raise ValueError(f"Unknown submission status: {to_status}")
+        raise ValueError(f'Unknown submission status: {to_status}')
     if to_status not in ALLOWED_TRANSITIONS.get(submission.status, frozenset()):
-        raise ValueError(f"Invalid transition {submission.status} -> {to_status} (allowed: {sorted(ALLOWED_TRANSITIONS.get(submission.status, frozenset())) or 'none'})")
+        raise ValueError(
+            f"Invalid transition {submission.status} -> {to_status} (allowed: {sorted(ALLOWED_TRANSITIONS.get(submission.status, frozenset())) or 'none'})"
+        )
     return transition_submission(
         submission,
         to_status,
@@ -420,7 +473,7 @@ def ingest_inbound(
     )
 
 
-def ingest_csv(text: str, sync_source: str = "portal") -> dict[str, Any]:
+def ingest_csv(text: str, sync_source: str = 'portal') -> dict[str, Any]:
     """Apply a CSV inbox file. Columns:
 
     submission_id,status,reference,notes,conditions,expiry_date
@@ -432,26 +485,26 @@ def ingest_csv(text: str, sync_source: str = "portal") -> dict[str, Any]:
     applied: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     for idx, row in enumerate(reader, start=2):
-        sid = (row.get("submission_id") or row.get("id") or "").strip()
-        to_status = (row.get("status") or "").strip().lower()
+        sid = (row.get('submission_id') or row.get('id') or '').strip()
+        to_status = (row.get('status') or '').strip().lower()
         if not sid or not to_status:
-            errors.append({"line": idx, "error": "submission_id and status are required"})
+            errors.append({'line': idx, 'error': 'submission_id and status are required'})
             continue
         sub = PermitSubmission.objects.filter(pk=sid).first()
         if sub is None:
-            errors.append({"line": idx, "submission_id": sid, "error": "Submission not found"})
+            errors.append({'line': idx, 'submission_id': sid, 'error': 'Submission not found'})
             continue
         try:
             ingest_inbound(
                 sub,
                 to_status,
-                reference=(row.get("reference") or None),
-                notes=(row.get("notes") or row.get("reason") or None),
-                conditions=(row.get("conditions") or None),
-                expiry_date=(row.get("expiry_date") or row.get("expiry") or None),
+                reference=(row.get('reference') or None),
+                notes=(row.get('notes') or row.get('reason') or None),
+                conditions=(row.get('conditions') or None),
+                expiry_date=(row.get('expiry_date') or row.get('expiry') or None),
                 sync_source=sync_source,
             )
-            applied.append({"line": idx, "submission_id": sid, "to": to_status})
+            applied.append({'line': idx, 'submission_id': sid, 'to': to_status})
         except Exception as exc:
-            errors.append({"line": idx, "submission_id": sid, "error": str(exc)[:500]})
-    return {"applied": applied, "errors": errors, "total": len(applied) + len(errors)}
+            errors.append({'line': idx, 'submission_id': sid, 'error': str(exc)[:500]})
+    return {'applied': applied, 'errors': errors, 'total': len(applied) + len(errors)}

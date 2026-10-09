@@ -1,5 +1,7 @@
 import uuid
+
 from django.db import models
+
 
 class Project(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -9,12 +11,12 @@ class Project(models.Model):
     region = models.CharField(max_length=255, blank=True)
 
     # ── Business aspects ────────────────────────────────────────────
-    client_name = models.CharField(max_length=255, blank=True, default="")
-    contract_ref = models.CharField(max_length=255, blank=True, default="")
+    client_name = models.CharField(max_length=255, blank=True, default='')
+    contract_ref = models.CharField(max_length=255, blank=True, default='')
     priority = models.CharField(
         max_length=10,
-        choices=[("low", "Low"), ("medium", "Medium"), ("high", "High")],
-        default="medium",
+        choices=[('low', 'Low'), ('medium', 'Medium'), ('high', 'High')],
+        default='medium',
     )
     business_meta = models.JSONField(default=dict, blank=True)
 
@@ -28,19 +30,19 @@ class Project(models.Model):
     status = models.CharField(
         max_length=20,
         choices=[
-            ("draft", "Draft"),
-            ("in_progress", "In Progress"),
-            ("assigned", "Assigned"),
-            ("active", "Active"),
-            ("submitted", "Submitted"),
-            ("under_review", "Under Review"),
-            ("reviewed", "Reviewed"),
-            ("accepted", "Accepted"),
-            ("redo", "Redo"),
-            ("completed", "Completed"),
-            ("archived", "Archived"),
+            ('draft', 'Draft'),
+            ('in_progress', 'In Progress'),
+            ('assigned', 'Assigned'),
+            ('active', 'Active'),
+            ('submitted', 'Submitted'),
+            ('under_review', 'Under Review'),
+            ('reviewed', 'Reviewed'),
+            ('accepted', 'Accepted'),
+            ('redo', 'Redo'),
+            ('completed', 'Completed'),
+            ('archived', 'Archived'),
         ],
-        default="draft"
+        default='draft',
     )
 
     # When a Survey project is the copy of an HLD pipeline run, this holds
@@ -59,7 +61,7 @@ class Project(models.Model):
     last_activity_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        db_table = "projects"
+        db_table = 'projects'
 
     def __str__(self):
         return self.name

@@ -13,10 +13,9 @@ from __future__ import annotations
 import io
 import json
 import zipfile
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
-from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
 
@@ -27,8 +26,8 @@ from . import data, drawings, hdd_drawings, lld_summary, permit_forms, reports, 
 def _latest_package_version(project_id: str) -> int:
     last = (
         PermitDocument.objects.filter(permit__project_id=project_id)
-        .order_by("-version")
-        .values_list("version", flat=True)
+        .order_by('-version')
+        .values_list('version', flat=True)
         .first()
     )
     return (last or 0) + 1
@@ -48,59 +47,59 @@ def _promote_evidence(
     satisfy a crossing. This is the P16 guard.
     """
     generated_filenames = generated_filenames or set()
-    has_hdd = any("hdd_" in fn for fn in generated_filenames)
+    has_hdd = any('hdd_' in fn for fn in generated_filenames)
     promoted = 0
-    for pm in PermitMatrix.objects.filter(project_id=project_id).select_related("rule"):
+    for pm in PermitMatrix.objects.filter(project_id=project_id).select_related('rule'):
         rule = pm.rule
         if not rule:
             continue
         ev = dict(pm.evidence or {})
         changed = False
 
-        if rule.rule_id == "TRAFFIC_001" and "TMP" in generated_kinds:
+        if rule.rule_id == 'TRAFFIC_001' and 'TMP' in generated_kinds:
             # The TMP exists at package level; record it as evidence on the row.
-            if not (ev.get("tmp_document") or {}).get("present"):
-                ev["tmp_document"] = {
-                    "present": True,
-                    "value": "package:TMP",
-                    "refs": ["permit package"],
+            if not (ev.get('tmp_document') or {}).get('present'):
+                ev['tmp_document'] = {
+                    'present': True,
+                    'value': 'package:TMP',
+                    'refs': ['permit package'],
                 }
                 changed = True
-            if not (ev.get("lane_impact") or {}).get("present"):
+            if not (ev.get('lane_impact') or {}).get('present'):
                 # Derived tier is deterministic per surface/type; a generic
                 # lane-impact note suffices for evidence bookkeeping.
-                ev["lane_impact"] = {
-                    "present": True,
-                    "value": "documented in package TMP",
-                    "refs": ["permit package"],
+                ev['lane_impact'] = {
+                    'present': True,
+                    'value': 'documented in package TMP',
+                    'refs': ['permit package'],
                 }
                 changed = True
 
         for evidence_key, drawing_kinds in (
-            ("crossing_drawing", {"DRAWING"}),
-            ("profile_drawing", {"DRAWING"}),
-            ("hdd_design", {"DRAWING"}),
+            ('crossing_drawing', {'DRAWING'}),
+            ('profile_drawing', {'DRAWING'}),
+            ('hdd_design', {'DRAWING'}),
         ):
             if (
                 evidence_key in (rule.evidence_required or [])
                 and drawing_kinds & generated_kinds
                 and has_hdd
-                and not (ev.get(evidence_key) or {}).get("present")
+                and not (ev.get(evidence_key) or {}).get('present')
             ):
                 ev[evidence_key] = {
-                    "present": True,
-                    "value": "package:hdd_drawing",
-                    "refs": ["permit package (HDD profile)"],
+                    'present': True,
+                    'value': 'package:hdd_drawing',
+                    'refs': ['permit package (HDD profile)'],
                 }
                 changed = True
 
         if changed:
             pm.evidence = ev
-            pm.save(update_fields=["evidence", "updated_at"])
+            pm.save(update_fields=['evidence', 'updated_at'])
             PermitEvent.objects.create(
                 permit=pm,
-                event="EVIDENCE_ADDED",
-                detail={"source": "permit_package", "kinds": sorted(generated_kinds)},
+                event='EVIDENCE_ADDED',
+                detail={'source': 'permit_package', 'kinds': sorted(generated_kinds)},
             )
             promoted += 1
 
@@ -108,13 +107,13 @@ def _promote_evidence(
     from ..rules.engine import _refresh_readiness
 
     _refresh_readiness(project_id)
-    return {"promoted_rows": promoted}
+    return {'promoted_rows': promoted}
 
 
 def generate_package(
     project_id: str,
     project_name: str,
-    lld_run_id: Optional[str] = None,
+    lld_run_id: str | None = None,
 ) -> dict[str, Any]:
     """Generate the full permit package for a project.
 
@@ -125,7 +124,7 @@ def generate_package(
     """
     run_id = lld_run_id or data.latest_lld_run_id(project_id)
     if not run_id:
-        raise ValueError("No completed LLD run found — generate the LLD first.")
+        raise ValueError('No completed LLD run found — generate the LLD first.')
 
     generated: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -133,69 +132,71 @@ def generate_package(
     for fn, kwargs in (
         (drawings.route_drawings, {}),
         (drawings.cross_sections, {}),
-        (hdd_drawings.hdd_crossing_drawings, {"project_name": project_name}),
+        (hdd_drawings.hdd_crossing_drawings, {'project_name': project_name}),
         (traffic_plan.traffic_plans, {}),
-        (permit_forms.application_forms, {"project_name": project_name}),
-        (permit_forms.german_street_opening_form, {"project_name": project_name}),
+        (permit_forms.application_forms, {'project_name': project_name}),
+        (permit_forms.german_street_opening_form, {'project_name': project_name}),
         (reports.all_reports, {}),
     ):
         try:
             items = fn(project_id, **kwargs)
             generated.extend(items)
         except Exception as exc:  # noqa: BLE001 — generator errors must not kill the package
-            errors.append(f"{fn.__name__}: {exc}")
+            errors.append(f'{fn.__name__}: {exc}')
 
     # HLD overview is a single document (not a list).
     try:
         overview = permit_forms.hld_permit_overview(project_id, project_name)
         generated.append(overview)
     except Exception as exc:
-        errors.append(f"hld_permit_overview: {exc}")
+        errors.append(f'hld_permit_overview: {exc}')
 
     # LLD street-wise summary is a single document (not a list).
     try:
         lld_sum = lld_summary.lld_street_summary(project_id, project_name)
         generated.append(lld_sum)
     except Exception as exc:
-        errors.append(f"lld_street_summary: {exc}")
+        errors.append(f'lld_street_summary: {exc}')
 
     if not generated:
-        raise ValueError("No permit-package documents could be generated.")
+        raise ValueError('No permit-package documents could be generated.')
 
     # Anchor: the first matrix row of the project (package-level documents).
-    anchor = PermitMatrix.objects.filter(project_id=project_id).order_by("permit_id").first()
+    anchor = PermitMatrix.objects.filter(project_id=project_id).order_by('permit_id').first()
     if anchor is None:
-        raise ValueError("No permit matrix rows — run permit analysis first.")
+        raise ValueError('No permit matrix rows — run permit analysis first.')
 
     version = _latest_package_version(project_id)
 
     # Build the zip in memory.
     zip_buffer = io.BytesIO()
     manifest = {
-        "project_id": project_id,
-        "project_name": project_name,
-        "package_version": version,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "lld_run_id": run_id,
-        "files": [{"name": g["name"], "kind": g["kind"], "filename": g["filename"]} for g in generated],
-        "errors": errors,
+        'project_id': project_id,
+        'project_name': project_name,
+        'package_version': version,
+        'generated_at': datetime.now(UTC).isoformat(),
+        'lld_run_id': run_id,
+        'files': [
+            {'name': g['name'], 'kind': g['kind'], 'filename': g['filename']} for g in generated
+        ],
+        'errors': errors,
     }
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('manifest.json', json.dumps(manifest, indent=2))
         for g in generated:
-            zf.writestr(g["filename"], g["content"])
+            zf.writestr(g['filename'], g['content'])
     zip_bytes = zip_buffer.getvalue()
 
     with transaction.atomic():
         # Persist the zip itself as a package document (served via download).
         zip_doc = PermitDocument.objects.create(
             permit=anchor,
-            name=f"permit_package_v{version}",
-            kind="REPORT",
+            name=f'permit_package_v{version}',
+            kind='REPORT',
             version=version,
-            url="",
+            url='',
         )
-        zip_doc.file.save(f"permit_package_v{version}.zip", ContentFile(zip_bytes), save=True)
+        zip_doc.file.save(f'permit_package_v{version}.zip', ContentFile(zip_bytes), save=True)
 
         # Persist the meaningful artifacts as rows (drawings, cross-sections,
         # TMPs, schedules, reports, application forms) so the package list
@@ -207,32 +208,34 @@ def generate_package(
         for g in generated:
             doc = PermitDocument.objects.create(
                 permit=anchor,
-                name=g["name"],
-                kind=g["kind"],
+                name=g['name'],
+                kind=g['kind'],
                 version=version,
-                url="",
+                url='',
             )
-            doc.file.save(g["filename"], ContentFile(g["content"].encode("utf-8")), save=True)
-            saved.append({
-                "name": g["name"],
-                "kind": g["kind"],
-                "filename": g["filename"],
-                "description": g["description"],
-                "url": doc.file.url if doc.file else "",
-                "document_id": str(doc.id),
-            })
+            doc.file.save(g['filename'], ContentFile(g['content'].encode('utf-8')), save=True)
+            saved.append(
+                {
+                    'name': g['name'],
+                    'kind': g['kind'],
+                    'filename': g['filename'],
+                    'description': g['description'],
+                    'url': doc.file.url if doc.file else '',
+                    'document_id': str(doc.id),
+                }
+            )
 
-        kinds = {g["kind"] for g in generated}
-        filenames = {g["filename"] for g in generated}
+        kinds = {g['kind'] for g in generated}
+        filenames = {g['filename'] for g in generated}
         promotion = _promote_evidence(project_id, kinds, filenames)
 
     return {
-        "version": version,
-        "lld_run_id": run_id,
-        "files": saved,
-        "zip_size": len(zip_bytes),
-        "zip_document_id": str(zip_doc.id),
-        "promoted": promotion,
-        "errors": errors,
-        "manifest": manifest,
+        'version': version,
+        'lld_run_id': run_id,
+        'files': saved,
+        'zip_size': len(zip_bytes),
+        'zip_document_id': str(zip_doc.id),
+        'promoted': promotion,
+        'errors': errors,
+        'manifest': manifest,
     }

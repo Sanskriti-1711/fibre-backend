@@ -18,19 +18,17 @@ from ...analysis.road_class import attribute_road_class
 
 
 class Command(BaseCommand):
-    help = "Backfill street-level permit_group on matrix rows (street name + grouping)."
+    help = 'Backfill street-level permit_group on matrix rows (street name + grouping).'
 
     def add_arguments(self, parser):
-        parser.add_argument(
-            "--project", help="project_id to process (default: every project)"
-        )
+        parser.add_argument('--project', help='project_id to process (default: every project)')
 
     def handle(self, *args, **opts):
         from ftth_hld.models import FtthProject
 
         projects = FtthProject.objects.all()
-        if opts["project"]:
-            projects = projects.filter(pk=opts["project"])
+        if opts['project']:
+            projects = projects.filter(pk=opts['project'])
         for ftth in projects:
             pid = str(ftth.pk)
             road = attribute_road_class(pid)
@@ -40,6 +38,6 @@ class Command(BaseCommand):
                     f"{ftth.name or pid}: {road.get('attributed', 0)} trenches "
                     f"attributed · {grp['trench_rows']} trench rows + "
                     f"{grp['lld_rows']} LLD rows grouped"
-                    + (" (no roads file)" if grp.get("no_roads") else "")
+                    + (' (no roads file)' if grp.get('no_roads') else '')
                 )
             )

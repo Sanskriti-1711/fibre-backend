@@ -26,10 +26,10 @@ from .road_class import _load_tmp_roads, _roads_geojson, project_roads_file
 def assign_groups(project_id: str, roads_path=None) -> dict:
     """Assign street group keys to a project's permit matrix rows."""
     summary = {
-        "project_id": project_id,
-        "trench_rows": 0,
-        "lld_rows": 0,
-        "no_roads": False,
+        'project_id': project_id,
+        'trench_rows': 0,
+        'lld_rows': 0,
+        'no_roads': False,
     }
 
     # 1. trench-layer rows (ROAD_AUTHORITY + spatial hits on trench_layer):
@@ -55,14 +55,14 @@ def assign_groups(project_id: str, roads_path=None) -> dict:
             """,
             [project_id],
         )
-        summary["trench_rows"] = cur.rowcount
+        summary['trench_rows'] = cur.rowcount
 
     # 2. final_trenches rows (TRAFFIC_001): nearest named road from the LLD
     #    layer geometry (same spatial join + snap as the fclass backfill).
     if roads_path is None:
         roads_path = project_roads_file(project_id)
     if roads_path is None or not roads_path.exists():
-        summary["no_roads"] = True
+        summary['no_roads'] = True
         return summary
     # Reads a shapefile zip via GDAL. The backend runs without GDAL, so a
     # project whose roads *file* exists but cannot be read must degrade to
@@ -73,7 +73,7 @@ def assign_groups(project_id: str, roads_path=None) -> dict:
     except Exception:  # noqa: BLE001 - GDAL optional on the backend
         features = []
     if not features:
-        summary["no_roads"] = True
+        summary['no_roads'] = True
         return summary
 
     with connection.cursor() as cur:
@@ -120,5 +120,5 @@ def assign_groups(project_id: str, roads_path=None) -> dict:
             """,
             [project_id, project_id],
         )
-        summary["lld_rows"] = cur.rowcount
+        summary['lld_rows'] = cur.rowcount
     return summary

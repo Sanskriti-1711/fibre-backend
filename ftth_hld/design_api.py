@@ -9,11 +9,10 @@ platform, which renders the result on ``fiber-fe/ftth-trench-design.html``.
     POST /api/ftth/hld/results/<project_id>/trench-design/run/   (re)run
 """
 
-from rest_framework.permissions import IsAuthenticated
-from rest_framework import status
-from rest_framework.views import APIView
-
 from django.http import JsonResponse
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView
 
 from .pipeline import get_trench_design, run_trench_design
 
@@ -24,11 +23,11 @@ class TrenchDesignView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, project_id):
-        include = request.query_params.get("layers", "true").lower() != "false"
+        include = request.query_params.get('layers', 'true').lower() != 'false'
         data = get_trench_design(project_id, include_layers=include)
         if data is None:
             return JsonResponse(
-                {"detail": "Trench design service unavailable."},
+                {'detail': 'Trench design service unavailable.'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         return JsonResponse(data)
@@ -40,11 +39,11 @@ class RunTrenchDesignView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, project_id):
-        force = str(request.data.get("force", "")).lower() in ("1", "true", "yes")
+        force = str(request.data.get('force', '')).lower() in ('1', 'true', 'yes')
         data = run_trench_design(project_id, force=force)
         if data is None:
             return JsonResponse(
-                {"detail": "Trench design service unavailable."},
+                {'detail': 'Trench design service unavailable.'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         return JsonResponse(data, status=status.HTTP_202_ACCEPTED)

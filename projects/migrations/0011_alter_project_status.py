@@ -4,7 +4,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('projects', '0010_project_source_ftth_project_id_alter_project_status'),
     ]
@@ -13,6 +12,18 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='project',
             name='status',
-            field=models.CharField(choices=[('draft', 'Draft'), ('in_progress', 'In Progress'), ('assigned', 'Assigned'), ('active', 'Active'), ('submitted', 'Submitted'), ('completed', 'Completed'), ('archived', 'Archived')], default='draft', max_length=20),
+            field=models.CharField(
+                choices=[
+                    ('draft', 'Draft'),
+                    ('in_progress', 'In Progress'),
+                    ('assigned', 'Assigned'),
+                    ('active', 'Active'),
+                    ('submitted', 'Submitted'),
+                    ('completed', 'Completed'),
+                    ('archived', 'Archived'),
+                ],
+                default='draft',
+                max_length=20,
+            ),
         ),
     ]

@@ -4,7 +4,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('survey', '0002_surveyfeature'),
     ]
@@ -13,6 +12,11 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='surveyfeature',
             name='photo',
-            field=models.ImageField(blank=True, help_text='Evidence photo attached to this survey feature', null=True, upload_to='survey_feature_photos/%Y/%m/%d/'),
+            field=models.ImageField(
+                blank=True,
+                help_text='Evidence photo attached to this survey feature',
+                null=True,
+                upload_to='survey_feature_photos/%Y/%m/%d/',
+            ),
         ),
     ]

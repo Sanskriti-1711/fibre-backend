@@ -19,16 +19,16 @@ class FtthProject(models.Model):
     through the Django API alongside regular projects.
     """
 
-    STATUS_QUEUED = "queued"
-    STATUS_RUNNING = "running"
-    STATUS_COMPLETED = "completed"
-    STATUS_FAILED = "failed"
+    STATUS_QUEUED = 'queued'
+    STATUS_RUNNING = 'running'
+    STATUS_COMPLETED = 'completed'
+    STATUS_FAILED = 'failed'
 
     STATUS_CHOICES = [
-        (STATUS_QUEUED, "Queued"),
-        (STATUS_RUNNING, "Running"),
-        (STATUS_COMPLETED, "Completed"),
-        (STATUS_FAILED, "Failed"),
+        (STATUS_QUEUED, 'Queued'),
+        (STATUS_RUNNING, 'Running'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_FAILED, 'Failed'),
     ]
 
     # Use a 32-char hex string as the primary key (matching what the
@@ -40,11 +40,11 @@ class FtthProject(models.Model):
     )
 
     # Human-readable name supplied by the user at submission time
-    name = models.CharField(max_length=255, blank=True, default="")
+    name = models.CharField(max_length=255, blank=True, default='')
 
     # Who triggered this pipeline run (nullable for anonymous triggers)
     created_by = models.ForeignKey(
-        "users.User",
+        'users.User',
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
@@ -57,27 +57,27 @@ class FtthProject(models.Model):
     )
 
     # Pipeline stage tracking
-    stage_name = models.CharField(max_length=255, blank=True, default="")
+    stage_name = models.CharField(max_length=255, blank=True, default='')
     stage_index = models.IntegerField(default=0)
     stage_count = models.IntegerField(default=6)
     progress = models.IntegerField(default=0)
 
     # Error message if failed
-    error_message = models.TextField(blank=True, default="")
+    error_message = models.TextField(blank=True, default='')
 
     # File references
-    excel_filename = models.CharField(max_length=255, blank=True, default="")
-    roads_filename = models.CharField(max_length=255, blank=True, default="")
+    excel_filename = models.CharField(max_length=255, blank=True, default='')
+    roads_filename = models.CharField(max_length=255, blank=True, default='')
 
     # Field engineer this HLD run is assigned to (survey stage).
     # The actual survey work happens on the Survey copy (Project row with
     # source_ftth_project_id set); this field is bookkeeping for the UI.
     assigned_engineer = models.ForeignKey(
-        "users.User",
+        'users.User',
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="assigned_ftth_projects",
+        related_name='assigned_ftth_projects',
     )
     assigned_at = models.DateTimeField(null=True, blank=True)
 
@@ -88,8 +88,8 @@ class FtthProject(models.Model):
     completed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        db_table = "ftth_projects"
-        ordering = ["-created_at"]
+        db_table = 'ftth_projects'
+        ordering = ['-created_at']
 
     def __str__(self):
         return self.name or self.project_id[:16]
@@ -106,9 +106,9 @@ class FtthLayer(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     ftth_project = models.ForeignKey(
-        "ftth_hld.FtthProject",
+        'ftth_hld.FtthProject',
         on_delete=models.CASCADE,
-        related_name="hld_layers",
+        related_name='hld_layers',
     )
     name = models.CharField(max_length=255)  # canonical layer name
     geojson = models.JSONField(default=dict)  # FeatureCollection
@@ -119,18 +119,18 @@ class FtthLayer(models.Model):
     # changed, and that cannot be judged from `updated_at`: re-publishing a
     # layer rewrites its rows and bumps the timestamp even when the geometry is
     # identical, which made `sections_are_fresh()` false after every re-ingest.
-    source_revision = models.CharField(max_length=64, blank=True, default="")
+    source_revision = models.CharField(max_length=64, blank=True, default='')
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = "ftth_hld_layers"
-        ordering = ["name"]
-        unique_together = [["ftth_project", "name"]]
+        db_table = 'ftth_hld_layers'
+        ordering = ['name']
+        unique_together = [['ftth_project', 'name']]
 
     def __str__(self):
-        return f"{self.name} ({self.ftth_project_id})"
+        return f'{self.name} ({self.ftth_project_id})'
 
 
 class BoqRate(models.Model):
@@ -143,20 +143,20 @@ class BoqRate(models.Model):
     """
 
     item_code = models.CharField(max_length=20, unique=True)
-    section = models.CharField(max_length=60, blank=True, default="")
+    section = models.CharField(max_length=60, blank=True, default='')
     item_name = models.CharField(max_length=255)
-    unit = models.CharField(max_length=20, blank=True, default="")
+    unit = models.CharField(max_length=20, blank=True, default='')
     material_rate = models.FloatField(default=0.0)
     labour_rate = models.FloatField(default=0.0)
     rent_rate = models.FloatField(default=0.0)
     active = models.BooleanField(default=True)
 
     class Meta:
-        db_table = "ftth_boq_rates"
-        ordering = ["item_code"]
+        db_table = 'ftth_boq_rates'
+        ordering = ['item_code']
 
     def __str__(self):
-        return f"{self.item_code} {self.item_name}"
+        return f'{self.item_code} {self.item_name}'
 
 
 class BoqSnapshot(models.Model):
@@ -171,9 +171,9 @@ class BoqSnapshot(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     ftth_project = models.OneToOneField(
-        "ftth_hld.FtthProject",
+        'ftth_hld.FtthProject',
         on_delete=models.CASCADE,
-        related_name="boq_snapshot",
+        related_name='boq_snapshot',
     )
     boq_json = models.JSONField(default=list)  # computed BOQ rows
     bom_json = models.JSONField(default=list)  # computed BOM rows
@@ -183,10 +183,10 @@ class BoqSnapshot(models.Model):
     regenerated_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        db_table = "ftth_boq_snapshots"
+        db_table = 'ftth_boq_snapshots'
 
     def __str__(self):
-        return f"BOQ snapshot for {self.ftth_project_id}"
+        return f'BOQ snapshot for {self.ftth_project_id}'
 
 
 class HldPostProcess(models.Model):
@@ -207,34 +207,32 @@ class HldPostProcess(models.Model):
     trench is what triggers a rebuild.
     """
 
-    STATUS_PENDING = "pending"
-    STATUS_RUNNING = "running"
-    STATUS_DONE = "done"
-    STATUS_FAILED = "failed"
+    STATUS_PENDING = 'pending'
+    STATUS_RUNNING = 'running'
+    STATUS_DONE = 'done'
+    STATUS_FAILED = 'failed'
     STATUS_CHOICES = [
-        (STATUS_PENDING, "Pending"),
-        (STATUS_RUNNING, "Running"),
-        (STATUS_DONE, "Done"),
-        (STATUS_FAILED, "Failed"),
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_RUNNING, 'Running'),
+        (STATUS_DONE, 'Done'),
+        (STATUS_FAILED, 'Failed'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project_id = models.CharField(max_length=64, unique=True, db_index=True)
-    status = models.CharField(
-        max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING
-    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
     # trench content revision the chain completed against (empty = never run)
-    trench_revision = models.CharField(max_length=64, blank=True, default="")
+    trench_revision = models.CharField(max_length=64, blank=True, default='')
     # step name -> {"ok": bool, "seconds": float, "detail": str}
     steps = models.JSONField(default=dict, blank=True)
-    error_message = models.TextField(blank=True, default="")
+    error_message = models.TextField(blank=True, default='')
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = "ftth_hld_post_process"
+        db_table = 'ftth_hld_post_process'
 
     def __str__(self):
-        return f"post-HLD {self.project_id}: {self.status}"
+        return f'post-HLD {self.project_id}: {self.status}'

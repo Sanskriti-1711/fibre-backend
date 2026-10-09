@@ -38,14 +38,12 @@ from users.models import User
 from .models import FtthProject
 from .pipeline import generate_survey_package
 
-SURVEY_SUFFIX = " - Survey"
+SURVEY_SUFFIX = ' - Survey'
 
 
 def find_survey_copy(ftth_project_id: str):
     """Return the Survey copy Project for an HLD run, or None."""
-    return Project.objects.filter(
-        source_ftth_project_id=ftth_project_id
-    ).first()
+    return Project.objects.filter(source_ftth_project_id=ftth_project_id).first()
 
 
 def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
@@ -59,16 +57,16 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
         engineer_ids = [engineer_ids]
     engineer_ids = list(engineer_ids)
     if not engineer_ids:
-        raise ValueError("At least one engineer_id is required")
+        raise ValueError('At least one engineer_id is required')
     try:
         hld = FtthProject.objects.get(pk=ftth_project_id)
     except FtthProject.DoesNotExist:
-        raise ValueError(f"HLD project {ftth_project_id} not found")
+        raise ValueError(f'HLD project {ftth_project_id} not found')
 
     if hld.status != FtthProject.STATUS_COMPLETED:
         raise ValueError(
-            f"HLD project {ftth_project_id} is not completed "
-            f"(status={hld.status}); only completed runs can be assigned"
+            f'HLD project {ftth_project_id} is not completed '
+            f'(status={hld.status}); only completed runs can be assigned'
         )
 
     engineers = []
@@ -76,9 +74,9 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
         try:
             eng = User.objects.get(pk=eid)
         except User.DoesNotExist:
-            raise ValueError(f"Engineer {eid} not found")
+            raise ValueError(f'Engineer {eid} not found')
         if eng.role != User.Role.ENGINEER:
-            raise ValueError(f"User {eid} is not an engineer")
+            raise ValueError(f'User {eid} is not an engineer')
         engineers.append(eng)
     primary_engineer = engineers[0]
 
@@ -89,47 +87,53 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
         survey = find_survey_copy(ftth_project_id)
         if survey is None:
             survey = Project.objects.create(
-                name=f"{hld.name or ftth_project_id}{SURVEY_SUFFIX}",
+                name=f'{hld.name or ftth_project_id}{SURVEY_SUFFIX}',
                 description=(
                     f"Survey copy of HLD run '{hld.name or ftth_project_id}'. "
-                    "Field-survey package auto-imported for the assigned engineer."
+                    'Field-survey package auto-imported for the assigned engineer.'
                 ),
-                region="Field Survey",
-                status="assigned",
+                region='Field Survey',
+                status='assigned',
                 source_ftth_project_id=ftth_project_id,
             )
         else:
             # Data-safety guard: once an engineer accepts the copy (active),
             # re-assigning would wipe their survey progress. Refuse instead.
             if survey.status in (
-                "in_progress", "active", "submitted", "under_review",
-                "reviewed", "accepted", "redo", "completed",
+                'in_progress',
+                'active',
+                'submitted',
+                'under_review',
+                'reviewed',
+                'accepted',
+                'redo',
+                'completed',
             ):
                 raise ValueError(
                     f"Survey copy '{survey.name}' is already {survey.status}; "
-                    "re-assigning would erase survey data and approvals. "
-                    "Re-assign only while the copy is pending."
+                    're-assigning would erase survey data and approvals. '
+                    'Re-assign only while the copy is pending.'
                 )
-            survey.name = f"{hld.name or ftth_project_id}{SURVEY_SUFFIX}"
-            survey.status = "assigned"
-            survey.save(update_fields=["name", "status", "updated_at"])
+            survey.name = f'{hld.name or ftth_project_id}{SURVEY_SUFFIX}'
+            survey.status = 'assigned'
+            survey.save(update_fields=['name', 'status', 'updated_at'])
 
         # ── 2. Generate + store the survey package ZIP ───────────────────
         zip_bytes = generate_survey_package(ftth_project_id)
-        filename = f"{uuid.uuid4().hex}.zip"
-        rel_path = os.path.join("imports", filename)
+        filename = f'{uuid.uuid4().hex}.zip'
+        rel_path = os.path.join('imports', filename)
         full_path = os.path.join(settings.MEDIA_ROOT, rel_path)
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
-        with open(full_path, "wb") as f:
+        with open(full_path, 'wb') as f:
             f.write(zip_bytes)
 
         ImportSession.objects.update_or_create(
             project=survey,
             defaults={
-                "original_filename": f"{ftth_project_id}_survey_package.zip",
-                "stored_file_path": full_path,
-                "status": "imported",
-                "validation_summary": None,
+                'original_filename': f'{ftth_project_id}_survey_package.zip',
+                'stored_file_path': full_path,
+                'status': 'imported',
+                'validation_summary': None,
             },
         )
 
@@ -137,7 +141,7 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
         from projects.api.import_views import discover_zip_layers, import_zip_layers
 
         layers = discover_zip_layers(full_path)
-        layer_names = [l["name"] for l in layers]
+        layer_names = [l['name'] for l in layers]
 
         # Re-assigning the same HLD run must be idempotent: drop any
         # previously imported features so we never accumulate duplicates.
@@ -149,14 +153,14 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
         # Features imported as pending; a project-scope assignment marks the
         # whole project as assigned (matches existing assignment semantics).
         if features_created:
-            Feature.objects.filter(project=survey).exclude(
+            Feature.objects.filter(project=survey).exclude(status=Feature.STATUS_ASSIGNED).update(
                 status=Feature.STATUS_ASSIGNED
-            ).update(status=Feature.STATUS_ASSIGNED)
+            )
 
         # ── 4. Project-scope AssignmentJob per engineer (PK preserved) ───
-        existing_jobs = list(AssignmentJob.objects.filter(
-            project=survey, scope=AssignmentJob.SCOPE_PROJECT
-        ))
+        existing_jobs = list(
+            AssignmentJob.objects.filter(project=survey, scope=AssignmentJob.SCOPE_PROJECT)
+        )
         jobs = []
         for eng in engineers:
             job, _ = AssignmentJob.objects.update_or_create(
@@ -175,25 +179,25 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
     # ── 5. Record assignment on the HLD run ──────────────────────────────
     hld.assigned_engineer = primary_engineer
     hld.assigned_at = timezone.now()
-    hld.save(update_fields=["assigned_engineer", "assigned_at", "updated_at"])
+    hld.save(update_fields=['assigned_engineer', 'assigned_at', 'updated_at'])
 
     return {
-        "hl_project_id": ftth_project_id,
-        "hl_name": hld.name,
-        "survey_project_id": str(survey.id),
-        "survey_project_name": survey.name,
-        "survey_status": survey.status,
-        "engineers": [
+        'hl_project_id': ftth_project_id,
+        'hl_name': hld.name,
+        'survey_project_id': str(survey.id),
+        'survey_project_name': survey.name,
+        'survey_status': survey.status,
+        'engineers': [
             {
-                "id": str(eng.id),
-                "email": eng.email,
-                "full_name": eng.full_name,
+                'id': str(eng.id),
+                'email': eng.email,
+                'full_name': eng.full_name,
             }
             for eng in engineers
         ],
-        "assignment_job_ids": [str(j.id) for j in jobs],
-        "layers": layer_names,
-        "features_created": features_created,
+        'assignment_job_ids': [str(j.id) for j in jobs],
+        'layers': layer_names,
+        'features_created': features_created,
     }
 
 
@@ -206,30 +210,30 @@ def accept_survey_project(project_id: str, user) -> dict:
     try:
         survey = Project.objects.get(pk=project_id)
     except Project.DoesNotExist:
-        raise ValueError(f"Survey project {project_id} not found")
+        raise ValueError(f'Survey project {project_id} not found')
 
     is_engineer = AssignmentJob.objects.filter(
         project=survey,
         scope=AssignmentJob.SCOPE_PROJECT,
         assignee=user,
     ).exists()
-    is_admin = getattr(user, "role", None) == User.Role.SUBADMIN
+    is_admin = getattr(user, 'role', None) == User.Role.SUBADMIN
     if not (is_engineer or is_admin):
-        raise PermissionError("Only the assigned engineer can accept this project")
+        raise PermissionError('Only the assigned engineer can accept this project')
 
-    if survey.status == "assigned":
-        survey.status = "active"
-        survey.save(update_fields=["status", "updated_at", "last_activity_at"])
-    elif survey.status == "redo":
+    if survey.status == 'assigned':
+        survey.status = 'active'
+        survey.save(update_fields=['status', 'updated_at', 'last_activity_at'])
+    elif survey.status == 'redo':
         # Engineer picks the project back up after an admin requested changes.
-        survey.status = "active"
-        survey.save(update_fields=["status", "updated_at", "last_activity_at"])
+        survey.status = 'active'
+        survey.save(update_fields=['status', 'updated_at', 'last_activity_at'])
 
     return {
-        "project_id": str(survey.id),
-        "name": survey.name,
-        "status": survey.status,
-        "source_ftth_project_id": survey.source_ftth_project_id,
+        'project_id': str(survey.id),
+        'name': survey.name,
+        'status': survey.status,
+        'source_ftth_project_id': survey.source_ftth_project_id,
     }
 
 
@@ -242,32 +246,33 @@ def submit_survey_project(project_id: str, user) -> dict:
     try:
         survey = Project.objects.get(pk=project_id)
     except Project.DoesNotExist:
-        raise ValueError(f"Survey project {project_id} not found")
+        raise ValueError(f'Survey project {project_id} not found')
 
     is_engineer = AssignmentJob.objects.filter(
         project=survey,
         scope=AssignmentJob.SCOPE_PROJECT,
         assignee=user,
     ).exists()
-    is_admin = getattr(user, "role", None) == User.Role.SUBADMIN
+    is_admin = getattr(user, 'role', None) == User.Role.SUBADMIN
     if not (is_engineer or is_admin):
-        raise PermissionError("Only the assigned engineer can submit this project")
+        raise PermissionError('Only the assigned engineer can submit this project')
 
-    if survey.status in ("active", "redo"):
-        survey.status = "submitted"
-        survey.save(update_fields=["status", "updated_at", "last_activity_at"])
-    elif survey.status != "submitted":
+    if survey.status in ('active', 'redo'):
+        survey.status = 'submitted'
+        survey.save(update_fields=['status', 'updated_at', 'last_activity_at'])
+    elif survey.status != 'submitted':
         raise ValueError(
             f"Cannot submit project in status '{survey.status}'; "
-            "only active (or redo) projects can be submitted"
+            'only active (or redo) projects can be submitted'
         )
 
     return {
-        "project_id": str(survey.id),
-        "name": survey.name,
-        "status": survey.status,
-        "source_ftth_project_id": survey.source_ftth_project_id,
+        'project_id': str(survey.id),
+        'name': survey.name,
+        'status': survey.status,
+        'source_ftth_project_id': survey.source_ftth_project_id,
     }
+
 
 def review_survey_project(project_id: str, user, action: str) -> dict:
     """Admin review actions on a submitted Survey copy.
@@ -284,26 +289,26 @@ def review_survey_project(project_id: str, user, action: str) -> dict:
     try:
         survey = Project.objects.get(pk=project_id)
     except Project.DoesNotExist:
-        raise ValueError(f"Survey project {project_id} not found")
+        raise ValueError(f'Survey project {project_id} not found')
 
-    is_admin = getattr(user, "role", None) == User.Role.SUBADMIN
+    is_admin = getattr(user, 'role', None) == User.Role.SUBADMIN
     if not is_admin:
-        raise PermissionError("Only a sub-admin can review projects")
+        raise PermissionError('Only a sub-admin can review projects')
 
     if not isinstance(action, str):
         raise ValueError("Review 'action' must be a string")
     action = action.strip().lower()
     transitions = {
-        "start_review": (("submitted",), "under_review"),
-        "reviewed": (("under_review",), "reviewed"),
-        "accept": (("reviewed", "under_review"), "accepted"),
-        "redo": (("submitted", "under_review", "reviewed"), "redo"),
-        "complete": (("accepted",), "completed"),
+        'start_review': (('submitted',), 'under_review'),
+        'reviewed': (('under_review',), 'reviewed'),
+        'accept': (('reviewed', 'under_review'), 'accepted'),
+        'redo': (('submitted', 'under_review', 'reviewed'), 'redo'),
+        'complete': (('accepted',), 'completed'),
     }
     if action not in transitions:
         raise ValueError(
             f"Unknown review action '{action}'; "
-            "expected one of: " + ", ".join(sorted(transitions))
+            'expected one of: ' + ', '.join(sorted(transitions))
         )
 
     allowed_from, target = transitions[action]
@@ -314,11 +319,11 @@ def review_survey_project(project_id: str, user, action: str) -> dict:
         )
 
     survey.status = target
-    survey.save(update_fields=["status", "updated_at", "last_activity_at"])
+    survey.save(update_fields=['status', 'updated_at', 'last_activity_at'])
     return {
-        "project_id": str(survey.id),
-        "name": survey.name,
-        "status": survey.status,
-        "action": action,
-        "source_ftth_project_id": survey.source_ftth_project_id,
+        'project_id': str(survey.id),
+        'name': survey.name,
+        'status': survey.status,
+        'action': action,
+        'source_ftth_project_id': survey.source_ftth_project_id,
     }

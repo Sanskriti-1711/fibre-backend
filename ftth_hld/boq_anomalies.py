@@ -18,9 +18,6 @@ project-specific baselines. Pure statistics — no ML required:
 from __future__ import annotations
 
 import math
-from typing import Dict, List
-
-from django.db.models import Avg, F
 
 from .models import BoqSnapshot
 
@@ -38,7 +35,7 @@ _REQUIRED_LENGTH_CODES = ()  # template uses section codes ("2.1"…), so the
 # zero-length rule keys off the intensity basis instead (see below).
 
 
-def detect_boq_anomalies(project_id: str) -> Dict:
+def detect_boq_anomalies(project_id: str) -> dict:
     """Analyse the latest BOQ snapshot for a project.
 
     Returns {"anomalies": [...], "checked": n_rows, "basis": {...}}.
@@ -46,92 +43,96 @@ def detect_boq_anomalies(project_id: str) -> Dict:
     """
     snapshot = (
         BoqSnapshot.objects.filter(ftth_project__project_id=project_id)
-        .order_by("-created_at")
+        .order_by('-created_at')
         .first()
     )
     if snapshot is None:
-        return {"anomalies": [], "checked": 0, "basis": {}}
+        return {'anomalies': [], 'checked': 0, 'basis': {}}
 
-    rows: List[Dict] = list(snapshot.boq_json or [])
+    rows: list[dict] = list(snapshot.boq_json or [])
     if not rows:
-        return {"anomalies": [], "checked": 0, "basis": {}}
+        return {'anomalies': [], 'checked': 0, 'basis': {}}
 
-    anomalies: List[Dict] = []
-    grand_total = sum(r.get("amount") or 0.0 for r in rows) or 0.0
-    home_passed = _find_by_unit(rows, ("hp",))  # row 1.1 — unit "HP"
+    anomalies: list[dict] = []
+    grand_total = sum(r.get('amount') or 0.0 for r in rows) or 0.0
+    home_passed = _find_by_unit(rows, ('hp',))  # row 1.1 — unit "HP"
     total_m = sum(
-        float(r.get("quantity") or 0.0)
+        float(r.get('quantity') or 0.0)
         for r in rows
-        if (r.get("unit") or "").strip().lower() == "m"
+        if (r.get('unit') or '').strip().lower() == 'm'
     )
 
     # ── 1. Whole-network sanity ─────────────────────────────────────────
     if total_m <= 0 and home_passed > 0:
-        anomalies.append({
-            "rule": "zero_network",
-            "severity": "high",
-            "item_code": "",
-            "item_name": "All trench/duct/cable items",
-            "message": (
-                f"Project reports {home_passed:g} home-passed but zero metres of "
-                "network build — the quantities pipeline likely regressed."
-            ),
-        })
+        anomalies.append(
+            {
+                'rule': 'zero_network',
+                'severity': 'high',
+                'item_code': '',
+                'item_name': 'All trench/duct/cable items',
+                'message': (
+                    f'Project reports {home_passed:g} home-passed but zero metres of '
+                    'network build — the quantities pipeline likely regressed.'
+                ),
+            }
+        )
 
     # ── 3. MAD outliers vs sibling projects (per home-passed) ───────────
     sibling_stats = _sibling_intensity(project_id)
-    if sibling_stats.get("n", 0) >= MIN_SIBLINGS and home_passed > 0:
+    if sibling_stats.get('n', 0) >= MIN_SIBLINGS and home_passed > 0:
         for r in rows:
-            code = r.get("item_code") or ""
-            qty = float(r.get("quantity") or 0.0)
-            unit = (r.get("unit") or "").strip().lower()
-            if qty <= 0 or unit != "m" or code not in sibling_stats["median"]:
+            code = r.get('item_code') or ''
+            qty = float(r.get('quantity') or 0.0)
+            unit = (r.get('unit') or '').strip().lower()
+            if qty <= 0 or unit != 'm' or code not in sibling_stats['median']:
                 continue
             my_intensity = qty / home_passed
-            med = sibling_stats["median"][code]
-            mad = sibling_stats["mad"][code]
+            med = sibling_stats['median'][code]
+            mad = sibling_stats['mad'][code]
             rz = _robust_z(my_intensity, med, mad)
             if rz is None or abs(rz) < MAD_Z_THRESHOLD:
                 continue
             rel = abs(my_intensity - med) / med if med > 0 else math.inf
             if rel < ANOMALY_PCT:
                 continue
-            anomalies.append({
-                "rule": "mad_outlier",
-                "severity": "medium",
-                "item_code": code,
-                "item_name": r.get("item_name"),
-                "message": (
-                    f"{r.get('item_name')}: {my_intensity:.2f} m per HP vs "
-                    f"{med:.2f} median across {sibling_stats['n']} projects "
-                    f"(robust z={rz:+.1f}, {rel * 100:.0f}% off median)."
-                ),
-            })
+            anomalies.append(
+                {
+                    'rule': 'mad_outlier',
+                    'severity': 'medium',
+                    'item_code': code,
+                    'item_name': r.get('item_name'),
+                    'message': (
+                        f"{r.get('item_name')}: {my_intensity:.2f} m per HP vs "
+                        f"{med:.2f} median across {sibling_stats['n']} projects "
+                        f"(robust z={rz:+.1f}, {rel * 100:.0f}% off median)."
+                    ),
+                }
+            )
 
     return {
-        "anomalies": anomalies,
-        "checked": len(rows),
-        "basis": {
-            "grand_total": round(grand_total, 2),
-            "network_m": round(total_m, 1),
-            "home_passed": home_passed,
-            "siblings_used": sibling_stats.get("n", 0),
+        'anomalies': anomalies,
+        'checked': len(rows),
+        'basis': {
+            'grand_total': round(grand_total, 2),
+            'network_m': round(total_m, 1),
+            'home_passed': home_passed,
+            'siblings_used': sibling_stats.get('n', 0),
         },
     }
 
 
-def _find_qty(rows: List[Dict], codes: tuple) -> float:
+def _find_qty(rows: list[dict], codes: tuple) -> float:
     for r in rows:
-        if (r.get("item_code") or "") in codes:
-            return float(r.get("quantity") or 0.0)
+        if (r.get('item_code') or '') in codes:
+            return float(r.get('quantity') or 0.0)
     return 0.0
 
 
-def _find_by_unit(rows: List[Dict], units: tuple) -> float:
+def _find_by_unit(rows: list[dict], units: tuple) -> float:
     """First row whose unit matches (case-insensitive) — e.g. the HP count."""
     for r in rows:
-        if (r.get("unit") or "").strip().lower() in units:
-            return float(r.get("quantity") or 0.0)
+        if (r.get('unit') or '').strip().lower() in units:
+            return float(r.get('quantity') or 0.0)
     return 0.0
 
 
@@ -142,38 +143,38 @@ def _robust_z(x: float, median: float, mad: float) -> float | None:
     return 0.6745 * (x - median) / mad
 
 
-def _sibling_intensity(project_id: str) -> Dict:
+def _sibling_intensity(project_id: str) -> dict:
     """Quantity-per-HP medians across other completed projects (MAD)."""
     from .models import FtthProject
 
     snaps = (
         BoqSnapshot.objects.exclude(ftth_project__project_id=project_id)
         .filter(ftth_project__status=FtthProject.STATUS_COMPLETED)
-        .values("ftth_project__project_id", "boq_json")
+        .values('ftth_project__project_id', 'boq_json')
     )
-    per_project: Dict[str, Dict[str, float]] = {}
-    hp_by_project: Dict[str, float] = {}
+    per_project: dict[str, dict[str, float]] = {}
+    hp_by_project: dict[str, float] = {}
     for s in snaps:
-        pid = s["ftth_project__project_id"]
-        rows = s.get("boq_json") or []
-        q: Dict[str, float] = {}
+        pid = s['ftth_project__project_id']
+        rows = s.get('boq_json') or []
+        q: dict[str, float] = {}
         for r in rows:
-            c = r.get("item_code") or ""
+            c = r.get('item_code') or ''
             if c:
-                q[c] = q.get(c, 0.0) + float(r.get("quantity") or 0.0)
+                q[c] = q.get(c, 0.0) + float(r.get('quantity') or 0.0)
         per_project[pid] = q
-        hp_by_project[pid] = _find_by_unit(rows, ("hp",))
+        hp_by_project[pid] = _find_by_unit(rows, ('hp',))
 
     n = len(per_project)
     if n == 0:
-        return {"n": 0, "median": {}, "mad": {}}
+        return {'n': 0, 'median': {}, 'mad': {}}
 
     codes = set()
     for q in per_project.values():
         codes.update(q.keys())
 
-    median: Dict[str, float] = {}
-    mad: Dict[str, float] = {}
+    median: dict[str, float] = {}
+    mad: dict[str, float] = {}
     for c in codes:
         vals = sorted(
             (q[c] / hp_by_project[pid])
@@ -186,7 +187,7 @@ def _sibling_intensity(project_id: str) -> Dict:
         median[c] = med
         mad[c] = _median(sorted(abs(v - med) for v in vals))
 
-    return {"n": n, "median": median, "mad": mad}
+    return {'n': n, 'median': median, 'mad': mad}
 
 
 def _median(vals):

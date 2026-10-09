@@ -6,53 +6,58 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("projects", "0001_initial"),
+        ('projects', '0001_initial'),
     ]
 
     operations = [
         migrations.CreateModel(
-            name="Feature",
+            name='Feature',
             fields=[
-                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ("layer_name", models.CharField(max_length=255)),
-                ("layer_id", models.CharField(max_length=255)),
-                ("properties", models.JSONField(default=dict)),
                 (
-                    "status",
+                    'id',
+                    models.UUIDField(
+                        default=uuid.uuid4, editable=False, primary_key=True, serialize=False
+                    ),
+                ),
+                ('layer_name', models.CharField(max_length=255)),
+                ('layer_id', models.CharField(max_length=255)),
+                ('properties', models.JSONField(default=dict)),
+                (
+                    'status',
                     models.CharField(
                         choices=[
-                            ("pending", "Pending"),
-                            ("assigned", "Assigned"),
-                            ("under_review", "Under Review"),
-                            ("approved", "Approved"),
-                            ("redo", "Redo"),
+                            ('pending', 'Pending'),
+                            ('assigned', 'Assigned'),
+                            ('under_review', 'Under Review'),
+                            ('approved', 'Approved'),
+                            ('redo', 'Redo'),
                         ],
-                        default="pending",
+                        default='pending',
                         max_length=20,
                     ),
                 ),
-                ("field_measurements", models.JSONField(blank=True, null=True)),
-                ("comparison_notes", models.TextField(blank=True)),
-                ("created_at", models.DateTimeField(auto_now_add=True)),
-                ("updated_at", models.DateTimeField(auto_now=True)),
+                ('field_measurements', models.JSONField(blank=True, null=True)),
+                ('comparison_notes', models.TextField(blank=True)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
                 (
-                    "project",
-                    models.ForeignKey(on_delete=models.deletion.CASCADE, to="projects.project"),
+                    'project',
+                    models.ForeignKey(on_delete=models.deletion.CASCADE, to='projects.project'),
                 ),
             ],
             options={
-                "db_table": "features",
-                "indexes": [
-                    models.Index(fields=["project", "layer_name"], name="feature_proj_layer_idx"),
-                    models.Index(fields=["layer_id"], name="feature_layer_id_idx"),
-                    models.Index(fields=["status"], name="feature_status_idx"),
+                'db_table': 'features',
+                'indexes': [
+                    models.Index(fields=['project', 'layer_name'], name='feature_proj_layer_idx'),
+                    models.Index(fields=['layer_id'], name='feature_layer_id_idx'),
+                    models.Index(fields=['status'], name='feature_status_idx'),
                 ],
             },
         ),
         migrations.DeleteModel(
-            name="FeatureStatus",
+            name='FeatureStatus',
         ),
         migrations.DeleteModel(
-            name="ProjectLayer",
+            name='ProjectLayer',
         ),
     ]

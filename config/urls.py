@@ -1,7 +1,7 @@
-from django.contrib import admin
-from django.urls import include, path
 from django.conf import settings
 from django.conf.urls.static import static
+from django.contrib import admin
+from django.urls import include, path
 
 from config.health import engine_health, healthz
 
@@ -13,12 +13,12 @@ urlpatterns = [
     # here, never the platform's health check. See config/health.py.
     path('healthz/engine', engine_health),
     path('api/users/', include('users.urls')),
-    path("api/", include("projects.api.urls")),
-    path("api/", include("assignments.api.urls")),
-    path("api/", include("ftth_hld.urls")),
-    path("api/", include("ftth_lld.urls")),
-    path("api/", include("permits.urls")),
-    path("api/survey/", include("survey.urls")),
+    path('api/', include('projects.api.urls')),
+    path('api/', include('assignments.api.urls')),
+    path('api/', include('ftth_hld.urls')),
+    path('api/', include('ftth_lld.urls')),
+    path('api/', include('permits.urls')),
+    path('api/survey/', include('survey.urls')),
 ]
 
 # Serve media files in development

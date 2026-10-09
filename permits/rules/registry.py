@@ -16,12 +16,12 @@ class RuleDef:
     rule_id: str
     name: str
     description: str
-    layer_a: str          # route layer (final_trenches, duct_layer, ...)
-    layer_b: str          # reference layer ('' = attribute-only rule)
-    operator: str         # INTERSECTS | ATTRIBUTE
+    layer_a: str  # route layer (final_trenches, duct_layer, ...)
+    layer_b: str  # reference layer ('' = attribute-only rule)
+    operator: str  # INTERSECTS | ATTRIBUTE
     permit_type: str
-    required_level: str   # REQUIRED | POTENTIAL
-    authority_code: str   # resolved against PermitAuthority.code
+    required_level: str  # REQUIRED | POTENTIAL
+    authority_code: str  # resolved against PermitAuthority.code
     evidence_required: list = field(default_factory=list)
     blocks_construction: bool = False
 
@@ -30,145 +30,145 @@ class RuleDef:
 # Fires only when the route layer carries an fclass/highway value (the engine
 # persists it onto trench segments); until then it records a gap note.
 ROAD_AUTHORITY_RULE = RuleDef(
-    rule_id="ROAD_AUTHORITY_001",
-    name="Road authority identification",
+    rule_id='ROAD_AUTHORITY_001',
+    name='Road authority identification',
     description=(
-        "Route runs on a classified road — resolve the responsible road "
-        "authority (Straßenbaulastträger) from the road class."
+        'Route runs on a classified road — resolve the responsible road '
+        'authority (Straßenbaulastträger) from the road class.'
     ),
-    layer_a="final_trenches",
-    layer_b="",  # attribute rule on fclass
-    operator="ATTRIBUTE",
-    permit_type="Road Opening",
-    required_level="POTENTIAL",
-    authority_code="DE-ROAD-UNKNOWN",  # refined per class at runtime
-    evidence_required=["road_class", "road_owner"],
+    layer_a='final_trenches',
+    layer_b='',  # attribute rule on fclass
+    operator='ATTRIBUTE',
+    permit_type='Road Opening',
+    required_level='POTENTIAL',
+    authority_code='DE-ROAD-UNKNOWN',  # refined per class at runtime
+    evidence_required=['road_class', 'road_owner'],
 )
 
 # ── Railway crossing — route intersects a railway corridor ──────────────
 RAILWAY_CROSSING_RULE = RuleDef(
-    rule_id="RAILWAY_CROSSING_001",
-    name="Railway crossing approval",
+    rule_id='RAILWAY_CROSSING_001',
+    name='Railway crossing approval',
     description=(
-        "FTTH route intersects a railway corridor — railway crossing approval "
-        "with HDD design / profile drawing / crossing calculations."
+        'FTTH route intersects a railway corridor — railway crossing approval '
+        'with HDD design / profile drawing / crossing calculations.'
     ),
-    layer_a="final_trenches",
-    layer_b="osm_railway",
-    operator="INTERSECTS",
-    permit_type="Railway Crossing",
-    required_level="REQUIRED",
-    authority_code="DE-RAIL-DB",
-    evidence_required=["crossing_coordinate", "hdd_design", "profile_drawing"],
+    layer_a='final_trenches',
+    layer_b='osm_railway',
+    operator='INTERSECTS',
+    permit_type='Railway Crossing',
+    required_level='REQUIRED',
+    authority_code='DE-RAIL-DB',
+    evidence_required=['crossing_coordinate', 'hdd_design', 'profile_drawing'],
     blocks_construction=True,
 )
 
 # ── Waterway crossing — route intersects a river / canal ────────────────
 WATERWAY_CROSSING_RULE = RuleDef(
-    rule_id="WATERWAY_CROSSING_001",
-    name="Waterway crossing approval",
+    rule_id='WATERWAY_CROSSING_001',
+    name='Waterway crossing approval',
     description=(
-        "FTTH route intersects a waterway — water authority approval with "
-        "crossing information; environmental review potentially required."
+        'FTTH route intersects a waterway — water authority approval with '
+        'crossing information; environmental review potentially required.'
     ),
-    layer_a="final_trenches",
-    layer_b="osm_waterway",
-    operator="INTERSECTS",
-    permit_type="Waterway Crossing",
-    required_level="REQUIRED",
-    authority_code="DE-WATER-BERLIN",
-    evidence_required=["crossing_coordinate", "crossing_drawing"],
+    layer_a='final_trenches',
+    layer_b='osm_waterway',
+    operator='INTERSECTS',
+    permit_type='Waterway Crossing',
+    required_level='REQUIRED',
+    authority_code='DE-WATER-BERLIN',
+    evidence_required=['crossing_coordinate', 'crossing_drawing'],
 )
 
 # ── Environmental — split by zone category (landuse / protected area / tree) ─
 # Each fires on its own reference table so a route segment gets a precise
 # zone_type instead of a generic "environmental" hit.
 ENVIRONMENTAL_LANDUSE_RULE = RuleDef(
-    rule_id="ENVIRONMENTAL_001",
-    name="Environmental review — habitat zone",
+    rule_id='ENVIRONMENTAL_001',
+    name='Environmental review — habitat zone',
     description=(
-        "FTTH route intersects a habitat/vegetation zone (forest, meadow, "
-        "wetland, heath, scrub, grassland…) — environmental review of the "
-        "affected habitat."
+        'FTTH route intersects a habitat/vegetation zone (forest, meadow, '
+        'wetland, heath, scrub, grassland…) — environmental review of the '
+        'affected habitat.'
     ),
-    layer_a="final_trenches",
-    layer_b="osm_landuse",
-    operator="INTERSECTS",
-    permit_type="Environmental Review",
-    required_level="POTENTIAL",
-    authority_code="DE-ENV-BERLIN",
-    evidence_required=["zone_type", "impact_assessment"],
+    layer_a='final_trenches',
+    layer_b='osm_landuse',
+    operator='INTERSECTS',
+    permit_type='Environmental Review',
+    required_level='POTENTIAL',
+    authority_code='DE-ENV-BERLIN',
+    evidence_required=['zone_type', 'impact_assessment'],
 )
 
 ENVIRONMENTAL_PROTECTED_AREA_RULE = RuleDef(
-    rule_id="ENVIRONMENTAL_002",
-    name="Environmental review — protected area",
+    rule_id='ENVIRONMENTAL_002',
+    name='Environmental review — protected area',
     description=(
-        "FTTH route intersects a legally protected area (nature reserve, "
-        "protected area boundary, park) — environmental review with protection "
-        "conditions before construction."
+        'FTTH route intersects a legally protected area (nature reserve, '
+        'protected area boundary, park) — environmental review with protection '
+        'conditions before construction.'
     ),
-    layer_a="final_trenches",
-    layer_b="osm_protected_area",
-    operator="INTERSECTS",
-    permit_type="Environmental Review",
-    required_level="REQUIRED",
-    authority_code="DE-ENV-BERLIN",
-    evidence_required=["zone_type", "impact_assessment"],
+    layer_a='final_trenches',
+    layer_b='osm_protected_area',
+    operator='INTERSECTS',
+    permit_type='Environmental Review',
+    required_level='REQUIRED',
+    authority_code='DE-ENV-BERLIN',
+    evidence_required=['zone_type', 'impact_assessment'],
     blocks_construction=True,
 )
 
 ENVIRONMENTAL_TREE_RULE = RuleDef(
-    rule_id="ENVIRONMENTAL_003",
-    name="Tree / root protection review",
+    rule_id='ENVIRONMENTAL_003',
+    name='Tree / root protection review',
     description=(
-        "FTTH route runs near an individual OSM-mapped tree — tree and root "
-        "protection measures required (root-protection trenching / HDD where "
-        "necessary)."
+        'FTTH route runs near an individual OSM-mapped tree — tree and root '
+        'protection measures required (root-protection trenching / HDD where '
+        'necessary).'
     ),
-    layer_a="final_trenches",
-    layer_b="osm_tree",
-    operator="INTERSECTS",
-    permit_type="Tree Protection",
-    required_level="POTENTIAL",
-    authority_code="DE-ENV-BERLIN",
-    evidence_required=["tree_id", "root_protection"],
+    layer_a='final_trenches',
+    layer_b='osm_tree',
+    operator='INTERSECTS',
+    permit_type='Tree Protection',
+    required_level='POTENTIAL',
+    authority_code='DE-ENV-BERLIN',
+    evidence_required=['tree_id', 'root_protection'],
 )
 
 # ── Traffic management — every construction segment on a surfaced route ──
 TRAFFIC_RULE = RuleDef(
-    rule_id="TRAFFIC_001",
-    name="Traffic management plan",
+    rule_id='TRAFFIC_001',
+    name='Traffic management plan',
     description=(
-        "Construction on a surfaced route (asphalt/footpath) requires a "
-        "traffic management plan derived from surface, reinstatement and "
-        "construction method."
+        'Construction on a surfaced route (asphalt/footpath) requires a '
+        'traffic management plan derived from surface, reinstatement and '
+        'construction method.'
     ),
-    layer_a="final_trenches",
-    layer_b="",  # attribute rule on SURFACE / CONSTRUCT / REINSTATE
-    operator="ATTRIBUTE",
-    permit_type="Traffic Management",
-    required_level="POTENTIAL",
-    authority_code="DE-MUNI-UNKNOWN",
-    evidence_required=["road_class", "lane_impact", "tmp_document"],
+    layer_a='final_trenches',
+    layer_b='',  # attribute rule on SURFACE / CONSTRUCT / REINSTATE
+    operator='ATTRIBUTE',
+    permit_type='Traffic Management',
+    required_level='POTENTIAL',
+    authority_code='DE-MUNI-UNKNOWN',
+    evidence_required=['road_class', 'lane_impact', 'tmp_document'],
 )
 
 # ── Existing utility coexistence — reused brownfield assets on the route ─
 # Not a permit itself — feeds the utility-conflict evidence of the package.
 UTILITY_REUSE_RULE = RuleDef(
-    rule_id="UTILITY_REUSE_001",
-    name="Existing utility coexistence",
+    rule_id='UTILITY_REUSE_001',
+    name='Existing utility coexistence',
     description=(
-        "Route reuses existing brownfield utility assets — record coexistence "
-        "and capacity evidence for the permit package."
+        'Route reuses existing brownfield utility assets — record coexistence '
+        'and capacity evidence for the permit package.'
     ),
-    layer_a="final_trenches",
-    layer_b="brownfield",
-    operator="ATTRIBUTE",
-    permit_type="Utility Coexistence",
-    required_level="POTENTIAL",
-    authority_code="",  # informational — no external authority
-    evidence_required=["reuse_source", "capacity_check"],
+    layer_a='final_trenches',
+    layer_b='brownfield',
+    operator='ATTRIBUTE',
+    permit_type='Utility Coexistence',
+    required_level='POTENTIAL',
+    authority_code='',  # informational — no external authority
+    evidence_required=['reuse_source', 'capacity_check'],
 )
 
 # The catalogue — engine iterates these in order.

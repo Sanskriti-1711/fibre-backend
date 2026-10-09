@@ -2,5 +2,5 @@ from django.apps import AppConfig
 
 
 class FtthHldConfig(AppConfig):
-    default_auto_field = "django.db.models.BigAutoField"
-    name = "ftth_hld"
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'ftth_hld'

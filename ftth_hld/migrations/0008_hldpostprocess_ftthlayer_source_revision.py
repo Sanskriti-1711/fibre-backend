@@ -12,33 +12,49 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ("ftth_hld", "0007_boqrate_boqsnapshot"),
+        ('ftth_hld', '0007_boqrate_boqsnapshot'),
     ]
 
     operations = [
         migrations.AddField(
-            model_name="ftthlayer",
-            name="source_revision",
-            field=models.CharField(blank=True, default="", max_length=64),
+            model_name='ftthlayer',
+            name='source_revision',
+            field=models.CharField(blank=True, default='', max_length=64),
         ),
         migrations.CreateModel(
-            name="HldPostProcess",
+            name='HldPostProcess',
             fields=[
-                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ("project_id", models.CharField(db_index=True, max_length=64, unique=True)),
-                ("status", models.CharField(choices=[("pending", "Pending"), ("running", "Running"), ("done", "Done"), ("failed", "Failed")], default="pending", max_length=20)),
-                ("trench_revision", models.CharField(blank=True, default="", max_length=64)),
-                ("steps", models.JSONField(blank=True, default=dict)),
-                ("error_message", models.TextField(blank=True, default="")),
-                ("started_at", models.DateTimeField(blank=True, null=True)),
-                ("finished_at", models.DateTimeField(blank=True, null=True)),
-                ("created_at", models.DateTimeField(auto_now_add=True)),
-                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    'id',
+                    models.UUIDField(
+                        default=uuid.uuid4, editable=False, primary_key=True, serialize=False
+                    ),
+                ),
+                ('project_id', models.CharField(db_index=True, max_length=64, unique=True)),
+                (
+                    'status',
+                    models.CharField(
+                        choices=[
+                            ('pending', 'Pending'),
+                            ('running', 'Running'),
+                            ('done', 'Done'),
+                            ('failed', 'Failed'),
+                        ],
+                        default='pending',
+                        max_length=20,
+                    ),
+                ),
+                ('trench_revision', models.CharField(blank=True, default='', max_length=64)),
+                ('steps', models.JSONField(blank=True, default=dict)),
+                ('error_message', models.TextField(blank=True, default='')),
+                ('started_at', models.DateTimeField(blank=True, null=True)),
+                ('finished_at', models.DateTimeField(blank=True, null=True)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
             ],
             options={
-                "db_table": "ftth_hld_post_process",
+                'db_table': 'ftth_hld_post_process',
             },
         ),
     ]

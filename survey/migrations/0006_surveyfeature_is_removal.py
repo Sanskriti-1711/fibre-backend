@@ -4,7 +4,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('survey', '0005_alter_surveyfeature_survey_status'),
     ]

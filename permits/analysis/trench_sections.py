@@ -37,17 +37,17 @@ from .sections import (
     part_midpoint,
 )
 
-SECTION_LAYER = "trench_sections"
-MID_TABLE = "_trench_section_mid"
+SECTION_LAYER = 'trench_sections'
+MID_TABLE = '_trench_section_mid'
 
 
 def _trench_rows(project_id: str) -> list[tuple]:
     """(id, properties, geometry-geojson) for a project's trench features."""
     with connection.cursor() as cur:
         cur.execute(
-            "SELECT id, properties, ST_AsGeoJSON(geom) "
-            "FROM gis.trench_layer WHERE project_id = %s AND geom IS NOT NULL "
-            "ORDER BY id",
+            'SELECT id, properties, ST_AsGeoJSON(geom) '
+            'FROM gis.trench_layer WHERE project_id = %s AND geom IS NOT NULL '
+            'ORDER BY id',
             [project_id],
         )
         return cur.fetchall()
@@ -69,7 +69,7 @@ def _props_street_map(props: dict) -> dict:
     ``sections.coord_key`` — and values carry the street / road class. The
     engine writes short keys (``n``/``f``); normalise them here.
     """
-    raw = props.get("SECTION_STREETS") or props.get("section_streets")
+    raw = props.get('SECTION_STREETS') or props.get('section_streets')
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
@@ -80,14 +80,14 @@ def _props_street_map(props: dict) -> dict:
     out: dict[str, dict] = {}
     for key, value in raw.items():
         if isinstance(value, str):
-            out[str(key)] = {"street_name": value.strip(), "fclass": "", "highway": ""}
+            out[str(key)] = {'street_name': value.strip(), 'fclass': '', 'highway': ''}
             continue
         if not isinstance(value, dict):
             continue
         out[str(key)] = {
-            "street_name": str(value.get("n") or value.get("street_name") or "").strip(),
-            "fclass": str(value.get("f") or value.get("fclass") or "").strip(),
-            "highway": str(value.get("h") or value.get("highway") or "").strip(),
+            'street_name': str(value.get('n') or value.get('street_name') or '').strip(),
+            'fclass': str(value.get('f') or value.get('fclass') or '').strip(),
+            'highway': str(value.get('h') or value.get('highway') or '').strip(),
         }
     return out
 
@@ -97,31 +97,29 @@ def _street_by_midpoint(midpoints: list[tuple[str, float, float]]) -> dict[str, 
     if not midpoints:
         return {}
     with connection.cursor() as cur:
-        cur.execute(f"DROP TABLE IF EXISTS gis.{MID_TABLE}")
+        cur.execute(f'DROP TABLE IF EXISTS gis.{MID_TABLE}')
         cur.execute(
-            f"CREATE TABLE gis.{MID_TABLE} ("
-            "  mk TEXT PRIMARY KEY,"
-            "  geom GEOMETRY(Point, 4326))"
+            f'CREATE TABLE gis.{MID_TABLE} ('
+            '  mk TEXT PRIMARY KEY,'
+            '  geom GEOMETRY(Point, 4326))'
         )
         try:
             from psycopg2.extras import execute_values
 
             execute_values(
                 cur,
-                f"INSERT INTO gis.{MID_TABLE} (mk, geom) VALUES %s",
+                f'INSERT INTO gis.{MID_TABLE} (mk, geom) VALUES %s',
                 midpoints,
-                template="(%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326))",
+                template='(%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326))',
                 page_size=500,
             )
         except ImportError:  # pragma: no cover - psycopg2 always present
             cur.executemany(
-                f"INSERT INTO gis.{MID_TABLE} (mk, geom) "
-                "VALUES (%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326))",
+                f'INSERT INTO gis.{MID_TABLE} (mk, geom) '
+                'VALUES (%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326))',
                 midpoints,
             )
-        cur.execute(
-            f"CREATE INDEX idx_{MID_TABLE}_geom ON gis.{MID_TABLE} USING GIST (geom)"
-        )
+        cur.execute(f'CREATE INDEX idx_{MID_TABLE}_geom ON gis.{MID_TABLE} USING GIST (geom)')
         cur.execute(
             f"""
             SELECT m.mk, r.name, r.fclass, r.highway
@@ -139,13 +137,13 @@ def _street_by_midpoint(midpoints: list[tuple[str, float, float]]) -> dict[str, 
         )
         out = {
             str(mk): {
-                "street_name": (name or "").strip(),
-                "fclass": (fclass or "").strip(),
-                "highway": (highway or "").strip(),
+                'street_name': (name or '').strip(),
+                'fclass': (fclass or '').strip(),
+                'highway': (highway or '').strip(),
             }
             for mk, name, fclass, highway in cur.fetchall()
         }
-        cur.execute(f"DROP TABLE IF EXISTS gis.{MID_TABLE}")
+        cur.execute(f'DROP TABLE IF EXISTS gis.{MID_TABLE}')
     return out
 
 
@@ -157,19 +155,19 @@ def build_trench_sections(project_id: str, roads_path: Path | None = None) -> di
     ``trench_sections`` layer with a fresh build.
     """
     summary = {
-        "project_id": project_id,
-        "rows": 0,
-        "sections": 0,
-        "slivers": 0,
-        "attributed": 0,
-        "streets": 0,
-        "roads": 0,
-        "no_roads": False,
-        "persisted": False,
+        'project_id': project_id,
+        'rows': 0,
+        'sections': 0,
+        'slivers': 0,
+        'attributed': 0,
+        'streets': 0,
+        'roads': 0,
+        'no_roads': False,
+        'persisted': False,
     }
 
     trench_rows = _trench_rows(project_id)
-    summary["rows"] = len(trench_rows)
+    summary['rows'] = len(trench_rows)
     if not trench_rows:
         return summary
 
@@ -190,7 +188,7 @@ def build_trench_sections(project_id: str, roads_path: Path | None = None) -> di
         # pass, which is where GDAL and the project's roads layer live.  The
         # backend has no GDAL, so read the map instead of re-joining roads.
         per_feature = _props_street_map(props)
-        for part in feature_parts({"geometry": geom}):
+        for part in feature_parts({'geometry': geom}):
             fp = part_fingerprint(part)
             if len(fp) < 2 or fp in seen:
                 continue
@@ -204,8 +202,14 @@ def build_trench_sections(project_id: str, roads_path: Path | None = None) -> di
             if info:
                 street_map[key] = info
             expanded.append(
-                {"gid": gid, "props": props, "part": part, "length": length,
-                 "key": key, "info": info or {}}
+                {
+                    'gid': gid,
+                    'props': props,
+                    'part': part,
+                    'length': length,
+                    'key': key,
+                    'info': info or {},
+                }
             )
 
     # ── fallback: no engine attribution on this run — join roads here ─────
@@ -216,69 +220,71 @@ def build_trench_sections(project_id: str, roads_path: Path | None = None) -> di
         if roads_path is None:
             roads_path = project_roads_file(project_id)
         if roads_path is None or not roads_path.exists():
-            summary["no_roads"] = True
+            summary['no_roads'] = True
         else:
             try:
                 features = _roads_geojson(roads_path)
                 if features:
-                    summary["roads"] = _load_tmp_roads(project_id, features)
+                    summary['roads'] = _load_tmp_roads(project_id, features)
             except Exception:  # noqa: BLE001 - no GDAL on the backend
                 features = []
-                summary["roads"] = 0
-            if midpoints and summary["roads"]:
+                summary['roads'] = 0
+            if midpoints and summary['roads']:
                 try:
                     street_map = _street_by_midpoint(midpoints)
                 except Exception:  # noqa: BLE001 - attribution is never fatal
                     street_map = {}
             for item in expanded:
-                item["info"] = street_map.get(item["key"] or "", {}) or item["info"]
+                item['info'] = street_map.get(item['key'] or '', {}) or item['info']
 
     kind_counts: dict[str, int] = {}
     section_features: list[dict] = []
     streets_seen: set[str] = set()
 
     for item in expanded:
-        props = item["props"]
+        props = item['props']
         kind = str(
-            props.get("trench_type") or props.get("CONSTRUCT") or props.get("USAGE_TYPE")
-            or "Open Cut"
+            props.get('trench_type')
+            or props.get('CONSTRUCT')
+            or props.get('USAGE_TYPE')
+            or 'Open Cut'
         )
         kind_counts[kind] = kind_counts.get(kind, 0) + 1
-        section_id = "%s-%04d" % (kind.replace(" ", "-"), kind_counts[kind])
-        info = item.get("info") or street_map.get(item["key"] or "", {}) or {}
-        if info.get("street_name"):
-            streets_seen.add(info["street_name"])
-        out = {k: v for k, v in props.items() if not str(k).startswith("_")}
+        section_id = '%s-%04d' % (kind.replace(' ', '-'), kind_counts[kind])
+        info = item.get('info') or street_map.get(item['key'] or '', {}) or {}
+        if info.get('street_name'):
+            streets_seen.add(info['street_name'])
+        out = {k: v for k, v in props.items() if not str(k).startswith('_')}
         out.update(
             {
-                "PARENT_FEATURE_ID": str(item["gid"]),
-                "SECTION_ID": section_id,
-                "SECTION_LEN_M": round(item["length"], 2),
-                "length_m": round(item["length"], 2),
-                "SLIVER": 1 if item["length"] < SLIVER_M else 0,
-                "street_name": info.get("street_name", ""),
-                "fclass": info.get("fclass", ""),
-                "highway": info.get("highway", ""),
+                'PARENT_FEATURE_ID': str(item['gid']),
+                'SECTION_ID': section_id,
+                'SECTION_LEN_M': round(item['length'], 2),
+                'length_m': round(item['length'], 2),
+                'SLIVER': 1 if item['length'] < SLIVER_M else 0,
+                'street_name': info.get('street_name', ''),
+                'fclass': info.get('fclass', ''),
+                'highway': info.get('highway', ''),
             }
         )
-        if out["SLIVER"]:
-            summary["slivers"] += 1
-        if info.get("fclass"):
-            summary["attributed"] += 1
+        if out['SLIVER']:
+            summary['slivers'] += 1
+        if info.get('fclass'):
+            summary['attributed'] += 1
         section_features.append(
             {
-                "type": "Feature",
-                "id": "%s#%s" % (item["gid"], section_id),
-                "properties": {
-                    "feature_id": "%s#%s" % (item["gid"], section_id),
+                'type': 'Feature',
+                'id': '%s#%s' % (item['gid'], section_id),
+                'properties': {
+                    'feature_id': '%s#%s' % (item['gid'], section_id),
                     **out,
                 },
-                "geometry": {"type": "LineString", "coordinates": item["part"]},
+                'geometry': {'type': 'LineString', 'coordinates': item['part']},
             }
         )
 
-    summary["sections"] = len(section_features)
-    summary["streets"] = len(streets_seen)
+    summary['sections'] = len(section_features)
+    summary['streets'] = len(streets_seen)
 
     # ── persist the section layer (the summary/permits read this) ────────
     try:
@@ -286,19 +292,19 @@ def build_trench_sections(project_id: str, roads_path: Path | None = None) -> di
         from ftth_hld.pipeline import persist_layer
         from ftth_hld.posthld import trench_content_revision
 
-        fc = {"type": "FeatureCollection", "features": section_features}
+        fc = {'type': 'FeatureCollection', 'features': section_features}
         persist_layer(project_id, SECTION_LAYER, fc)
         # Stamp the trench CONTENT revision these sections were built from.
         # `sections_are_fresh()` used to compare `updated_at`, which any
         # re-publish of the trench layer bumps — the stamp is what makes
         # freshness durable (see ftth_hld.posthld).
-        summary["trench_revision"] = trench_content_revision(project_id)
-        FtthLayer.objects.filter(
-            ftth_project__project_id=project_id, name=SECTION_LAYER
-        ).update(source_revision=summary["trench_revision"])
-        summary["persisted"] = True
+        summary['trench_revision'] = trench_content_revision(project_id)
+        FtthLayer.objects.filter(ftth_project__project_id=project_id, name=SECTION_LAYER).update(
+            source_revision=summary['trench_revision']
+        )
+        summary['persisted'] = True
     except Exception:  # noqa: BLE001 - persistence is best-effort
-        summary["persisted"] = False
+        summary['persisted'] = False
 
     # NB: the section streets are NOT written back to gis.trench_layer. The
     # engine's enrichment pass owns SECTION_STREETS / STREET_NAME / N_SECTIONS
@@ -325,12 +331,14 @@ def sections_are_fresh(project_id: str) -> bool:
     from ftth_hld.models import FtthLayer
     from ftth_hld.posthld import trench_content_revision
 
-    sections = FtthLayer.objects.filter(
-        ftth_project__project_id=project_id, name=SECTION_LAYER
-    ).only("feature_count", "source_revision").first()
+    sections = (
+        FtthLayer.objects.filter(ftth_project__project_id=project_id, name=SECTION_LAYER)
+        .only('feature_count', 'source_revision')
+        .first()
+    )
     if sections is None or not sections.feature_count:
         return False
     revision = trench_content_revision(project_id)
     if not revision:
         return True
-    return (sections.source_revision or "") == revision
+    return (sections.source_revision or '') == revision

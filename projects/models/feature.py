@@ -6,18 +6,18 @@ from .project import Project
 
 
 class Feature(models.Model):
-    STATUS_PENDING = "pending"
-    STATUS_ASSIGNED = "assigned"
-    STATUS_UNDER_REVIEW = "under_review"
-    STATUS_APPROVED = "approved"
-    STATUS_REDO = "redo"
+    STATUS_PENDING = 'pending'
+    STATUS_ASSIGNED = 'assigned'
+    STATUS_UNDER_REVIEW = 'under_review'
+    STATUS_APPROVED = 'approved'
+    STATUS_REDO = 'redo'
 
     STATUS_CHOICES = [
-        (STATUS_PENDING, "Pending"),
-        (STATUS_ASSIGNED, "Assigned"),
-        (STATUS_UNDER_REVIEW, "Under Review"),
-        (STATUS_APPROVED, "Approved"),
-        (STATUS_REDO, "Redo"),
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_ASSIGNED, 'Assigned'),
+        (STATUS_UNDER_REVIEW, 'Under Review'),
+        (STATUS_APPROVED, 'Approved'),
+        (STATUS_REDO, 'Redo'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -59,12 +59,12 @@ class Feature(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = "features"
+        db_table = 'features'
         indexes = [
-            models.Index(fields=["project", "layer_name"]),
-            models.Index(fields=["layer_id"]),
-            models.Index(fields=["status"]),
+            models.Index(fields=['project', 'layer_name']),
+            models.Index(fields=['layer_id']),
+            models.Index(fields=['status']),
         ]
 
     def __str__(self):
-        return f"{self.layer_name} | {self.id}"
+        return f'{self.layer_name} | {self.id}'

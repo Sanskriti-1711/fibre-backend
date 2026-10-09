@@ -25,12 +25,12 @@ MID_KEY_DECIMALS = 5
 
 def feature_parts(feature: dict[str, Any]) -> list[list[list[float]]]:
     """Every LineString part of a GeoJSON feature (MultiLineString aware)."""
-    geom = (feature or {}).get("geometry") or {}
-    gtype = geom.get("type")
-    coords = geom.get("coordinates") or []
-    if gtype == "MultiLineString":
+    geom = (feature or {}).get('geometry') or {}
+    gtype = geom.get('type')
+    coords = geom.get('coordinates') or []
+    if gtype == 'MultiLineString':
         return [p for p in coords if isinstance(p, list) and len(p) >= 2]
-    if gtype == "LineString":
+    if gtype == 'LineString':
         return [coords] if isinstance(coords, list) and len(coords) >= 2 else []
     return []
 
@@ -66,7 +66,7 @@ def coord_key(lon: float, lat: float) -> str:
     on half-way values, where Python's banker's rounding and float formatting
     can disagree.
     """
-    return f"{float(lon):.{MID_KEY_DECIMALS}f},{float(lat):.{MID_KEY_DECIMALS}f}"
+    return f'{float(lon):.{MID_KEY_DECIMALS}f},{float(lat):.{MID_KEY_DECIMALS}f}'
 
 
 def part_fingerprint(part: list) -> tuple:

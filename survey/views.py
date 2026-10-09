@@ -1,47 +1,47 @@
 """API views for the survey app — with pagination and filtering."""
 
 from datetime import datetime
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from django.shortcuts import get_object_or_404
+
 from django.db.models import Q
+from django.shortcuts import get_object_or_404
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from projects.models import Feature, Project
 
 from .models import (
     ApprovalRecord,
-    GPSTrace,
-    GPSPoint,
-    TrenchSurvey,
     ExistingAsset,
-    RiskAssessment,
-    Hazard,
     FieldEvidence,
+    GPSTrace,
+    Hazard,
+    RiskAssessment,
     SurveyEditLog,
+    SurveyFeature,
     SurveyStatus,
     SyncQueueItem,
-    SurveyFeature,
+    TrenchSurvey,
 )
 from .serializers import (
-    GPSTraceSerializer,
-    GPSPointSerializer,
-    TrenchSurveySerializer,
     ExistingAssetSerializer,
-    RiskAssessmentSerializer,
-    HazardSerializer,
     FieldEvidenceSerializer,
+    GPSPointSerializer,
+    GPSTraceSerializer,
+    HazardSerializer,
+    RiskAssessmentSerializer,
     SurveyEditLogSerializer,
+    SurveyFeatureSerializer,
     SurveyStatusSerializer,
     SyncQueueItemSerializer,
-    SurveyFeatureSerializer,
+    TrenchSurveySerializer,
 )
-
-from projects.models import Feature, Project
 
 # Project statuses that mean "sent for review / approved" — if the engineer
 # makes a new edit while the survey is in one of these, the project returns
 # to `active` so they can resubmit (a new LLD review cycle, which produces a
 # new Approved Survey Version instead of modifying the frozen one).
-_REVIEW_DONE_STATUSES = {"submitted", "under_review", "reviewed", "accepted", "completed"}
+_REVIEW_DONE_STATUSES = {'submitted', 'under_review', 'reviewed', 'accepted', 'completed'}
 
 # ── Pagination Defaults ───────────────────────────────────────────────────
 DEFAULT_PAGE_SIZE = 20
@@ -64,8 +64,8 @@ def _reopen_project_after_edit(sf):
     try:
         project = Project.objects.filter(id=sf.project_id).first()
         if project and project.status in _REVIEW_DONE_STATUSES:
-            project.status = "active"
-            project.save(update_fields=["status", "updated_at", "last_activity_at"])
+            project.status = 'active'
+            project.save(update_fields=['status', 'updated_at', 'last_activity_at'])
     except Exception:
         pass
 
@@ -110,18 +110,20 @@ def _paginate(request, queryset, serializer_class, context=None):
     offset = (page - 1) * page_size
 
     serializer = serializer_class(
-        queryset[offset:offset + page_size],
+        queryset[offset : offset + page_size],
         many=True,
         context=context or {'request': request},
     )
 
-    return Response({
-        'count': total,
-        'page': page,
-        'page_size': page_size,
-        'total_pages': max(1, (total + page_size - 1) // page_size),
-        'results': serializer.data,
-    })
+    return Response(
+        {
+            'count': total,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': max(1, (total + page_size - 1) // page_size),
+            'results': serializer.data,
+        }
+    )
 
 
 def _apply_date_filter(qs, request, date_field='created_at'):
@@ -154,9 +156,10 @@ def _apply_search(qs, request, search_fields):
 
 # ── GPS Traces ─────────────────────────────────────────────────────────────
 
+
 class GPSTraceListCreateAPIView(APIView):
     """GET /api/survey/gps-traces/ — list engineer's traces
-       POST /api/survey/gps-traces/ — create new trace"""
+    POST /api/survey/gps-traces/ — create new trace"""
 
     def get(self, request):
         engineer = _get_engineer(request)
@@ -176,7 +179,7 @@ class GPSTraceListCreateAPIView(APIView):
 
 class GPSTraceDetailAPIView(APIView):
     """GET /api/survey/gps-traces/<id>/ — get trace with points
-       PATCH /api/survey/gps-traces/<id>/ — update trace"""
+    PATCH /api/survey/gps-traces/<id>/ — update trace"""
 
     def get(self, request, trace_id):
         engineer = _get_engineer(request)
@@ -216,9 +219,10 @@ class GPSPointBatchAPIView(APIView):
 
 # ── Trench Surveys ─────────────────────────────────────────────────────────
 
+
 class TrenchSurveyListCreateAPIView(APIView):
     """GET /api/survey/trenches/ — list engineer's trench surveys
-       POST /api/survey/trenches/ — create trench survey"""
+    POST /api/survey/trenches/ — create trench survey"""
 
     def get(self, request):
         engineer = _get_engineer(request)
@@ -265,9 +269,10 @@ class TrenchSurveyDetailAPIView(APIView):
 
 # ── Existing Assets ────────────────────────────────────────────────────────
 
+
 class ExistingAssetListCreateAPIView(APIView):
     """GET /api/survey/assets/ — list assets
-       POST /api/survey/assets/ — create asset"""
+    POST /api/survey/assets/ — create asset"""
 
     def get(self, request):
         engineer = _get_engineer(request)
@@ -292,9 +297,10 @@ class ExistingAssetListCreateAPIView(APIView):
 
 # ── Risk Assessments ────────────────────────────────────────────────────
 
+
 class RiskAssessmentListCreateAPIView(APIView):
     """GET /api/survey/risks/ — list risk assessments
-       POST /api/survey/risks/ — create risk assessment"""
+    POST /api/survey/risks/ — create risk assessment"""
 
     def get(self, request):
         engineer = _get_engineer(request)
@@ -344,9 +350,10 @@ class RiskAssessmentDetailAPIView(APIView):
 
 # ── Hazards ────────────────────────────────────────────────────────────────
 
+
 class HazardListCreateAPIView(APIView):
     """GET /api/survey/hazards/ — list hazards
-       POST /api/survey/hazards/ — create hazard"""
+    POST /api/survey/hazards/ — create hazard"""
 
     def get(self, request):
         engineer = _get_engineer(request)
@@ -371,9 +378,10 @@ class HazardListCreateAPIView(APIView):
 
 # ── Field Evidence ─────────────────────────────────────────────────────────
 
+
 class FieldEvidenceListCreateAPIView(APIView):
     """GET /api/survey/evidence/ — list evidence
-       POST /api/survey/evidence/ — upload evidence"""
+    POST /api/survey/evidence/ — upload evidence"""
 
     def get(self, request):
         engineer = _get_engineer(request)
@@ -397,6 +405,7 @@ class FieldEvidenceListCreateAPIView(APIView):
 
 
 # ── Survey Changes ─────────────────────────────────────────────────────────
+
 
 class SurveyEditLogListAPIView(APIView):
     """GET /api/survey/changes/ — list changes for a feature"""
@@ -424,7 +433,7 @@ class SurveyEditLogListAPIView(APIView):
 
 class SurveyStatusAPIView(APIView):
     """GET /api/survey/status/ — get feature status
-       POST /api/survey/status/ — create/update status"""
+    POST /api/survey/status/ — create/update status"""
 
     def get(self, request):
         engineer = _get_engineer(request)
@@ -465,9 +474,10 @@ class SurveyStatusAPIView(APIView):
 
 # ── Sync Queue ─────────────────────────────────────────────────────────────
 
+
 class SyncQueueListCreateAPIView(APIView):
     """POST /api/survey/sync/ — push items to sync queue
-       GET /api/survey/sync/ — list pending sync items"""
+    GET /api/survey/sync/ — list pending sync items"""
 
     def get(self, request):
         engineer = _get_engineer(request)
@@ -535,7 +545,7 @@ def _process_sync_item(item):
     }
 
     if item.item_type not in handler_map:
-        raise ValueError(f"Unknown sync item type: {item.item_type}")
+        raise ValueError(f'Unknown sync item type: {item.item_type}')
 
     serializer_cls, model_cls = handler_map[item.item_type]
     serializer = serializer_cls(data=item.payload)
@@ -569,7 +579,7 @@ def _persist_survey_domain_data(engineer, data, hld_feature_id):
         except Exception:
             feature = None
 
-    counts = {"trench": 0, "risks": 0, "hazards": 0, "evidence": 0, "edits": 0}
+    counts = {'trench': 0, 'risks': 0, 'hazards': 0, 'evidence': 0, 'edits': 0}
 
     def _save(serializer_cls, payload):
         ser = serializer_cls(data=payload)
@@ -580,21 +590,22 @@ def _persist_survey_domain_data(engineer, data, hld_feature_id):
 
     def _clean(payload):
         return {
-            k: v for k, v in payload.items()
-            if k not in ("id", "engineer", "engineer_name", "created_at", "updated_at", "file")
+            k: v
+            for k, v in payload.items()
+            if k not in ('id', 'engineer', 'engineer_name', 'created_at', 'updated_at', 'file')
         }
 
-    trench = data.get("trench")
+    trench = data.get('trench')
     if isinstance(trench, dict) and feature is not None:
         tdata = _clean(trench)
-        tdata["feature"] = str(feature.id)
+        tdata['feature'] = str(feature.id)
         if _save(TrenchSurveySerializer, tdata):
-            counts["trench"] += 1
+            counts['trench'] += 1
 
     for key, serializer_cls, count_key in (
-        ("risks", RiskAssessmentSerializer, "risks"),
-        ("hazards", HazardSerializer, "hazards"),
-        ("evidence", FieldEvidenceSerializer, "evidence"),
+        ('risks', RiskAssessmentSerializer, 'risks'),
+        ('hazards', HazardSerializer, 'hazards'),
+        ('evidence', FieldEvidenceSerializer, 'evidence'),
     ):
         items = data.get(key)
         if not isinstance(items, list):
@@ -604,13 +615,13 @@ def _persist_survey_domain_data(engineer, data, hld_feature_id):
                 continue
             payload = _clean(item)
             if feature is not None:
-                payload.setdefault("feature", str(feature.id))
+                payload.setdefault('feature', str(feature.id))
             if _save(serializer_cls, payload):
                 counts[count_key] += 1
 
     # Audit trail — one SurveyEditLog row per changed attribute.
-    orig = data.get("original_attributes") or {}
-    surv = data.get("survey_attributes") or {}
+    orig = data.get('original_attributes') or {}
+    surv = data.get('survey_attributes') or {}
     if isinstance(orig, dict) and isinstance(surv, dict):
         for field_name in sorted(set(list(orig.keys()) + list(surv.keys()))):
             old = orig.get(field_name)
@@ -618,24 +629,25 @@ def _persist_survey_domain_data(engineer, data, hld_feature_id):
             if old == new:
                 continue
             payload = {
-                "field_name": str(field_name),
-                "old_value": old,
-                "new_value": new,
-                "reason": data.get("change_reason", ""),
+                'field_name': str(field_name),
+                'old_value': old,
+                'new_value': new,
+                'reason': data.get('change_reason', ''),
             }
             if feature is not None:
-                payload["feature"] = str(feature.id)
+                payload['feature'] = str(feature.id)
             if _save(SurveyEditLogSerializer, payload):
-                counts["edits"] += 1
+                counts['edits'] += 1
 
     return counts
 
 
 # ── Survey Features (HLD/Survey Separation) ───────────────────────────────
 
+
 class SurveyFeatureListCreateAPIView(APIView):
     """GET /api/survey/survey-features/ — list survey features for a project
-       POST /api/survey/survey-features/ — create or update a survey feature"""
+    POST /api/survey/survey-features/ — create or update a survey feature"""
 
     def get(self, request):
         engineer = _get_engineer(request)
@@ -678,8 +690,8 @@ class SurveyFeatureListCreateAPIView(APIView):
 
 class SurveyFeatureDetailAPIView(APIView):
     """GET   /api/survey/survey-features/<id>/ — retrieve a survey feature
-       PATCH  /api/survey/survey-features/<id>/ — update geometry/attributes/status
-       DELETE /api/survey/survey-features/<id>/ — remove a survey feature"""
+    PATCH  /api/survey/survey-features/<id>/ — update geometry/attributes/status
+    DELETE /api/survey/survey-features/<id>/ — remove a survey feature"""
 
     def get(self, request, feature_id):
         qs = _survey_scope(request, SurveyFeature.objects.all())
@@ -707,9 +719,11 @@ class SurveyFeatureDetailAPIView(APIView):
                     # Re-edit after a decision -> re-enter the approval queue
                     sf.survey_status = SurveyFeature.SurveyStatus.MODIFIED
                 sf.sync_status = SurveyFeature.SyncState.PENDING
-            serializer.save(version_number=sf.version_number,
-                            survey_status=sf.survey_status,
-                            sync_status=sf.sync_status)
+            serializer.save(
+                version_number=sf.version_number,
+                survey_status=sf.survey_status,
+                sync_status=sf.sync_status,
+            )
             _persist_survey_domain_data(engineer, request.data, sf.original_hld_feature_id)
             # Engineer edited after submission -> reopen the survey so they can
             # resubmit (new review cycle, new ASV version — never modify V1).
@@ -776,7 +790,9 @@ class SurveyFeatureUpsertAPIView(APIView):
                 # Engineer edited after submission -> reopen the survey so they
                 # can resubmit (new review cycle, new ASV version).
                 _reopen_project_after_edit(sf)
-            return Response(serializer.data, status=status.HTTP_200_OK if sf else status.HTTP_201_CREATED)
+            return Response(
+                serializer.data, status=status.HTTP_200_OK if sf else status.HTTP_201_CREATED
+            )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -792,19 +808,19 @@ class SurveyFeaturePhotoUploadView(APIView):
         engineer = _get_engineer(request)
         sf = get_object_or_404(SurveyFeature, id=feature_id, engineer=engineer)
 
-        if "photo" not in request.FILES:
+        if 'photo' not in request.FILES:
             return Response(
-                {"detail": "No photo provided"},
+                {'detail': 'No photo provided'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        photo = request.FILES["photo"]
+        photo = request.FILES['photo']
 
         # Validate file type
-        allowed_types = ["image/jpeg", "image/png", "image/jpg"]
+        allowed_types = ['image/jpeg', 'image/png', 'image/jpg']
         if photo.content_type not in allowed_types:
             return Response(
-                {"detail": "Invalid file type. Only JPEG and PNG are allowed."},
+                {'detail': 'Invalid file type. Only JPEG and PNG are allowed.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -812,7 +828,7 @@ class SurveyFeaturePhotoUploadView(APIView):
         max_size = 10 * 1024 * 1024  # 10MB
         if photo.size > max_size:
             return Response(
-                {"detail": "File too large. Maximum size is 10MB."},
+                {'detail': 'File too large. Maximum size is 10MB.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -821,14 +837,18 @@ class SurveyFeaturePhotoUploadView(APIView):
 
         # Tier-1 A1: classify the photo so tags drive the A3 auto-fill.
         from .photo_classifier import classify_photo
+
         try:
-            result = classify_photo(photo, meta={
-                "layer_name": sf.layer_name,
-                "layer_id": sf.layer_id,
-                "description": sf.change_reason or "",
-                "asset_type": (sf.survey_attributes or {}).get("asset_type", ""),
-            })
-            sf.photo_tags = result["tags"]
+            result = classify_photo(
+                photo,
+                meta={
+                    'layer_name': sf.layer_name,
+                    'layer_id': sf.layer_id,
+                    'description': sf.change_reason or '',
+                    'asset_type': (sf.survey_attributes or {}).get('asset_type', ''),
+                },
+            )
+            sf.photo_tags = result['tags']
         except Exception:
             sf.photo_tags = []
 
@@ -836,15 +856,16 @@ class SurveyFeaturePhotoUploadView(APIView):
 
         # Tier-1 A3: field auto-fill suggestions derived from the tags.
         from .auto_fill import autofill_from_tags
+
         suggestions = autofill_from_tags(sf.photo_tags or [], sf)
 
         return Response(
             {
-                "id": str(sf.id),
-                "photo_url": request.build_absolute_uri(sf.photo.url) if sf.photo else None,
-                "photo_tags": sf.photo_tags,
-                "suggestions": suggestions,
-                "uploaded_at": sf.updated_at.isoformat(),
+                'id': str(sf.id),
+                'photo_url': request.build_absolute_uri(sf.photo.url) if sf.photo else None,
+                'photo_tags': sf.photo_tags,
+                'suggestions': suggestions,
+                'uploaded_at': sf.updated_at.isoformat(),
             },
             status=status.HTTP_200_OK,
         )
@@ -907,11 +928,13 @@ class SurveyFeatureApprovalAPIView(APIView):
             if ftth_id:
                 try:
                     from permits.rules.variation import create_variations
+
                     create_variations(str(ftth_id), sf, user=request.user)
                 except Exception:
                     pass
                 try:
                     from permits.rules.survey_hook import ensure_survey_evidence
+
                     ensure_survey_evidence(str(ftth_id))
                 except Exception:
                     pass
@@ -951,13 +974,16 @@ class ProjectRiskQueueAPIView(APIView):
 
         rows.sort(key=lambda r: -r['risk'].get('score', 0))
         import collections
+
         bands = collections.Counter(r.get('band') for r in risk_by_id.values())
-        return Response({
-            'project': str(project_id),
-            'total_scored': len(risk_by_id),
-            'bands': dict(bands),
-            'changes': rows,
-        })
+        return Response(
+            {
+                'project': str(project_id),
+                'total_scored': len(risk_by_id),
+                'bands': dict(bands),
+                'changes': rows,
+            }
+        )
 
 
 class CompletionForecastAPIView(APIView):
@@ -970,6 +996,7 @@ class CompletionForecastAPIView(APIView):
 
     def get(self, request, project_id):
         from projects.models import Project
+
         from .completion_forecast import completion_forecast
 
         project = Project.objects.filter(pk=project_id).first()

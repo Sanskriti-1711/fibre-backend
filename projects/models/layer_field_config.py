@@ -25,8 +25,8 @@ class LayerFieldConfig(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = "layer_field_configs"
-        unique_together = ("project", "layer_id")
+        db_table = 'layer_field_configs'
+        unique_together = ('project', 'layer_id')
 
     def __str__(self):
-        return f"{self.layer_name or self.layer_id} field config"
+        return f'{self.layer_name or self.layer_id} field config'

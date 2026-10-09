@@ -14,8 +14,8 @@ from django.db import connection
 def _table_exists(schema: str, table: str) -> bool:
     with connection.cursor() as cur:
         cur.execute(
-            "SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema = %s AND table_name = %s",
+            'SELECT 1 FROM information_schema.tables '
+            'WHERE table_schema = %s AND table_name = %s',
             [schema, table],
         )
         return cur.fetchone() is not None
@@ -23,7 +23,7 @@ def _table_exists(schema: str, table: str) -> bool:
 
 def gis_table_exists(table: str) -> bool:
     """Check whether ``gis.<table>`` exists (reference layers are optional)."""
-    return _table_exists("gis", table)
+    return _table_exists('gis', table)
 
 
 def project_feature_count(table: str, project_id: str) -> int:
@@ -75,11 +75,11 @@ def intersections_with(
             {
                 # route_id is the per-project fid, matching the ``id`` the
                 # layer GeoJSON endpoints serve to the map frontends.
-                "route_id": row[1] or row[0],
-                "ref_id": row[2],
-                "ref_type": row[3],
-                "crossing_lng": float(row[4]) if row[4] is not None else None,
-                "crossing_lat": float(row[5]) if row[5] is not None else None,
+                'route_id': row[1] or row[0],
+                'ref_id': row[2],
+                'ref_type': row[3],
+                'crossing_lng': float(row[4]) if row[4] is not None else None,
+                'crossing_lat': float(row[5]) if row[5] is not None else None,
             }
             for row in cur.fetchall()
         ]
@@ -111,7 +111,7 @@ def route_features_with(
             [project_id, limit],
         )
         return [
-            {"route_id": row[1] or row[0], "prop_key": prop_key, "prop_val": row[2]}
+            {'route_id': row[1] or row[0], 'prop_key': prop_key, 'prop_val': row[2]}
             for row in cur.fetchall()
         ]
 
@@ -122,7 +122,7 @@ def _geometry_column(table: str) -> str | None:
     # disabled every spatial rule.
     with connection.cursor() as cur:
         cur.execute(
-            "SELECT column_name FROM information_schema.columns "
+            'SELECT column_name FROM information_schema.columns '
             "WHERE table_schema = 'gis' AND table_name = %s "
             "AND udt_name = 'geometry' LIMIT 1",
             [table],

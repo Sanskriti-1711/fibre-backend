@@ -16,62 +16,68 @@ LLD impact  — how far the change propagates (feeder > distribution > drop)
 
 from __future__ import annotations
 
-import math
-from typing import Dict, List
-
 # ── Severity: how much of the feature changed ──────────────────────────────
 GEOMETRY_SEVERITY = {
-    "moved": 4,        # reroute / vertex move — the change that matters most
-    "reshaped": 4,     # multi-vertex edit
-    "added": 3,        # brand-new feature (unplanned work)
-    "removed": 3,      # removal needs LLD to drop dependents
-    "attribute_only": 1,
-    "none": 0,
+    'moved': 4,  # reroute / vertex move — the change that matters most
+    'reshaped': 4,  # multi-vertex edit
+    'added': 3,  # brand-new feature (unplanned work)
+    'removed': 3,  # removal needs LLD to drop dependents
+    'attribute_only': 1,
+    'none': 0,
 }
 
 # ── LLD impact: how far the change propagates down the hierarchy ──────────
 LAYER_IMPACT = {
-    "feeder": 5,
-    "distribution": 3,
-    "drop": 2,
-    "garden": 2,
-    "hdd": 2,
-    "object": 1,
-    "pdp": 1,
-    "polygon": 1,
-    "chamber": 1,
-    "premise": 1,
-    "coupleur": 1,
+    'feeder': 5,
+    'distribution': 3,
+    'drop': 2,
+    'garden': 2,
+    'hdd': 2,
+    'object': 1,
+    'pdp': 1,
+    'polygon': 1,
+    'chamber': 1,
+    'premise': 1,
+    'coupleur': 1,
 }
 
 # Attribute keys whose change actually alters LLD planning decisions.
 HIGH_IMPACT_ATTRS = {
-    "trench_type", "construction_method", "depth_mm", "width_mm",
-    "road_crossing", "footpath_crossing", "rail_crossing", "river_crossing",
-    "private_property", "traffic_sensitive", "permit_required",
-    "aerial_required", "surface_type",
+    'trench_type',
+    'construction_method',
+    'depth_mm',
+    'width_mm',
+    'road_crossing',
+    'footpath_crossing',
+    'rail_crossing',
+    'river_crossing',
+    'private_property',
+    'traffic_sensitive',
+    'permit_required',
+    'aerial_required',
+    'surface_type',
 }
 
 # GPS quality multipliers for capture confidence (likelihood).
 GPS_LIKELIHOOD = {
-    "ok": 5,        # trustworthy capture
-    "unknown": 3,
-    "warn": 2,
-    "reject": 1,    # override-grade fix — least trustworthy
+    'ok': 5,  # trustworthy capture
+    'unknown': 3,
+    'warn': 2,
+    'reject': 1,  # override-grade fix — least trustworthy
 }
 
 # Evidence bonus: photos/backing make the capture more reviewable.
 EVIDENCE_BONUS = {
-    0: 0.6,   # nothing attached
-    1: 0.8,   # one item
-    2: 1.0,   # photos + notes — treat as fully evidenced
+    0: 0.6,  # nothing attached
+    1: 0.8,  # one item
+    2: 1.0,  # photos + notes — treat as fully evidenced
 }
 
 RISK_BANDS = (
-    (16, "critical"),
-    (9, "high"),
-    (4, "medium"),
-    (0, "low"),
+    (16, 'critical'),
+    (9, 'high'),
+    (4, 'medium'),
+    (0, 'low'),
 )
 
 
@@ -79,12 +85,13 @@ def _band(raw: int) -> str:
     for threshold, name in RISK_BANDS:
         if raw >= threshold:
             return name
-    return "low"
+    return 'low'
+
 
 # Severity 0 (nothing material changed) always scores low.
 
 
-def score_change(sf) -> Dict:
+def score_change(sf) -> dict:
     """Score one SurveyFeature instance. Returns a risk payload dict."""
     severity, sev_key = _severity(sf)
     likelihood = _likelihood(sf)
@@ -98,24 +105,25 @@ def score_change(sf) -> Dict:
 
     factors = _factor_notes(sev_key, likelihood, impact, sf)
     return {
-        "score": int(raw),
-        "band": band,
-        "severity": sev_key,
-        "likelihood": int(likelihood),
-        "lld_impact": impact,
-        "factors": factors,
+        'score': int(raw),
+        'band': band,
+        'severity': sev_key,
+        'likelihood': int(likelihood),
+        'lld_impact': impact,
+        'factors': factors,
     }
 
 
-def score_changes(survey_features) -> Dict[str, Dict]:
+def score_changes(survey_features) -> dict[str, dict]:
     """Bulk-score an iterable of SurveyFeature. Returns {sf_id: risk}."""
-    out: Dict[str, Dict] = {}
+    out: dict[str, dict] = {}
     for sf in survey_features:
         out[str(sf.id)] = score_change(sf)
     return out
 
 
 # ── Internals ───────────────────────────────────────────────────────────────
+
 
 def _severity(sf):
     """4 = geometry moved, 1 = attribute-only, 0 = nothing material."""
@@ -130,27 +138,27 @@ def _severity(sf):
     high_impact_attr_change = bool(changed_keys & HIGH_IMPACT_ATTRS)
 
     if sf.is_removal:
-        return GEOMETRY_SEVERITY["removed"], "removed"
+        return GEOMETRY_SEVERITY['removed'], 'removed'
     if sf.original_hld_feature_id is None:
-        return GEOMETRY_SEVERITY["added"], "added"
+        return GEOMETRY_SEVERITY['added'], 'added'
     if not same_geom:
         # Multiple changed attrs + geometry = reshape-level severity.
-        return GEOMETRY_SEVERITY["reshaped"], "reshaped"
+        return GEOMETRY_SEVERITY['reshaped'], 'reshaped'
     if high_impact_attr_change:
-        return GEOMETRY_SEVERITY["attribute_only"], "attribute_only"
+        return GEOMETRY_SEVERITY['attribute_only'], 'attribute_only'
     if changed_keys:
-        return 1, "cosmetic_only"
-    return 0, "none"
+        return 1, 'cosmetic_only'
+    return 0, 'none'
 
 
 def _likelihood(sf) -> int:
     """Base capture confidence from GPS quality (1-5)."""
-    q = (sf.gps_quality or "").strip().lower()
-    return GPS_LIKELIHOOD.get(q, GPS_LIKELIHOOD["unknown"])
+    q = (sf.gps_quality or '').strip().lower()
+    return GPS_LIKELIHOOD.get(q, GPS_LIKELIHOOD['unknown'])
 
 
 def _evidence_factor(sf) -> float:
-    count = (1 if sf.photo else 0) + (1 if (sf.change_reason or "").strip() else 0)
+    count = (1 if sf.photo else 0) + (1 if (sf.change_reason or '').strip() else 0)
     return EVIDENCE_BONUS.get(min(count, 2), 0.8)
 
 
@@ -162,39 +170,39 @@ def _lld_impact(sf) -> int:
         return impact
     # Unknown layer — infer from attribute hints.
     attrs = sf.survey_attributes or {}
-    usage = str(attrs.get("USAGE_TYPE") or attrs.get("trench_type") or "").lower()
-    if "feeder" in usage:
+    usage = str(attrs.get('USAGE_TYPE') or attrs.get('trench_type') or '').lower()
+    if 'feeder' in usage:
         return 5
-    if "distribution" in usage:
+    if 'distribution' in usage:
         return 3
-    if usage in ("garden", "drop") or "garden" in usage:
+    if usage in ('garden', 'drop') or 'garden' in usage:
         return 2
     return 2  # conservative default
 
 
-def _factor_notes(sev_key, likelihood, impact, sf) -> List[str]:
+def _factor_notes(sev_key, likelihood, impact, sf) -> list[str]:
     notes = []
-    if sev_key in ("moved", "reshaped"):
-        notes.append("Geometry rerouted — LLD must re-trace this corridor")
-    elif sev_key == "added":
-        notes.append("New engineer-created feature — LLD must absorb unplanned work")
-    elif sev_key == "removed":
-        notes.append("Feature removal — LLD must drop dependents")
-    elif sev_key == "attribute_only":
-        notes.append("Planning-relevant attributes changed (trench type/crossings)")
-    if sf.gps_quality == "reject":
-        notes.append("Captured on a reject-grade GPS fix (engineer override)")
-    elif sf.gps_quality == "warn":
-        notes.append("Captured on a degraded GPS fix")
-    if not sf.photo and not (sf.change_reason or "").strip():
-        notes.append("No photo or reason attached")
+    if sev_key in ('moved', 'reshaped'):
+        notes.append('Geometry rerouted — LLD must re-trace this corridor')
+    elif sev_key == 'added':
+        notes.append('New engineer-created feature — LLD must absorb unplanned work')
+    elif sev_key == 'removed':
+        notes.append('Feature removal — LLD must drop dependents')
+    elif sev_key == 'attribute_only':
+        notes.append('Planning-relevant attributes changed (trench type/crossings)')
+    if sf.gps_quality == 'reject':
+        notes.append('Captured on a reject-grade GPS fix (engineer override)')
+    elif sf.gps_quality == 'warn':
+        notes.append('Captured on a degraded GPS fix')
+    if not sf.photo and not (sf.change_reason or '').strip():
+        notes.append('No photo or reason attached')
     if impact >= 4:
-        notes.append("Feeder-level change — expect wide LLD propagation")
+        notes.append('Feeder-level change — expect wide LLD propagation')
     return notes
 
 
 def _layer_key(sf) -> str:
-    raw = (sf.layer_name or sf.layer_id or "").lower()
+    raw = (sf.layer_name or sf.layer_id or '').lower()
     for key in LAYER_IMPACT:
         if key in raw:
             return key
@@ -227,6 +235,6 @@ def json_round_coords(geom):
         return x
 
     g = copy.deepcopy(geom)
-    if isinstance(g, dict) and "coordinates" in g:
-        g["coordinates"] = _round(g["coordinates"])
+    if isinstance(g, dict) and 'coordinates' in g:
+        g['coordinates'] = _round(g['coordinates'])
     return g

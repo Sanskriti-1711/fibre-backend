@@ -35,6 +35,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run Ruff (lint)
+        run: ruff check .
+
+      - name: Run Ruff (format check)
+        run: ruff format --check .
+
+      - name: Run Mypy (type check)
+        run: mypy --config-file pyproject.toml .
+
   tests:
     name: Tests (PostgreSQL + PostGIS)
     runs-on: ubuntu-latest
@@ -240,7 +266,7 @@ jobs:
   #                      a quietly dead service.
   deploy:
     name: Deploy main
-    needs: [tests, image]
+    needs: [lint, tests, image]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:

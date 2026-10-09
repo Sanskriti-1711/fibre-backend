@@ -4,7 +4,6 @@ from django.db import migrations
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('assignments', '0004_alter_assignmentjob_assignee_and_more'),
     ]

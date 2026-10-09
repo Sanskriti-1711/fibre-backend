@@ -12,42 +12,55 @@ from .models import (
 
 @admin.register(PermitAuthority)
 class PermitAuthorityAdmin(admin.ModelAdmin):
-    list_display = ("code", "name", "authority_type", "country", "region", "active")
-    list_filter = ("authority_type", "country", "active")
-    search_fields = ("code", "name")
+    list_display = ('code', 'name', 'authority_type', 'country', 'region', 'active')
+    list_filter = ('authority_type', 'country', 'active')
+    search_fields = ('code', 'name')
 
 
 @admin.register(PermitRule)
 class PermitRuleAdmin(admin.ModelAdmin):
-    list_display = ("rule_id", "name", "layer_a", "layer_b", "required_level", "active")
-    list_filter = ("active", "required_level")
-    search_fields = ("rule_id", "name")
+    list_display = ('rule_id', 'name', 'layer_a', 'layer_b', 'required_level', 'active')
+    list_filter = ('active', 'required_level')
+    search_fields = ('rule_id', 'name')
 
 
 @admin.register(PermitMatrix)
 class PermitMatrixAdmin(admin.ModelAdmin):
     list_display = (
-        "permit_type", "project", "route_section", "authority",
-        "status", "readiness_pct", "required", "updated_at",
+        'permit_type',
+        'project',
+        'route_section',
+        'authority',
+        'status',
+        'readiness_pct',
+        'required',
+        'updated_at',
     )
-    list_filter = ("status", "permit_type", "required")
-    search_fields = ("project_id", "route_section", "permit_type")
+    list_filter = ('status', 'permit_type', 'required')
+    search_fields = ('project_id', 'route_section', 'permit_type')
 
 
 @admin.register(PermitDocument)
 class PermitDocumentAdmin(admin.ModelAdmin):
-    list_display = ("name", "kind", "permit", "version", "created_at")
-    list_filter = ("kind",)
+    list_display = ('name', 'kind', 'permit', 'version', 'created_at')
+    list_filter = ('kind',)
 
 
 @admin.register(PermitEvent)
 class PermitEventAdmin(admin.ModelAdmin):
-    list_display = ("event", "permit", "created_at")
-    list_filter = ("event",)
+    list_display = ('event', 'permit', 'created_at')
+    list_filter = ('event',)
 
 
 @admin.register(PermitAiDraft)
 class PermitAiDraftAdmin(admin.ModelAdmin):
-    list_display = ("draft_type", "permit_type", "project", "is_ai_generated", "reviewed", "created_at")
-    list_filter = ("draft_type", "is_ai_generated", "reviewed")
-    search_fields = ("project_id", "permit_type", "permit_group")
+    list_display = (
+        'draft_type',
+        'permit_type',
+        'project',
+        'is_ai_generated',
+        'reviewed',
+        'created_at',
+    )
+    list_filter = ('draft_type', 'is_ai_generated', 'reviewed')
+    search_fields = ('project_id', 'permit_type', 'permit_group')

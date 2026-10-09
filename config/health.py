@@ -44,7 +44,7 @@ ENGINE_PROBE_TIMEOUT = 15
 
 def healthz(request):
     """Liveness probe. Deliberately touches no external dependency."""
-    return JsonResponse({"status": "ok"})
+    return JsonResponse({'status': 'ok'})
 
 
 def engine_health(request):
@@ -58,48 +58,48 @@ def engine_health(request):
     endpoint is unauthenticated so a monitor can reach it. Only the fields
     that make an outage actionable are surfaced.
     """
-    url = f"{FTTH_ENGINE_URL}/health"
+    url = f'{FTTH_ENGINE_URL}/health'
     started = time.monotonic()
     payload = {
-        "ok": False,
-        "engine_url": FTTH_ENGINE_URL,
-        "checked_url": url,
+        'ok': False,
+        'engine_url': FTTH_ENGINE_URL,
+        'checked_url': url,
     }
 
     try:
         response = requests.get(url, timeout=ENGINE_PROBE_TIMEOUT)
     except requests.RequestException as exc:
-        payload["latency_ms"] = int((time.monotonic() - started) * 1000)
-        payload["error"] = f"{type(exc).__name__}: {exc}"
-        logger.warning("Engine health probe failed for %s: %s", url, exc)
+        payload['latency_ms'] = int((time.monotonic() - started) * 1000)
+        payload['error'] = f'{type(exc).__name__}: {exc}'
+        logger.warning('Engine health probe failed for %s: %s', url, exc)
         return JsonResponse(payload, status=503)
 
-    payload["latency_ms"] = int((time.monotonic() - started) * 1000)
-    payload["http_status"] = response.status_code
+    payload['latency_ms'] = int((time.monotonic() - started) * 1000)
+    payload['http_status'] = response.status_code
 
     if response.status_code != 200:
-        payload["error"] = f"engine returned HTTP {response.status_code}"
+        payload['error'] = f'engine returned HTTP {response.status_code}'
         return JsonResponse(payload, status=503)
 
     try:
         body = response.json()
     except ValueError:
-        payload["error"] = "engine returned a non-JSON body"
+        payload['error'] = 'engine returned a non-JSON body'
         return JsonResponse(payload, status=503)
 
-    payload["engine_status"] = body.get("status")
-    payload["service"] = body.get("service")
-    payload["uptime_seconds"] = body.get("uptime_seconds")
+    payload['engine_status'] = body.get('status')
+    payload['service'] = body.get('service')
+    payload['uptime_seconds'] = body.get('uptime_seconds')
     # A reachable engine with no qgis_process cannot run a single pipeline, so
     # it is worth alerting on separately. It is reported as a boolean rather
     # than the raw path, and it is deliberately NOT part of the ok/503 verdict:
     # the engine itself still answers, which is a different failure mode from
     # being unreachable.
-    payload["qgis_available"] = bool(body.get("qgis_process"))
+    payload['qgis_available'] = bool(body.get('qgis_process'))
 
-    if body.get("status") != "ok":
-        payload["error"] = f"engine reported status={body.get('status')!r}"
+    if body.get('status') != 'ok':
+        payload['error'] = f"engine reported status={body.get('status')!r}"
         return JsonResponse(payload, status=503)
 
-    payload["ok"] = True
+    payload['ok'] = True
     return JsonResponse(payload)

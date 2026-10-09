@@ -25,7 +25,7 @@ from __future__ import annotations
 import html
 import math
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import data
@@ -33,16 +33,16 @@ from .hld_summary import _permit_road_fields, _street_name, _value
 
 
 def _e(value: Any) -> str:
-    return html.escape("" if value is None else str(value))
+    return html.escape('' if value is None else str(value))
 
 
 def _first_vertex(feature: dict[str, Any]) -> tuple[float, float] | None:
     """First [lng, lat] vertex of a line/point feature geometry."""
-    geom = feature.get("geometry") or {}
-    coords = geom.get("coordinates") or []
-    if geom.get("type") == "Point" and len(coords) >= 2:
+    geom = feature.get('geometry') or {}
+    coords = geom.get('coordinates') or []
+    if geom.get('type') == 'Point' and len(coords) >= 2:
         return (float(coords[0]), float(coords[1]))
-    if geom.get("type") in ("LineString", "MultiLineString"):
+    if geom.get('type') in ('LineString', 'MultiLineString'):
         c0 = coords[0] if coords else []
         if c0 and len(c0) >= 2 and isinstance(c0[0], (int, float)):
             return (float(c0[0]), float(c0[1]))
@@ -53,15 +53,17 @@ def _first_vertex(feature: dict[str, Any]) -> tuple[float, float] | None:
 
 def _centroid(feature: dict[str, Any]) -> tuple[float, float] | None:
     """Mean of all vertices — better image/anchor point than the first vertex."""
-    geom = feature.get("geometry") or {}
-    coords = geom.get("coordinates") or []
+    geom = feature.get('geometry') or {}
+    coords = geom.get('coordinates') or []
     pts: list[tuple[float, float]] = []
+
     def gather(node: Any) -> None:
         if isinstance(node, list) and node and isinstance(node[0], (int, float)) and len(node) >= 2:
             pts.append((float(node[0]), float(node[1])))
         elif isinstance(node, list):
             for n in node:
                 gather(n)
+
     gather(coords)
     if not pts:
         return None
@@ -70,13 +72,13 @@ def _centroid(feature: dict[str, Any]) -> tuple[float, float] | None:
 
 def _street_view_link(lat: float, lng: float) -> str:
     """Google Street View pano link at a viewpoint (street imagery anchor)."""
-    return f"https://www.google.com/maps?api=1&map_action=pano&viewpoint={lat:.6f},{lng:.6f}"
+    return f'https://www.google.com/maps?api=1&map_action=pano&viewpoint={lat:.6f},{lng:.6f}'
 
 
 def _osm_tile_xy(lat: float, lng: float, zoom: int) -> tuple[int, int]:
     """OSM slippy-map tile (x, y) for a lng/lat at a given zoom."""
     lat_rad = math.radians(lat)
-    n = 2 ** zoom
+    n = 2**zoom
     x = int((lng + 180.0) / 360.0 * n)
     y = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
     x = max(0, min(n - 1, x))
@@ -85,131 +87,167 @@ def _osm_tile_xy(lat: float, lng: float, zoom: int) -> tuple[int, int]:
 
 
 def _method_label(props: dict[str, Any], trench_type: str) -> str:
-    return str(_value(props, "CONSTRUCT", "construction_method", "METHOD", default=trench_type))
+    return str(_value(props, 'CONSTRUCT', 'construction_method', 'METHOD', default=trench_type))
 
 
 def _reuse_label(props: dict[str, Any]) -> str:
-    src = _value(props, "REUSE_SOURCE", "reuse_source", default="")
-    return str(src) if src else "—"
+    src = _value(props, 'REUSE_SOURCE', 'reuse_source', default='')
+    return str(src) if src else '—'
 
 
 # Traffic tier thresholds mirror traffic_plan._TIERS (length-based).
 _TIERS = [
-    (2000, "Major", "Full lane closure with diversion", [
-        "Lane closure with advance warning signs (500 m, 200 m, 100 m)",
-        "Signed diversion route with temporary road markings",
-        "Pedestrian diversion with barriers and tactile guidance",
-        "Traffic light control (or banksman) at the work zone",
-        "Work zone protected by Type-2 barriers and delineators",
-        "Emergency access maintained at all times",
-    ]),
-    (500, "Moderate", "Partial lane closure (lane shift)", [
-        "Partial lane closure with taper and temporary markings",
-        "Pedestrian crossing maintained with temporary crossing point",
-        "Work zone barriers with reflective delineators",
-        "Advance warning signs (200 m, 100 m)",
-    ]),
-    (0, "Minor", "No lane closure — verge/footway works", [
-        "Coned-off work zone with pedestrian diversion on footway",
-        "Advance warning signs (100 m)",
-        "Works under permit hours only",
-    ]),
+    (
+        2000,
+        'Major',
+        'Full lane closure with diversion',
+        [
+            'Lane closure with advance warning signs (500 m, 200 m, 100 m)',
+            'Signed diversion route with temporary road markings',
+            'Pedestrian diversion with barriers and tactile guidance',
+            'Traffic light control (or banksman) at the work zone',
+            'Work zone protected by Type-2 barriers and delineators',
+            'Emergency access maintained at all times',
+        ],
+    ),
+    (
+        500,
+        'Moderate',
+        'Partial lane closure (lane shift)',
+        [
+            'Partial lane closure with taper and temporary markings',
+            'Pedestrian crossing maintained with temporary crossing point',
+            'Work zone barriers with reflective delineators',
+            'Advance warning signs (200 m, 100 m)',
+        ],
+    ),
+    (
+        0,
+        'Minor',
+        'No lane closure — verge/footway works',
+        [
+            'Coned-off work zone with pedestrian diversion on footway',
+            'Advance warning signs (100 m)',
+            'Works under permit hours only',
+        ],
+    ),
 ]
 
 
 # Normalise the engine's USAGE_TYPE / trench_type into the four authority
 # categories (open-cut / HDD / micro-trench / reuse) used by the permit forms.
 def _construction_category(trench_type: str, method: str, surface: str, reuse: str) -> str:
-    ttype = (trench_type or "").lower()
-    meth = (method or "").lower()
-    if reuse not in ("", "—", "none", "null", "None"):
-        return "Existing Duct Reuse"
-    hints = f"{ttype} {meth}".lower()
-    if "hdd" in hints or "directional" in hints or "micro" in hints and "trench" in hints:
-        if "micro" in hints:
-            return "Micro Trench"
-        return "HDD"
-    if "micro" in hints:
-        return "Micro Trench"
-    if "aerial" in hints:
-        return "Aerial"
-    if "garden" in hints:
-        return "Garden"
-    return "Open Cut"
+    ttype = (trench_type or '').lower()
+    meth = (method or '').lower()
+    if reuse not in ('', '—', 'none', 'null', 'None'):
+        return 'Existing Duct Reuse'
+    hints = f'{ttype} {meth}'.lower()
+    if 'hdd' in hints or 'directional' in hints or 'micro' in hints and 'trench' in hints:
+        if 'micro' in hints:
+            return 'Micro Trench'
+        return 'HDD'
+    if 'micro' in hints:
+        return 'Micro Trench'
+    if 'aerial' in hints:
+        return 'Aerial'
+    if 'garden' in hints:
+        return 'Garden'
+    return 'Open Cut'
 
 
 def lld_street_summary(project_id: str, project_name: str) -> dict[str, Any]:
     """One final, case-wise HTML summary from the LLD final_trenches layer."""
-    trenches = data.lld_layer_features(project_id, "final_trenches")
+    trenches = data.lld_layer_features(project_id, 'final_trenches')
 
     # ── Drop features the survey purge marked as removed ──────────────────
     # `lld_purged` trenches are the old HLD path pieces an engineer rerouted
     # away from; keeping them would show the stale corridor alongside the new
     # approved route. They must never appear in an authority-ready permit.
     live_trenches = [
-        f for f in trenches
-        if not (data._props(f).get("lld_purged") in (True, "true", "True", "1", 1))
+        f
+        for f in trenches
+        if data._props(f).get('lld_purged') not in (True, 'true', 'True', '1', 1)
     ]
 
     if not live_trenches:
         return {
-            "name": "LLD street-wise permit summary",
-            "kind": "REPORT",
-            "filename": "lld/lld_street_permit_summary.html",
-            "content": "<html><body><p>No final trench features available for this LLD run.</p></body></html>",
-            "description": "Street-wise LLD permit summary (empty)",
+            'name': 'LLD street-wise permit summary',
+            'kind': 'REPORT',
+            'filename': 'lld/lld_street_permit_summary.html',
+            'content': '<html><body><p>No final trench features available for this LLD run.</p></body></html>',
+            'description': 'Street-wise LLD permit summary (empty)',
         }
 
     # Group sections into blocks. When a street name exists it is preferred;
     # otherwise each distinct (type × surface × sidewalk) design case gets its
     # own block so the document is genuinely section-wise, never one bucket.
     streets: dict[str, dict[str, Any]] = {}
-    totals: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "length": 0.0})
+    totals: dict[str, dict[str, Any]] = defaultdict(lambda: {'count': 0, 'length': 0.0})
 
     for feature in live_trenches:
         props = data._props(feature)
         raw_street = _street_name(props)
-        trench_type = str(_value(props, "trench_type", "TRENCH_TYPE", default="Unknown"))
+        trench_type = str(_value(props, 'trench_type', 'TRENCH_TYPE', default='Unknown'))
         method = _method_label(props, trench_type)
-        length = data._as_float(_value(props, "length_m", "LENGTH_M", "distance_m", default=0)) or 0.0
-        depth = str(_value(props, "DEPTH_MM", "depth_mm", "depth", default="—")) or "—"
-        width = str(_value(props, "WIDTH_MM", "width_mm", "width", default="—")) or "—"
-        surface = str(_value(props, "SURFACE", "surface", default="—")) or "—"
-        sidewalk = str(_value(props, "sidewalk", "SIDEWALK", "side", "Side", default="—")) or "—"
-        road_class = str(_value(props, "fclass", "road_class", "ROAD_CLASS", default="Not classified"))
-        reinst = str(_value(props, "REINSTATE", "reinstatement", default="—")) or "—"
-        section_id = str(_value(props, "feature_id", "FEATURE_ID", "fid", "id", default="—")) or "—"
-        image = str(_value(props, "image_url", "IMAGE_URL", "photo_url", "PHOTO_URL", default="")) or ""
+        length = (
+            data._as_float(_value(props, 'length_m', 'LENGTH_M', 'distance_m', default=0)) or 0.0
+        )
+        depth = str(_value(props, 'DEPTH_MM', 'depth_mm', 'depth', default='—')) or '—'
+        width = str(_value(props, 'WIDTH_MM', 'width_mm', 'width', default='—')) or '—'
+        surface = str(_value(props, 'SURFACE', 'surface', default='—')) or '—'
+        sidewalk = str(_value(props, 'sidewalk', 'SIDEWALK', 'side', 'Side', default='—')) or '—'
+        road_class = str(
+            _value(props, 'fclass', 'road_class', 'ROAD_CLASS', default='Not classified')
+        )
+        reinst = str(_value(props, 'REINSTATE', 'reinstatement', default='—')) or '—'
+        section_id = str(_value(props, 'feature_id', 'FEATURE_ID', 'fid', 'id', default='—')) or '—'
+        image = (
+            str(_value(props, 'image_url', 'IMAGE_URL', 'photo_url', 'PHOTO_URL', default='')) or ''
+        )
         reuse = _reuse_label(props)
         centroid = _centroid(feature)
 
-        if raw_street not in ("", "Unnamed street", "—"):
+        if raw_street not in ('', 'Unnamed street', '—'):
             block_name = raw_street
         else:
             # Synthetic but meaningful case label.
-            block_name = f"{trench_type} · {surface} · {sidewalk}".strip(" ·")
+            block_name = f'{trench_type} · {surface} · {sidewalk}'.strip(' ·')
 
         if block_name not in streets:
             streets[block_name] = {
-                "sections": [], "types": defaultdict(lambda: {"count": 0, "length": 0.0}),
-                "traffic": set(), "images": [], "centroids": [], "total": 0.0,
+                'sections': [],
+                'types': defaultdict(lambda: {'count': 0, 'length': 0.0}),
+                'traffic': set(),
+                'images': [],
+                'centroids': [],
+                'total': 0.0,
             }
         row = streets[block_name]
-        row["sections"].append({
-            "id": section_id, "type": trench_type, "method": method, "length": length,
-            "width": width, "depth": depth, "surface": surface, "road_class": road_class,
-            "sidewalk": sidewalk, "reinst": reinst, "reuse": reuse,
-        })
-        row["types"][trench_type]["count"] += 1
-        row["types"][trench_type]["length"] += length
-        row["traffic"].add(road_class)
-        row["total"] += length
+        row['sections'].append(
+            {
+                'id': section_id,
+                'type': trench_type,
+                'method': method,
+                'length': length,
+                'width': width,
+                'depth': depth,
+                'surface': surface,
+                'road_class': road_class,
+                'sidewalk': sidewalk,
+                'reinst': reinst,
+                'reuse': reuse,
+            }
+        )
+        row['types'][trench_type]['count'] += 1
+        row['types'][trench_type]['length'] += length
+        row['traffic'].add(road_class)
+        row['total'] += length
         if image:
-            row["images"].append(image)
+            row['images'].append(image)
         if centroid:
-            row["centroids"].append(centroid)
-        totals[trench_type]["count"] += 1
-        totals[trench_type]["length"] += length
+            row['centroids'].append(centroid)
+        totals[trench_type]['count'] += 1
+        totals[trench_type]['length'] += length
 
     def _tier(length_m: float) -> tuple[str, str, list[str]]:
         for t in _TIERS:
@@ -226,7 +264,7 @@ def lld_street_summary(project_id: str, project_name: str) -> dict[str, Any]:
         elif span_km > 0.6:
             zoom = 16
         x, y = _osm_tile_xy(lat, lng, zoom)
-        src = f"https://tile.openstreetmap.org/{zoom}/{x}/{y}.png"
+        src = f'https://tile.openstreetmap.org/{zoom}/{x}/{y}.png'
         return (
             f'<img src="{src}" alt="Street map" '
             f'style="max-width:100%;width:420px;border:1px solid #d1d5db;border-radius:6px;'
@@ -247,28 +285,31 @@ def lld_street_summary(project_id: str, project_name: str) -> dict[str, Any]:
 
     street_blocks = []
     for block_name, info in sorted(streets.items()):
-        type_summary = "; ".join(
-            f"{kind}: {bucket['length']:.1f} m ({bucket['count']} sections)"
-            for kind, bucket in sorted(info["types"].items())
-        ) or "No trench sections"
-        tier_label, tier_impact, measures = _tier(info["total"])
-        measures_html = "".join(f"<li>{_e(m)}</li>" for m in measures)
+        type_summary = (
+            '; '.join(
+                f"{kind}: {bucket['length']:.1f} m ({bucket['count']} sections)"
+                for kind, bucket in sorted(info['types'].items())
+            )
+            or 'No trench sections'
+        )
+        tier_label, tier_impact, measures = _tier(info['total'])
+        measures_html = ''.join(f'<li>{_e(m)}</li>' for m in measures)
 
         # Inline street map image + Street View anchor at the block centroid.
-        image_html = ""
-        if info["centroids"]:
-            lat = sum(p[0] for p in info["centroids"]) / len(info["centroids"])
-            lng = sum(p[1] for p in info["centroids"]) / len(info["centroids"])
-            image_html = _inline_tile_image((lat, lng), _span_km(info["centroids"]))
+        image_html = ''
+        if info['centroids']:
+            lat = sum(p[0] for p in info['centroids']) / len(info['centroids'])
+            lng = sum(p[1] for p in info['centroids']) / len(info['centroids'])
+            image_html = _inline_tile_image((lat, lng), _span_km(info['centroids']))
         else:
-            image_html = "<p><em>No coordinates for street imagery — attach survey photos.</em></p>"
-        if info["images"]:
-            refs = "".join(
-                f'<a href="{_e(i)}" target="_blank">{_e(i)}</a>; ' for i in info["images"][:6]
+            image_html = '<p><em>No coordinates for street imagery — attach survey photos.</em></p>'
+        if info['images']:
+            refs = ''.join(
+                f'<a href="{_e(i)}" target="_blank">{_e(i)}</a>; ' for i in info['images'][:6]
             )
             image_html += f'<p class="small"><strong>Survey photo references:</strong> {refs}</p>'
 
-        rows = "".join(
+        rows = ''.join(
             "<tr>"
             f"<td>{_e(s['id'])}</td>"
             f"<td>{_e(s['type'])}</td>"
@@ -281,9 +322,10 @@ def lld_street_summary(project_id: str, project_name: str) -> dict[str, Any]:
             f"<td>{_e(s['sidewalk'])}</td>"
             f"<td>{_e(s['reuse'])}</td>"
             "</tr>"
-            for s in info["sections"]
+            for s in info['sections']
         )
-        street_blocks.append(f"""<section class="street">
+        street_blocks.append(
+            f"""<section class="street">
 <h2>{_e(block_name)}</h2>
 <p><strong>Trench summary:</strong> {_e(type_summary)}<br>
 <strong>Total length:</strong> {info['total']:,.1f} m<br>
@@ -297,28 +339,34 @@ def lld_street_summary(project_id: str, project_name: str) -> dict[str, Any]:
 <th>Section</th><th>Trench type</th><th>Method</th><th>Length</th><th>Width</th>
 <th>Depth</th><th>Surface</th><th>Road class</th><th>Sidewalk</th><th>Reuse src</th>
 </tr></thead><tbody>{rows}</tbody></table>
-</section>""")
+</section>"""
+        )
 
     # Overall trench-type summary — split into the four construction categories
     # the permit forms ask for (open-cut / HDD / micro / reuse) in addition to
     # the raw engine types.
-    cat_totals: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "length": 0.0})
+    cat_totals: dict[str, dict[str, Any]] = defaultdict(lambda: {'count': 0, 'length': 0.0})
     for feature in live_trenches:
         props = data._props(feature)
-        trench_type = str(_value(props, "trench_type", "TRENCH_TYPE", default="Unknown"))
+        trench_type = str(_value(props, 'trench_type', 'TRENCH_TYPE', default='Unknown'))
         method = _method_label(props, trench_type)
-        surface = str(_value(props, "SURFACE", default=""))
+        surface = str(_value(props, 'SURFACE', default=''))
         reuse = _reuse_label(props)
-        length = data._as_float(_value(props, "length_m", "LENGTH_M", "distance_m", default=0)) or 0.0
+        length = (
+            data._as_float(_value(props, 'length_m', 'LENGTH_M', 'distance_m', default=0)) or 0.0
+        )
         cat = _construction_category(trench_type, method, surface, reuse)
-        cat_totals[cat]["count"] += 1
-        cat_totals[cat]["length"] += length
+        cat_totals[cat]['count'] += 1
+        cat_totals[cat]['length'] += length
 
-    raw_rows = "".join(
-        f"<tr><td>{_e(kind)}</td><td>{bucket['count']}</td><td>{bucket['length']:.1f} m</td></tr>"
-        for kind, bucket in sorted(totals.items())
-    ) or '<tr><td colspan="3">No trench data available.</td></tr>'
-    cat_rows = "".join(
+    raw_rows = (
+        ''.join(
+            f"<tr><td>{_e(kind)}</td><td>{bucket['count']}</td><td>{bucket['length']:.1f} m</td></tr>"
+            for kind, bucket in sorted(totals.items())
+        )
+        or '<tr><td colspan="3">No trench data available.</td></tr>'
+    )
+    cat_rows = ''.join(
         f"<tr><td>{_e(cat)}</td><td>{bucket['count']}</td><td>{bucket['length']:.1f} m</td></tr>"
         for cat, bucket in sorted(cat_totals.items())
     )
@@ -330,47 +378,59 @@ def lld_street_summary(project_id: str, project_name: str) -> dict[str, Any]:
     run_rows: list[str] = []
     review_items: list[tuple[str, str, str, float]] = []
     corridor_totals: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"runs": 0, "length": 0.0, "min_len": float("inf"), "max_len": 0.0, "review": 0}
+        lambda: {'runs': 0, 'length': 0.0, 'min_len': float('inf'), 'max_len': 0.0, 'review': 0}
     )
-    for layer_name in ("feeder_ducts", "distribution_ducts", "drop_ducts"):
+    for layer_name in ('feeder_ducts', 'distribution_ducts', 'drop_ducts'):
         for feature in data.lld_layer_features(project_id, layer_name):
             props = data._props(feature)
-            if props.get("lld_purged"):
+            if props.get('lld_purged'):
                 continue  # old rerouted-away corridor — never permit content
-            duct_type = str(_value(props, "DUCT_TYPE", "duct_type", default=layer_name.replace("_", " ").title()))
-            start_ch = str(_value(props, "START_CHAMBER", "start_chamber", default="") or "Project entry")
-            end_ch = str(_value(props, "END_CHAMBER", "end_chamber", default="") or "Network edge")
-            length = data._as_float(_value(props, "LENGTH_M", "length_m", default=0)) or 0.0
-            section_id = _value(props, "feature_id", "FEATURE_ID", "fid", "id", default="—")
+            duct_type = str(
+                _value(
+                    props, 'DUCT_TYPE', 'duct_type', default=layer_name.replace('_', ' ').title()
+                )
+            )
+            start_ch = str(
+                _value(props, 'START_CHAMBER', 'start_chamber', default='') or 'Project entry'
+            )
+            end_ch = str(_value(props, 'END_CHAMBER', 'end_chamber', default='') or 'Network edge')
+            length = data._as_float(_value(props, 'LENGTH_M', 'length_m', default=0)) or 0.0
+            section_id = _value(props, 'feature_id', 'FEATURE_ID', 'fid', 'id', default='—')
             is_review = length > REVIEW_RUN_M
-            row_cls = ' class="review"' if is_review else ""
+            row_cls = ' class="review"' if is_review else ''
             run_rows.append(
                 f"<tr{row_cls}><td>{_e(duct_type)}</td><td>{_e(section_id)}</td>"
                 f"<td>{_e(start_ch)} → {_e(end_ch)}</td><td>{length:.1f} m</td>"
                 f"<td>{'REVIEW — pull point check' if is_review else ''}</td></tr>"
             )
             if is_review:
-                review_items.append((duct_type, str(section_id), f"{start_ch} → {end_ch}", length))
+                review_items.append((duct_type, str(section_id), f'{start_ch} → {end_ch}', length))
             bucket = corridor_totals[duct_type]
-            bucket["runs"] += 1
-            bucket["length"] += length
-            bucket["min_len"] = min(bucket["min_len"], length)
-            bucket["max_len"] = max(bucket["max_len"], length)
+            bucket['runs'] += 1
+            bucket['length'] += length
+            bucket['min_len'] = min(bucket['min_len'], length)
+            bucket['max_len'] = max(bucket['max_len'], length)
             if is_review:
-                bucket["review"] += 1
+                bucket['review'] += 1
 
-    lld_corridor_rows = "".join(
-        f"<tr><td>{_e(kind)}</td><td>{bucket['runs']}</td><td>{bucket['length']:.1f} m</td>"
-        f"<td>{bucket['min_len']:.1f} m</td><td>{bucket['max_len']:.1f} m</td><td>{bucket['review'] or ''}</td></tr>"
-        for kind, bucket in sorted(corridor_totals.items())
-    ) or '<tr><td colspan="6">No duct data available.</td></tr>'
-    lld_review_rows = "".join(
-        f"<tr><td>{_e(dt)}</td><td>{_e(sid)}</td><td>{_e(run)}</td><td>{ln:.1f} m</td>"
-        f"<td>Add/verify intermediate pull chamber (HDPE 32/63 max pull ≈ 150 m)</td></tr>"
-        for dt, sid, run, ln in sorted(review_items, key=lambda r: -r[3])
-    ) or '<tr><td colspan="5">No runs exceed the 150 m pull threshold — no review items.</td></tr>'
+    lld_corridor_rows = (
+        ''.join(
+            f"<tr><td>{_e(kind)}</td><td>{bucket['runs']}</td><td>{bucket['length']:.1f} m</td>"
+            f"<td>{bucket['min_len']:.1f} m</td><td>{bucket['max_len']:.1f} m</td><td>{bucket['review'] or ''}</td></tr>"
+            for kind, bucket in sorted(corridor_totals.items())
+        )
+        or '<tr><td colspan="6">No duct data available.</td></tr>'
+    )
+    lld_review_rows = (
+        ''.join(
+            f'<tr><td>{_e(dt)}</td><td>{_e(sid)}</td><td>{_e(run)}</td><td>{ln:.1f} m</td>'
+            f'<td>Add/verify intermediate pull chamber (HDPE 32/63 max pull ≈ 150 m)</td></tr>'
+            for dt, sid, run, ln in sorted(review_items, key=lambda r: -r[3])
+        )
+        or '<tr><td colspan="5">No runs exceed the 150 m pull threshold — no review items.</td></tr>'
+    )
 
-    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    generated = datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')
     content = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>LLD Permit Summary — {_e(project_name)}</title>
 <style>body{{font-family:Arial,sans-serif;color:#111827;margin:28px}}h1{{font-size:22px}}h2{{font-size:17px;margin-bottom:6px}}.notice{{padding:12px;background:#ecfdf5;border:2px solid #10b981;border-radius:7px}}.street{{page-break-inside:avoid;margin-top:28px}}table{{border-collapse:collapse;width:100%;font-size:11px}}th,td{{border:1px solid #d1d5db;padding:5px;text-align:left}}th{{background:#f3f4f6}}.small{{font-size:11px;color:#6b7280}}tr.review td{{background:#fef2f2;color:#991b1b;font-weight:600}}</style></head><body>
@@ -394,9 +454,9 @@ Features marked <code>lld_purged</code> by the field survey (old rerouted-away c
 <p class="small">Reroute handling: where the survey approved a diverted path, the old corridor is excluded (see <code>lld_purged</code>) and only the approved route is carried into the permit.</p>
 </body></html>"""
     return {
-        "name": "LLD street-wise permit summary",
-        "kind": "REPORT",
-        "filename": "lld/lld_street_permit_summary.html",
-        "content": content,
-        "description": "Final LLD permit summary — per-section trench type, length, dimensions, street imagery and traffic management",
+        'name': 'LLD street-wise permit summary',
+        'kind': 'REPORT',
+        'filename': 'lld/lld_street_permit_summary.html',
+        'content': content,
+        'description': 'Final LLD permit summary — per-section trench type, length, dimensions, street imagery and traffic management',
     }

@@ -1,0 +1,55 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.5
+    hooks:
+      - id: ruff
+        name: Ruff (lint)
+        args: [--fix, --exit-non-zero-on-fix]
+        types: [python]
+      - id: ruff-format
+        name: Ruff (format)
+        args: [--check]
+        types: [python]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        name: Mypy (type check)
+        args: [--config-file, pyproject.toml]
+        additional_dependencies:
+          - types-requests==2.32.0.20241016
+          - django-stubs==5.0.0
+          - djangorestframework-stubs==3.15.0
+        types: [python]
+        pass_filenames: false
+        verbose: true
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+        types: [python, yaml, toml, json, markdown, html, css, js]
+      - id: end-of-file-fixer
+        name: Ensure files end with newline
+        types: [python, yaml, toml, json, markdown, html, css, js]
+      - id: check-yaml
+        name: Check YAML syntax
+        types: [yaml]
+      - id: check-toml
+        name: Check TOML syntax
+        types: [toml]
+      - id: check-json
+        name: Check JSON syntax
+        types: [json]
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+        types: [python, yaml, toml, json, markdown, html, css, js]
+      - id: debug-logger
+        name: Check for debug loggers
+        types: [python]
+      - id: no-commit-to-branch
+        name: Prevent direct commits to main
+        args: [--branch, main, --branch, master]
+        types: [python, yaml, toml, json, markdown, html, css, js]

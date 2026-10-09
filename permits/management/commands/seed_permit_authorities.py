@@ -12,89 +12,88 @@ from permits.models import PermitAuthority
 
 SEED = [
     {
-        "code": "DE-MUNI-BERLIN",
-        "name": "Bezirksamt / Gemeinde Berlin",
-        "authority_type": PermitAuthority.TYPE_MUNICIPALITY,
-        "country": "DE",
-        "region": "BE",
+        'code': 'DE-MUNI-BERLIN',
+        'name': 'Bezirksamt / Gemeinde Berlin',
+        'authority_type': PermitAuthority.TYPE_MUNICIPALITY,
+        'country': 'DE',
+        'region': 'BE',
     },
     {
-        "code": "DE-ROAD-BUND",
-        "name": "Autobahn GmbH des Bundes / Bundesstraßenverwaltung (Bund)",
-        "authority_type": PermitAuthority.TYPE_ROAD,
-        "country": "DE",
-        "region": "",
+        'code': 'DE-ROAD-BUND',
+        'name': 'Autobahn GmbH des Bundes / Bundesstraßenverwaltung (Bund)',
+        'authority_type': PermitAuthority.TYPE_ROAD,
+        'country': 'DE',
+        'region': '',
     },
     {
-        "code": "DE-ROAD-LAND-BE",
-        "name": "Land Berlin — SenMVKU (Landesstraßen)",
-        "authority_type": PermitAuthority.TYPE_ROAD,
-        "country": "DE",
-        "region": "BE",
+        'code': 'DE-ROAD-LAND-BE',
+        'name': 'Land Berlin — SenMVKU (Landesstraßen)',
+        'authority_type': PermitAuthority.TYPE_ROAD,
+        'country': 'DE',
+        'region': 'BE',
     },
     {
-        "code": "DE-ROAD-BEZIRK-BE",
-        "name": "Bezirksamt Berlin (Gemeindestraßen / Geh- und Radwege)",
-        "authority_type": PermitAuthority.TYPE_ROAD,
-        "country": "DE",
-        "region": "BE",
+        'code': 'DE-ROAD-BEZIRK-BE',
+        'name': 'Bezirksamt Berlin (Gemeindestraßen / Geh- und Radwege)',
+        'authority_type': PermitAuthority.TYPE_ROAD,
+        'country': 'DE',
+        'region': 'BE',
     },
     {
-        "code": "DE-ROAD-PRIVATE",
-        "name": "Private road owner (Privatstraße / Wirtschaftsweg)",
-        "authority_type": PermitAuthority.TYPE_PRIVATE,
-        "country": "DE",
-        "region": "",
+        'code': 'DE-ROAD-PRIVATE',
+        'name': 'Private road owner (Privatstraße / Wirtschaftsweg)',
+        'authority_type': PermitAuthority.TYPE_PRIVATE,
+        'country': 'DE',
+        'region': '',
     },
     {
-        "code": "DE-ROAD-UNKNOWN",
-        "name": "Road authority (to be resolved from road class)",
-        "authority_type": PermitAuthority.TYPE_ROAD,
-        "country": "DE",
-        "region": "",
+        'code': 'DE-ROAD-UNKNOWN',
+        'name': 'Road authority (to be resolved from road class)',
+        'authority_type': PermitAuthority.TYPE_ROAD,
+        'country': 'DE',
+        'region': '',
     },
     {
-        "code": "DE-RAIL-DB",
-        "name": "Deutsche Bahn / regional rail operator",
-        "authority_type": PermitAuthority.TYPE_RAIL,
-        "country": "DE",
-        "region": "",
+        'code': 'DE-RAIL-DB',
+        'name': 'Deutsche Bahn / regional rail operator',
+        'authority_type': PermitAuthority.TYPE_RAIL,
+        'country': 'DE',
+        'region': '',
     },
     {
-        "code": "DE-WATER-BERLIN",
-        "name": "Berliner Wasserbehörde / water authority",
-        "authority_type": PermitAuthority.TYPE_WATER,
-        "country": "DE",
-        "region": "BE",
+        'code': 'DE-WATER-BERLIN',
+        'name': 'Berliner Wasserbehörde / water authority',
+        'authority_type': PermitAuthority.TYPE_WATER,
+        'country': 'DE',
+        'region': 'BE',
     },
     {
-        "code": "DE-ENV-BERLIN",
-        "name": "Umweltbehörde Berlin (environmental agency)",
-        "authority_type": PermitAuthority.TYPE_ENVIRONMENTAL,
-        "country": "DE",
-        "region": "BE",
+        'code': 'DE-ENV-BERLIN',
+        'name': 'Umweltbehörde Berlin (environmental agency)',
+        'authority_type': PermitAuthority.TYPE_ENVIRONMENTAL,
+        'country': 'DE',
+        'region': 'BE',
     },
     {
-        "code": "DE-TKG-ROW",
-        "name": "Telecom right-of-way (TKG Wegerecht)",
-        "authority_type": PermitAuthority.TYPE_TELECOM,
-        "country": "DE",
-        "region": "",
+        'code': 'DE-TKG-ROW',
+        'name': 'Telecom right-of-way (TKG Wegerecht)',
+        'authority_type': PermitAuthority.TYPE_TELECOM,
+        'country': 'DE',
+        'region': '',
     },
 ]
 
 
 class Command(BaseCommand):
-    help = "Seed the German/Berlin permit authority registry (idempotent)."
+    help = 'Seed the German/Berlin permit authority registry (idempotent).'
 
     def handle(self, *args, **options):
         created = 0
         for item in SEED:
-            _, was_created = PermitAuthority.objects.get_or_create(
-                code=item["code"], defaults=item
-            )
+            _, was_created = PermitAuthority.objects.get_or_create(code=item['code'], defaults=item)
             created += int(was_created)
         self.stdout.write(
-            self.style.SUCCESS(f"Permit authorities: {created} created, "
-                               f"{len(SEED) - created} already present.")
+            self.style.SUCCESS(
+                f'Permit authorities: {created} created, ' f'{len(SEED) - created} already present.'
+            )
         )

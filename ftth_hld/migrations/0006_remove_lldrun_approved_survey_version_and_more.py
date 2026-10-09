@@ -9,7 +9,6 @@ from django.db import migrations
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('ftth_hld', '0005_lldrun_progress_lldrun_validation_lldlayer'),
     ]

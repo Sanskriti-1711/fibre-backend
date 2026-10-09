@@ -25,16 +25,26 @@ class PermitSyncStatusView(APIView):
     def get(self, request):
         adapters = []
         for name, adapter in ADAPTERS.items():
-            adapters.append({"name": name, "description": adapter.description, "enabled": adapter.is_enabled()})
+            adapters.append(
+                {'name': name, 'description': adapter.description, 'enabled': adapter.is_enabled()}
+            )
         enabled = [a.name for a in enabled_adapters()]
-        non_terminal = PermitSubmission.objects.filter(status__in=(PermitSubmission.STATUS_SUBMITTED, PermitSubmission.STATUS_UNDER_REVIEW, PermitSubmission.STATUS_REJECTED)).count()
-        return JsonResponse({
-            "now": timezone.now().isoformat(),
-            "adapters": adapters,
-            "enabled": enabled,
-            "non_terminal_submissions": non_terminal,
-            "hint": "POST /api/ftth/permits/sync/poll/ to run one poll cycle; POST /api/ftth/permits/submissions/sync/ for inbound webhook (or POST .../submissions/sync/csv/ with a CSV body).",
-        })
+        non_terminal = PermitSubmission.objects.filter(
+            status__in=(
+                PermitSubmission.STATUS_SUBMITTED,
+                PermitSubmission.STATUS_UNDER_REVIEW,
+                PermitSubmission.STATUS_REJECTED,
+            )
+        ).count()
+        return JsonResponse(
+            {
+                'now': timezone.now().isoformat(),
+                'adapters': adapters,
+                'enabled': enabled,
+                'non_terminal_submissions': non_terminal,
+                'hint': 'POST /api/ftth/permits/sync/poll/ to run one poll cycle; POST /api/ftth/permits/submissions/sync/ for inbound webhook (or POST .../submissions/sync/csv/ with a CSV body).',
+            }
+        )
 
 
 class PermitSyncPollView(APIView):
@@ -44,18 +54,28 @@ class PermitSyncPollView(APIView):
         data = request.data or {}
         # Also accept query params for convenience (dry_run via ?dry_run=1)
         q = request.GET
-        project_id = (data.get("project_id") or q.get("project_id") or "").strip() or None
-        dry_run = str(data.get("dry_run") or q.get("dry_run") or "").strip().lower() in ("1", "true", "yes")
-        adapter_param = (data.get("adapter") or data.get("adapters") or q.get("adapter") or "").strip()
-        adapter_names = [s.strip() for s in adapter_param.split(",") if s.strip()] if adapter_param else None
-        limit_raw = (data.get("limit") or q.get("limit") or "").strip()
+        project_id = (data.get('project_id') or q.get('project_id') or '').strip() or None
+        dry_run = str(data.get('dry_run') or q.get('dry_run') or '').strip().lower() in (
+            '1',
+            'true',
+            'yes',
+        )
+        adapter_param = (
+            data.get('adapter') or data.get('adapters') or q.get('adapter') or ''
+        ).strip()
+        adapter_names = (
+            [s.strip() for s in adapter_param.split(',') if s.strip()] if adapter_param else None
+        )
+        limit_raw = (data.get('limit') or q.get('limit') or '').strip()
         try:
             limit = int(limit_raw) if limit_raw else None
         except ValueError:
-            return JsonResponse({"detail": "limit must be an integer."}, status=400)
+            return JsonResponse({'detail': 'limit must be an integer.'}, status=400)
         if limit is not None:
             limit = max(1, min(limit, 5000))
-        result = poll_all(project_id=project_id, adapter_names=adapter_names, dry_run=dry_run, limit=limit)
+        result = poll_all(
+            project_id=project_id, adapter_names=adapter_names, dry_run=dry_run, limit=limit
+        )
         return JsonResponse(result)
 
 
@@ -71,28 +91,30 @@ class PermitSubmissionSyncView(APIView):
 
     def post(self, request, submission_id: str | None = None):
         data = request.data or {}
-        sid = (submission_id or data.get("submission_id") or data.get("id") or "").strip()
-        to_status = (data.get("status") or "").strip().lower()
+        sid = (submission_id or data.get('submission_id') or data.get('id') or '').strip()
+        to_status = (data.get('status') or '').strip().lower()
         if not sid:
-            return JsonResponse({"detail": "submission_id is required."}, status=400)
+            return JsonResponse({'detail': 'submission_id is required.'}, status=400)
         if not to_status:
-            return JsonResponse({"detail": "status is required."}, status=400)
+            return JsonResponse({'detail': 'status is required.'}, status=400)
         sub = PermitSubmission.objects.filter(pk=sid).first()
         if sub is None:
-            return JsonResponse({"detail": "Submission not found."}, status=404)
-        sync_source = (data.get("sync_source") or data.get("source") or "portal").strip().lower() or "portal"
+            return JsonResponse({'detail': 'Submission not found.'}, status=404)
+        sync_source = (
+            data.get('sync_source') or data.get('source') or 'portal'
+        ).strip().lower() or 'portal'
         try:
             ingest_inbound(
                 sub,
                 to_status,
-                reference=data.get("reference"),
-                notes=data.get("notes") or data.get("reason"),
-                conditions=data.get("conditions"),
-                expiry_date=data.get("expiry_date") or data.get("expiry"),
+                reference=data.get('reference'),
+                notes=data.get('notes') or data.get('reason'),
+                conditions=data.get('conditions'),
+                expiry_date=data.get('expiry_date') or data.get('expiry'),
                 sync_source=sync_source,
             )
         except ValueError as exc:
-            return JsonResponse({"detail": str(exc)}, status=400)
+            return JsonResponse({'detail': str(exc)}, status=400)
         sub.refresh_from_db()
         from .views import _serialize_submission
 
@@ -107,27 +129,34 @@ class PermitSubmissionCsvSyncView(APIView):
     def post(self, request):
         # Accept raw CSV body (content-type text/csv) or JSON {csv: "..."}
         data = request.data or {}
-        text = ""
-        if isinstance(data, dict) and isinstance(data.get("csv"), str):
-            text = data["csv"]
+        text = ''
+        if isinstance(data, dict) and isinstance(data.get('csv'), str):
+            text = data['csv']
         elif isinstance(data, str):
             text = data
         else:
             # Try raw body
             try:
-                text = request.body.decode("utf-8") if request.body else ""
+                text = request.body.decode('utf-8') if request.body else ''
                 # If it's JSON with csv field, use that
-                if text.strip().startswith("{"):
+                if text.strip().startswith('{'):
                     import json as _json
 
                     parsed = _json.loads(text)
-                    if isinstance(parsed.get("csv"), str):
-                        text = parsed["csv"]
+                    if isinstance(parsed.get('csv'), str):
+                        text = parsed['csv']
             except Exception:
-                text = ""
+                text = ''
         if not text.strip():
-            return JsonResponse({"detail": "CSV body is required. Send text/csv or JSON {csv: \"...\"} with columns submission_id,status,reference,notes,conditions,expiry_date."}, status=400)
-        sync_source = (request.GET.get("sync_source") or data.get("sync_source") or "portal").strip().lower() or "portal"
+            return JsonResponse(
+                {
+                    'detail': 'CSV body is required. Send text/csv or JSON {csv: "..."} with columns submission_id,status,reference,notes,conditions,expiry_date.'
+                },
+                status=400,
+            )
+        sync_source = (
+            request.GET.get('sync_source') or data.get('sync_source') or 'portal'
+        ).strip().lower() or 'portal'
         result = ingest_csv(text, sync_source=sync_source)
-        status = 207 if result["errors"] else 200
+        status = 207 if result['errors'] else 200
         return JsonResponse(result, status=status)

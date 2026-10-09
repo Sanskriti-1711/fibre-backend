@@ -1,25 +1,22 @@
 import os
+
 import requests
-
-from rest_framework.views import APIView
-from django.db.models import Q
-from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from django.db import connection
-
-from projects.models.project import Project
-from projects.models.import_session import ImportSession
 from ftth_hld.assign import accept_survey_project
 from ftth_hld.pipeline import ftth_project_payloads
+from projects.models.import_session import ImportSession
+from projects.models.project import Project
+
 from .serializers import ProjectSerializer
 
-
-MICROSERVICE_BASE_URL = "https://fiber-import.zeabur.app"
+MICROSERVICE_BASE_URL = 'https://fiber-import.zeabur.app'
 
 # Survey statuses that mark the transition from field survey into the LLD
 # (review + detailed design) stage.
-LLD_STATUSES = {"submitted", "under_review", "reviewed", "accepted", "completed"}
+LLD_STATUSES = {'submitted', 'under_review', 'reviewed', 'accepted', 'completed'}
 
 
 class ProjectListCreateAPIView(APIView):
@@ -29,24 +26,29 @@ class ProjectListCreateAPIView(APIView):
     """
 
     def get(self, request):
-        qs = Project.objects.all().order_by("-created_at")
+        qs = Project.objects.all().order_by('-created_at')
 
         # Engineers only see projects assigned to them (project-scope jobs)
         # plus projects they created — "My Projects". Admins see everything.
-        role = getattr(request.user, "role", None)
-        if role == "ENGINEER":
+        role = getattr(request.user, 'role', None)
+        if role == 'ENGINEER':
             from assignments.models import AssignmentJob
+
             # Project-, layer- and feature-scope jobs all mean "this engineer
             # works on that project" — include every scope so My Projects
             # never hides a project the engineer is actually assigned to.
-            assigned_ids = AssignmentJob.objects.filter(
-                assignee=request.user,
-            ).exclude(project__isnull=True).values_list("project_id", flat=True)
+            assigned_ids = (
+                AssignmentJob.objects.filter(
+                    assignee=request.user,
+                )
+                .exclude(project__isnull=True)
+                .values_list('project_id', flat=True)
+            )
             qs = qs.filter(id__in=list(assigned_ids))
 
         # Filters
-        status_filter = request.GET.get("status")
-        region_filter = request.GET.get("region")
+        status_filter = request.GET.get('status')
+        region_filter = request.GET.get('region')
 
         if status_filter:
             qs = qs.filter(status=status_filter)
@@ -58,8 +60,8 @@ class ProjectListCreateAPIView(APIView):
         # return. Survey-only by default so downstream consumers (job dropdowns,
         # approval queues) never see HLD run ids; the projects page opts into
         # 'all' for the unified view.
-        kind = request.GET.get("kind", "survey").lower()
-        stage = request.GET.get("stage", "").lower()
+        kind = request.GET.get('kind', 'survey').lower()
+        stage = request.GET.get('stage', '').lower()
 
         survey = ProjectSerializer(qs, many=True).data
 
@@ -68,70 +70,69 @@ class ProjectListCreateAPIView(APIView):
         # ftth_project_payloads() so the UI can show "Assigned To" on both.
         # Also stamp each row with its stage: 'survey' while in the field,
         # 'lld' once the engineer submits for review.
-        if survey and kind in ("survey", "all"):
+        if survey and kind in ('survey', 'all'):
             from assignments.models import AssignmentJob
+
             jobs = AssignmentJob.objects.filter(
-                project_id__in=[item["id"] for item in survey],
+                project_id__in=[item['id'] for item in survey],
                 scope=AssignmentJob.SCOPE_PROJECT,
                 assignee__isnull=False,
-            ).select_related("assignee")
+            ).select_related('assignee')
             by_project = {}
             for job in jobs:
                 by_project.setdefault(str(job.project_id), []).append(job)
             for item in survey:
-                item["type"] = "survey"
-                item["kind"] = "survey"
-                item["stage"] = (
-                    "lld" if (item.get("status") or "") in LLD_STATUSES else "survey"
-                )
+                item['type'] = 'survey'
+                item['kind'] = 'survey'
+                item['stage'] = 'lld' if (item.get('status') or '') in LLD_STATUSES else 'survey'
                 engs = []
-                for job in by_project.get(str(item["id"]), []):
-                    engs.append({
-                        "id": str(job.assignee.id),
-                        "email": job.assignee.email,
-                        "full_name": job.assignee.full_name,
-                    })
-                item["assigned_engineer"] = engs[0] if engs else None
-                item["assigned_engineers"] = engs
+                for job in by_project.get(str(item['id']), []):
+                    engs.append(
+                        {
+                            'id': str(job.assignee.id),
+                            'email': job.assignee.email,
+                            'full_name': job.assignee.full_name,
+                        }
+                    )
+                item['assigned_engineer'] = engs[0] if engs else None
+                item['assigned_engineers'] = engs
 
         # Optional stage filter (additive — only affects survey copies, never
         # HLD rows, and defaults to no filtering so downstream consumers that
         # don't pass `stage` keep the full survey list).
-        if stage in ("survey", "lld") and survey:
-            survey = [s for s in survey if s.get("stage") == stage]
+        if stage in ('survey', 'lld') and survey:
+            survey = [s for s in survey if s.get('stage') == stage]
 
         hld = []
-        if kind in ("hld", "all"):
+        if kind in ('hld', 'all'):
             # HLD pipeline runs (FtthProject). Runs have no region, so a region
             # filter excludes them; a status filter matches their own statuses
             # (queued / running / completed / failed).
             hld = ftth_project_payloads(limit=100)
             if status_filter:
-                hld = [h for h in hld if h.get("status") == status_filter]
+                hld = [h for h in hld if h.get('status') == status_filter]
             if region_filter:
                 hld = []
             for item in hld:
-                item["type"] = "hld"
-                item["kind"] = "hld"
-                item["stage"] = "hld"
+                item['type'] = 'hld'
+                item['kind'] = 'hld'
+                item['stage'] = 'hld'
 
-        if kind == "hld":
+        if kind == 'hld':
             return Response(hld)
 
         merged = survey + hld
-        merged.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+        merged.sort(key=lambda x: x.get('created_at') or '', reverse=True)
         return Response(merged)
 
     def post(self, request):
         serializer = ProjectSerializer(data=request.data)
         if serializer.is_valid():
             project = serializer.save()
-            return Response(
-                ProjectSerializer(project).data,
-                status=status.HTTP_201_CREATED
-            )
+            return Response(ProjectSerializer(project).data, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 class ProjectDetailAPIView(APIView):
     """
@@ -142,10 +143,7 @@ class ProjectDetailAPIView(APIView):
         try:
             project = Project.objects.get(id=project_id)
         except Project.DoesNotExist:
-            return Response(
-                {"detail": "Project not found"},
-                status=status.HTTP_404_NOT_FOUND
-            )
+            return Response({'detail': 'Project not found'}, status=status.HTTP_404_NOT_FOUND)
 
         serializer = ProjectSerializer(project)
         return Response(serializer.data)
@@ -154,20 +152,17 @@ class ProjectDetailAPIView(APIView):
         try:
             project = Project.objects.get(id=project_id)
         except Project.DoesNotExist:
-            return Response(
-                {"detail": "Project not found"},
-                status=status.HTTP_404_NOT_FOUND
-            )
+            return Response({'detail': 'Project not found'}, status=status.HTTP_404_NOT_FOUND)
 
         # Delete microservice layers first
-        microservice_url = f"{MICROSERVICE_BASE_URL}/geo/projects/{project_id}/layers"
+        microservice_url = f'{MICROSERVICE_BASE_URL}/geo/projects/{project_id}/layers'
         try:
             response = requests.delete(microservice_url, timeout=60)
             if response.status_code not in (200, 202, 204, 404):
                 response.raise_for_status()
         except requests.RequestException as exc:
             return Response(
-                {"detail": f"Failed to delete project layers in microservice: {exc}"},
+                {'detail': f'Failed to delete project layers in microservice: {exc}'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
@@ -179,7 +174,7 @@ class ProjectDetailAPIView(APIView):
                     file_path = session.stored_file_path
                     if os.path.exists(file_path):
                         os.remove(file_path)
-                except (OSError, IOError):
+                except OSError:
                     pass  # Continue even if file deletion fails
 
         # All related models (Features, AssignmentJobs, ImportSessions) have
@@ -187,8 +182,10 @@ class ProjectDetailAPIView(APIView):
         project.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-from django.utils.timezone import now
+
 from datetime import timedelta
+
+from django.utils.timezone import now
 
 
 class LatestProjectUpdatesAPIView(APIView):
@@ -200,9 +197,8 @@ class LatestProjectUpdatesAPIView(APIView):
         since = now() - timedelta(days=7)
 
         qs = Project.objects.filter(
-            last_activity_at__isnull=False,
-            last_activity_at__gte=since
-        ).order_by("-last_activity_at")[:10]
+            last_activity_at__isnull=False, last_activity_at__gte=since
+        ).order_by('-last_activity_at')[:10]
 
         serializer = ProjectSerializer(qs, many=True)
         return Response(serializer.data)
@@ -220,20 +216,15 @@ class ProjectAcceptAPIView(APIView):
         try:
             result = accept_survey_project(str(project_id), request.user)
         except ValueError as exc:
-            return Response(
-                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except PermissionError as exc:
-            return Response(
-                {"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN
-            )
+            return Response({'detail': str(exc)}, status=status.HTTP_403_FORBIDDEN)
         except Exception as exc:
             return Response(
-                {"detail": f"Accept failed: {exc}"},
+                {'detail': f'Accept failed: {exc}'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         return Response(result)
-
 
 
 class ProjectSubmitAPIView(APIView):
@@ -250,16 +241,12 @@ class ProjectSubmitAPIView(APIView):
         try:
             result = submit_survey_project(str(project_id), request.user)
         except ValueError as exc:
-            return Response(
-                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except PermissionError as exc:
-            return Response(
-                {"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN
-            )
+            return Response({'detail': str(exc)}, status=status.HTTP_403_FORBIDDEN)
         except Exception as exc:
             return Response(
-                {"detail": f"Submit failed: {exc}"},
+                {'detail': f'Submit failed: {exc}'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         return Response(result)
@@ -283,20 +270,16 @@ class ProjectReviewAPIView(APIView):
     def post(self, request, project_id):
         from ftth_hld.assign import review_survey_project
 
-        action = (request.data or {}).get("action", "")
+        action = (request.data or {}).get('action', '')
         try:
             result = review_survey_project(str(project_id), request.user, action)
         except ValueError as exc:
-            return Response(
-                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except PermissionError as exc:
-            return Response(
-                {"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN
-            )
+            return Response({'detail': str(exc)}, status=status.HTTP_403_FORBIDDEN)
         except Exception as exc:
             return Response(
-                {"detail": f"Review failed: {exc}"},
+                {'detail': f'Review failed: {exc}'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         return Response(result)

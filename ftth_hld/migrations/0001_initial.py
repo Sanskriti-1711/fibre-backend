@@ -6,7 +6,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
@@ -17,9 +16,26 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='FtthProject',
             fields=[
-                ('project_id', models.CharField(editable=False, max_length=64, primary_key=True, serialize=False)),
+                (
+                    'project_id',
+                    models.CharField(
+                        editable=False, max_length=64, primary_key=True, serialize=False
+                    ),
+                ),
                 ('name', models.CharField(blank=True, default='', max_length=255)),
-                ('status', models.CharField(choices=[('queued', 'Queued'), ('running', 'Running'), ('completed', 'Completed'), ('failed', 'Failed')], default='queued', max_length=20)),
+                (
+                    'status',
+                    models.CharField(
+                        choices=[
+                            ('queued', 'Queued'),
+                            ('running', 'Running'),
+                            ('completed', 'Completed'),
+                            ('failed', 'Failed'),
+                        ],
+                        default='queued',
+                        max_length=20,
+                    ),
+                ),
                 ('stage_name', models.CharField(blank=True, default='', max_length=255)),
                 ('stage_index', models.IntegerField(default=0)),
                 ('stage_count', models.IntegerField(default=6)),
@@ -31,7 +47,15 @@ class Migration(migrations.Migration):
                 ('updated_at', models.DateTimeField(auto_now=True)),
                 ('started_at', models.DateTimeField(blank=True, null=True)),
                 ('completed_at', models.DateTimeField(blank=True, null=True)),
-                ('created_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
+                (
+                    'created_by',
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
                 'db_table': 'ftth_projects',

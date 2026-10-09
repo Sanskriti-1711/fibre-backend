@@ -27,16 +27,16 @@ class LlmConfig:
 
 
 def get_llm_config() -> LlmConfig | None:
-    url = (os.getenv("PERMITS_LLM_URL") or "").strip()
-    key = (os.getenv("PERMITS_LLM_API_KEY") or "").strip()
+    url = (os.getenv('PERMITS_LLM_URL') or '').strip()
+    key = (os.getenv('PERMITS_LLM_API_KEY') or '').strip()
     if not url or not key:
         return None
-    model = (os.getenv("PERMITS_LLM_MODEL") or "gpt-4o-mini").strip() or "gpt-4o-mini"
+    model = (os.getenv('PERMITS_LLM_MODEL') or 'gpt-4o-mini').strip() or 'gpt-4o-mini'
     return LlmConfig(url=url, api_key=key, model=model)
 
 
 def _strip(s: str) -> str:
-    return (s or "").strip()
+    return (s or '').strip()
 
 
 def chat_completion(
@@ -58,17 +58,17 @@ def chat_completion(
     import requests  # already in requirements
 
     payload = {
-        "model": cfg.model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
+        'model': cfg.model,
+        'messages': [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': user},
         ],
-        "temperature": temperature,
-        "max_tokens": max_tokens,
+        'temperature': temperature,
+        'max_tokens': max_tokens,
     }
     headers = {
-        "Authorization": f"Bearer {cfg.api_key}",
-        "Content-Type": "application/json",
+        'Authorization': f'Bearer {cfg.api_key}',
+        'Content-Type': 'application/json',
     }
     try:
         resp = requests.post(cfg.url, headers=headers, data=json.dumps(payload), timeout=timeout_s)
@@ -78,11 +78,11 @@ def chat_completion(
         return None
     try:
         data = resp.json()
-        choices = data.get("choices") or []
+        choices = data.get('choices') or []
         if not choices:
             return None
-        msg = choices[0].get("message") or {}
-        text = _strip(msg.get("content") or "")
+        msg = choices[0].get('message') or {}
+        text = _strip(msg.get('content') or '')
         return text or None
     except Exception:
         return None
@@ -90,5 +90,5 @@ def chat_completion(
 
 AI_DISCLAIMER = (
     "AI-generated draft — verify against the authority's current requirements "
-    "before submitting. The permit decision remains deterministic (rule + evidence)."
+    'before submitting. The permit decision remains deterministic (rule + evidence).'
 )

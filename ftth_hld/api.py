@@ -18,58 +18,55 @@ All endpoints require JWT authentication.
 """
 
 import json
-import uuid
 import logging
+import uuid
 from pathlib import Path
 
-from django.http import JsonResponse, HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
-
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from .assign import accept_survey_project, assign_hld_project
+from .assign import assign_hld_project
 from .boq import (
-    compute_quantities,
     generate_snapshot,
     render_boq_xlsx,
-    totals_for,
 )
 from .config import LAYER_NAME_MAP, STAGES
-from .models import FtthProject, FtthLayer
+from .models import FtthLayer, FtthProject
+
 logger = logging.getLogger(__name__)
 
 from .pipeline import (
     HOST_OUTPUTS_DIR,
     EngineError,
     classify_surface_at_point,
-    get_surface_ai_review,
     delete_project,
-    get_area_fetch,
-    get_input_layer,
-    list_countries,
-    osm_status,
-    resolve_area,
-    run_from_area,
-    suggest_places,
+    ftth_project_payloads,
     generate_design_package,
     generate_survey_package,
+    get_area_fetch,
     get_download_file,
+    get_input_layer,
     get_layer_geojson,
-    get_surface_ai_review,
-    preview_surface_imagery,
-    ftth_project_payloads,
     get_status,
+    get_surface_ai_review,
+    list_countries,
+    osm_status,
     persist_layer,
+    preview_surface_imagery,
+    resolve_area,
+    run_from_area,
     run_pipeline,
+    suggest_places,
     sync_project_layers,
 )
-
 
 # ======================================================================
 # POST /api/ftth/hld/run/
 # ======================================================================
+
 
 class RunPipelineView(APIView):
     """
@@ -81,62 +78,62 @@ class RunPipelineView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        excel = request.FILES.get("excel")
-        roads = request.FILES.get("roads")
-        brownfield = request.FILES.get("brownfield")
-        name = request.POST.get("name", "")
-        poly_method = int(request.POST.get("poly_method", 3))
+        excel = request.FILES.get('excel')
+        roads = request.FILES.get('roads')
+        brownfield = request.FILES.get('brownfield')
+        name = request.POST.get('name', '')
+        poly_method = int(request.POST.get('poly_method', 3))
 
         # Optional OSM reference layers (stored with the project; the design
         # algorithm does not consume them yet — they will feed routing
         # constraints / permits in a later phase).
         osm_layers = {
             key: request.FILES.get(key)
-            for key in ("railways", "waterways", "water", "landuse", "natural")
+            for key in ('railways', 'waterways', 'water', 'landuse', 'natural')
         }
 
         if not excel or not roads:
             return JsonResponse(
-                {"detail": "Both 'excel' and 'roads' files are required."},
+                {'detail': "Both 'excel' and 'roads' files are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        excel_ext = excel.name.split(".")[-1].lower() if excel.name else ""
-        roads_ext = roads.name.split(".")[-1].lower() if roads.name else ""
-        allowed_excel = {"xlsx", "xls"}
-        allowed_roads = {"gpkg", "geojson", "json", "shp", "zip"}
+        excel_ext = excel.name.split('.')[-1].lower() if excel.name else ''
+        roads_ext = roads.name.split('.')[-1].lower() if roads.name else ''
+        allowed_excel = {'xlsx', 'xls'}
+        allowed_roads = {'gpkg', 'geojson', 'json', 'shp', 'zip'}
 
         if excel_ext not in allowed_excel:
             return JsonResponse(
-                {"detail": f"Excel must be one of: {', '.join(allowed_excel)}"},
+                {'detail': f"Excel must be one of: {', '.join(allowed_excel)}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if roads_ext not in allowed_roads:
             return JsonResponse(
-                {"detail": f"Roads must be one of: {', '.join(allowed_roads)}"},
+                {'detail': f"Roads must be one of: {', '.join(allowed_roads)}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         project_id = uuid.uuid4().hex
 
-        host_input_dir = HOST_OUTPUTS_DIR / project_id / "inputs"
+        host_input_dir = HOST_OUTPUTS_DIR / project_id / 'inputs'
         host_input_dir.mkdir(parents=True, exist_ok=True)
 
-        excel_path = host_input_dir / (excel.name or "addresses.xlsx")
-        roads_path = host_input_dir / (roads.name or "roads.gpkg")
+        excel_path = host_input_dir / (excel.name or 'addresses.xlsx')
+        roads_path = host_input_dir / (roads.name or 'roads.gpkg')
 
-        with open(excel_path, "wb") as f:
+        with open(excel_path, 'wb') as f:
             for chunk in excel.chunks():
                 f.write(chunk)
-        with open(roads_path, "wb") as f:
+        with open(roads_path, 'wb') as f:
             for chunk in roads.chunks():
                 f.write(chunk)
 
         # Optional brownfield (existing infrastructure) ZIP / vector file
         brownfield_path = None
         if brownfield:
-            brownfield_path = host_input_dir / (brownfield.name or "brownfield.zip")
-            with open(brownfield_path, "wb") as f:
+            brownfield_path = host_input_dir / (brownfield.name or 'brownfield.zip')
+            with open(brownfield_path, 'wb') as f:
                 for chunk in brownfield.chunks():
                     f.write(chunk)
 
@@ -145,8 +142,8 @@ class RunPipelineView(APIView):
         osm_paths = {}
         for key, upload in osm_layers.items():
             if upload:
-                path = host_input_dir / (upload.name or f"{key}.zip")
-                with open(path, "wb") as f:
+                path = host_input_dir / (upload.name or f'{key}.zip')
+                with open(path, 'wb') as f:
                     for chunk in upload.chunks():
                         f.write(chunk)
                 osm_paths[key] = str(path)
@@ -172,35 +169,39 @@ class RunPipelineView(APIView):
             )
         except RuntimeError as exc:
             return JsonResponse(
-                {"detail": str(exc)},
+                {'detail': str(exc)},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        engine_status = engine_result.get("status", "queued")
+        engine_status = engine_result.get('status', 'queued')
         FtthProject.objects.filter(pk=project_id).update(
             status=engine_status,
         )
 
-        return JsonResponse({
-            "project_id": project_id,
-            "status": engine_status,
-            "stage": None,
-            "stage_index": 0,
-            "stage_count": len(STAGES),
-            "progress": 0,
-            "layers": [],
-            "downloads": [],
-            "messages": [],
-            "results_url": f"/api/ftth/hld/results/{project_id}/",
-            "tile_url_template": (
-                f"/tiles/{{layer}}/{{z}}/{{x}}/{{y}}.pbf?project_id={project_id}"
-            ),
-        }, status=status.HTTP_202_ACCEPTED)
+        return JsonResponse(
+            {
+                'project_id': project_id,
+                'status': engine_status,
+                'stage': None,
+                'stage_index': 0,
+                'stage_count': len(STAGES),
+                'progress': 0,
+                'layers': [],
+                'downloads': [],
+                'messages': [],
+                'results_url': f'/api/ftth/hld/results/{project_id}/',
+                'tile_url_template': (
+                    f'/tiles/{{layer}}/{{z}}/{{x}}/{{y}}.pbf?project_id={project_id}'
+                ),
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 # ======================================================================
 # POST /api/ftth/hld/resolve-area/  — area name -> boundary (+ counts)
 # ======================================================================
+
 
 def _area_inputs(data) -> dict:
     """Structured area fields from a request body, empties dropped.
@@ -211,8 +212,8 @@ def _area_inputs(data) -> dict:
     search string.
     """
     fields = {}
-    for key in ("country", "city", "postcode", "area_name", "area"):
-        value = str(data.get(key) or "").strip()
+    for key in ('country', 'city', 'postcode', 'area_name', 'area'):
+        value = str(data.get(key) or '').strip()
         if value:
             fields[key] = value
     return fields
@@ -220,19 +221,19 @@ def _area_inputs(data) -> dict:
 
 def _has_locator(fields: dict) -> bool:
     """A country on its own is not an area, and never was."""
-    return any(fields.get(k) for k in ("area", "city", "postcode", "area_name"))
+    return any(fields.get(k) for k in ('area', 'city', 'postcode', 'area_name'))
 
 
 # A short display label for the project row, before the engine returns the
 # canonical composed label (which the row is updated with below).
-_DISPLAY_LABEL_KEYS = ("area_name", "postcode", "city")
+_DISPLAY_LABEL_KEYS = ('area_name', 'postcode', 'city')
 
 
 def _display_label(fields: dict) -> str:
     parts = [fields[k] for k in _DISPLAY_LABEL_KEYS if fields.get(k)]
-    if fields.get("country"):
-        parts.append(str(fields["country"]).upper())
-    return ", ".join(parts) or fields.get("area", "")
+    if fields.get('country'):
+        parts.append(str(fields['country']).upper())
+    return ', '.join(parts) or fields.get('area', '')
 
 
 class ResolveAreaView(APIView):
@@ -250,27 +251,28 @@ class ResolveAreaView(APIView):
         fields = _area_inputs(request.data)
         if not _has_locator(fields):
             return JsonResponse(
-                {"detail": "Give a postcode and/or a place, street or city name."},
+                {'detail': 'Give a postcode and/or a place, street or city name.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
             payload = resolve_area(
-                fields.get("area", ""),
-                boundary_only=bool(request.data.get("boundary_only")),
-                max_premises=request.data.get("max_premises"),
-                country=fields.get("country", ""),
-                city=fields.get("city", ""),
-                postcode=fields.get("postcode", ""),
-                area_name=fields.get("area_name", ""),
+                fields.get('area', ''),
+                boundary_only=bool(request.data.get('boundary_only')),
+                max_premises=request.data.get('max_premises'),
+                country=fields.get('country', ''),
+                city=fields.get('city', ''),
+                postcode=fields.get('postcode', ''),
+                area_name=fields.get('area_name', ''),
             )
         except EngineError as exc:
-            return JsonResponse({"detail": exc.detail}, status=exc.status_code)
+            return JsonResponse({'detail': exc.detail}, status=exc.status_code)
         return JsonResponse(payload)
 
 
 # ======================================================================
 # POST /api/ftth/hld/input-layers/  — pre-run OSM/HLD input layer
 # ======================================================================
+
 
 class InputLayerView(APIView):
     """Return buildings, premises, roads and OSM reference layers before HLD."""
@@ -279,28 +281,31 @@ class InputLayerView(APIView):
 
     def post(self, request):
         fields = _area_inputs(request.data)
-        layer = str(request.data.get("layer") or "").strip()
+        layer = str(request.data.get('layer') or '').strip()
         if not _has_locator(fields) or not layer:
             return JsonResponse(
-                {"detail": "Both 'layer' and an area (postcode and/or place) are required."},
+                {'detail': "Both 'layer' and an area (postcode and/or place) are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            return JsonResponse(get_input_layer(
-                fields.get("area", ""),
-                layer,
-                country=fields.get("country", ""),
-                city=fields.get("city", ""),
-                postcode=fields.get("postcode", ""),
-                area_name=fields.get("area_name", ""),
-            ))
+            return JsonResponse(
+                get_input_layer(
+                    fields.get('area', ''),
+                    layer,
+                    country=fields.get('country', ''),
+                    city=fields.get('city', ''),
+                    postcode=fields.get('postcode', ''),
+                    area_name=fields.get('area_name', ''),
+                )
+            )
         except EngineError as exc:
-            return JsonResponse({"detail": exc.detail}, status=exc.status_code)
+            return JsonResponse({'detail': exc.detail}, status=exc.status_code)
 
 
 # ======================================================================
 # GET /api/ftth/hld/area-fetch/  — progress of the area's OSM download
 # ======================================================================
+
 
 class AreaFetchView(APIView):
     """What the engine's OSM download for an area is doing right now.
@@ -313,11 +318,11 @@ class AreaFetchView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        area = str(request.query_params.get("area") or "").strip()
-        bbox = str(request.query_params.get("bbox") or "").strip()
+        area = str(request.query_params.get('area') or '').strip()
+        bbox = str(request.query_params.get('bbox') or '').strip()
         if not area and not bbox:
             return JsonResponse(
-                {"detail": "Give an 'area' or a 'bbox' (lon_w,lon_e,lat_s,lat_n)."},
+                {'detail': "Give an 'area' or a 'bbox' (lon_w,lon_e,lat_s,lat_n)."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return JsonResponse(get_area_fetch(area=area, bbox=bbox))
@@ -326,6 +331,7 @@ class AreaFetchView(APIView):
 # ======================================================================
 # POST /api/ftth/hld/run-from-area/  — area name -> a full HLD run
 # ======================================================================
+
 
 class RunFromAreaView(APIView):
     """Start a full HLD run from an area name — no files to prepare.
@@ -343,15 +349,15 @@ class RunFromAreaView(APIView):
         fields = _area_inputs(request.data)
         if not _has_locator(fields):
             return JsonResponse(
-                {"detail": "Give a postcode and/or a place, street or city name."},
+                {'detail': 'Give a postcode and/or a place, street or city name.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        name = str(request.data.get("name") or "")
+        name = str(request.data.get('name') or '')
         try:
-            poly_method = int(request.data.get("poly_method", 3))
+            poly_method = int(request.data.get('poly_method', 3))
         except (TypeError, ValueError):
             poly_method = 3
-        brownfield = request.FILES.get("brownfield")
+        brownfield = request.FILES.get('brownfield')
 
         project_id = uuid.uuid4().hex
         FtthProject.objects.create(
@@ -365,23 +371,23 @@ class RunFromAreaView(APIView):
         # to the project's host input dir exactly like the upload path does.
         brownfield_path = None
         if brownfield:
-            host_input_dir = HOST_OUTPUTS_DIR / project_id / "inputs"
+            host_input_dir = HOST_OUTPUTS_DIR / project_id / 'inputs'
             host_input_dir.mkdir(parents=True, exist_ok=True)
-            brownfield_path = host_input_dir / (brownfield.name or "brownfield.zip")
-            with open(brownfield_path, "wb") as f:
+            brownfield_path = host_input_dir / (brownfield.name or 'brownfield.zip')
+            with open(brownfield_path, 'wb') as f:
                 for chunk in brownfield.chunks():
                     f.write(chunk)
 
         try:
             engine_result = run_from_area(
-                fields.get("area", ""),
+                fields.get('area', ''),
                 project_id=project_id,
                 name=name,
                 poly_method=poly_method,
-                country=fields.get("country", ""),
-                city=fields.get("city", ""),
-                postcode=fields.get("postcode", ""),
-                area_name=fields.get("area_name", ""),
+                country=fields.get('country', ''),
+                city=fields.get('city', ''),
+                postcode=fields.get('postcode', ''),
+                area_name=fields.get('area_name', ''),
                 brownfield_path=str(brownfield_path) if brownfield_path else None,
             )
         except EngineError as exc:
@@ -391,40 +397,44 @@ class RunFromAreaView(APIView):
                 status=FtthProject.STATUS_FAILED, error=str(exc.detail)[:2000]
             )
             return JsonResponse(
-                {"detail": exc.detail, "project_id": project_id},
+                {'detail': exc.detail, 'project_id': project_id},
                 status=exc.status_code,
             )
 
         # The engine composes the canonical label from the parts; when the
         # planner typed no project name, that label is what the project is called.
-        area_label = str(engine_result.get("area") or "") or _display_label(fields)
-        engine_status = engine_result.get("status", "queued")
-        updates = {"status": engine_status}
+        area_label = str(engine_result.get('area') or '') or _display_label(fields)
+        engine_status = engine_result.get('status', 'queued')
+        updates = {'status': engine_status}
         if not name:
-            updates["name"] = area_label
+            updates['name'] = area_label
         FtthProject.objects.filter(pk=project_id).update(**updates)
 
-        return JsonResponse({
-            "project_id": project_id,
-            "status": engine_status,
-            "stage": None,
-            "stage_index": 0,
-            "stage_count": len(STAGES),
-            "progress": 0,
-            "layers": [],
-            "downloads": [],
-            "messages": [],
-            "area": area_label,
-            "results_url": f"/api/ftth/hld/results/{project_id}/",
-            "tile_url_template": (
-                f"/tiles/{{layer}}/{{z}}/{{x}}/{{y}}.pbf?project_id={project_id}"
-            ),
-        }, status=status.HTTP_202_ACCEPTED)
+        return JsonResponse(
+            {
+                'project_id': project_id,
+                'status': engine_status,
+                'stage': None,
+                'stage_index': 0,
+                'stage_count': len(STAGES),
+                'progress': 0,
+                'layers': [],
+                'downloads': [],
+                'messages': [],
+                'area': area_label,
+                'results_url': f'/api/ftth/hld/results/{project_id}/',
+                'tile_url_template': (
+                    f'/tiles/{{layer}}/{{z}}/{{x}}/{{y}}.pbf?project_id={project_id}'
+                ),
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 # ======================================================================
 # GET /api/ftth/hld/osm-status/  — what the local OSM store holds
 # ======================================================================
+
 
 class OsmStatusView(APIView):
     """Report the engine's local OSM store (empty is normal, not an error)."""
@@ -439,6 +449,7 @@ class OsmStatusView(APIView):
 # GET /api/ftth/hld/countries/  — country options for the area input
 # ======================================================================
 
+
 class CountriesView(APIView):
     """Country options for the area input's country dropdown.
 
@@ -450,12 +461,13 @@ class CountriesView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return JsonResponse({"countries": list_countries()})
+        return JsonResponse({'countries': list_countries()})
 
 
 # ======================================================================
 # GET /api/ftth/hld/places/  — city suggestions for the area input
 # ======================================================================
+
 
 class PlacesView(APIView):
     """City/town suggestions for the city combobox, filtered by country.
@@ -468,10 +480,10 @@ class PlacesView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        q = str(request.query_params.get("q") or "").strip()
-        country = str(request.query_params.get("country") or "").strip()
+        q = str(request.query_params.get('q') or '').strip()
+        country = str(request.query_params.get('country') or '').strip()
         try:
-            limit = max(1, min(int(request.query_params.get("limit") or 8), 20))
+            limit = max(1, min(int(request.query_params.get('limit') or 8), 20))
         except (TypeError, ValueError):
             limit = 8
         return JsonResponse(suggest_places(q, country=country, limit=limit))
@@ -480,6 +492,7 @@ class PlacesView(APIView):
 # ======================================================================
 # GET /api/ftth/hld/results/<project_id>/
 # ======================================================================
+
 
 class PipelineStatusView(APIView):
     """Return the current status of a pipeline run, proxied from FastAPI."""
@@ -491,12 +504,12 @@ class PipelineStatusView(APIView):
             project = FtthProject.objects.get(pk=project_id)
         except FtthProject.DoesNotExist:
             return JsonResponse(
-                {"detail": "Project not found."},
+                {'detail': 'Project not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
         status_data = get_status(project_id)
-        engine_status_raw = status_data.get("status")
+        engine_status_raw = status_data.get('status')
 
         # When the engine restarts it loses its in-memory task registry,
         # so it may report "queued" or "unknown" even though the run
@@ -504,64 +517,60 @@ class PipelineStatusView(APIView):
         # that case so the frontend still sees the correct layer list.
         # Also handle the case where the DB status was never updated to
         # "completed" (engine died mid-poll) but layers exist in the DB.
-        db_has_layers = FtthLayer.objects.filter(
-            ftth_project__project_id=project_id
-        ).exists()
-        if engine_status_raw in ("unknown", "queued") and (
-            project.status == "completed" or db_has_layers
+        db_has_layers = FtthLayer.objects.filter(ftth_project__project_id=project_id).exists()
+        if engine_status_raw in ('unknown', 'queued') and (
+            project.status == 'completed' or db_has_layers
         ):
             # Mark as completed if layers exist (even if DB status was stale)
-            if db_has_layers and project.status != "completed":
-                FtthProject.objects.filter(pk=project_id).update(
-                    status="completed", progress=100
-                )
+            if db_has_layers and project.status != 'completed':
+                FtthProject.objects.filter(pk=project_id).update(status='completed', progress=100)
 
             status_data = {
-                "project_id": project_id,
-                "status": "completed",
-                "progress": 100,
-                "stage_name": "Complete",
-                "messages": [],
-                "layers": [
-                    {"name": l.name, "count": l.feature_count}
-                    for l in FtthLayer.objects.filter(
-                        ftth_project__project_id=project_id
-                    )
+                'project_id': project_id,
+                'status': 'completed',
+                'progress': 100,
+                'stage_name': 'Complete',
+                'messages': [],
+                'layers': [
+                    {'name': l.name, 'count': l.feature_count}
+                    for l in FtthLayer.objects.filter(ftth_project__project_id=project_id)
                 ],
-                "downloads": [],
-                "created_at": project.created_at.isoformat() if project.created_at else "",
-                "updated_at": project.updated_at.isoformat() if project.updated_at else "",
+                'downloads': [],
+                'created_at': project.created_at.isoformat() if project.created_at else '',
+                'updated_at': project.updated_at.isoformat() if project.updated_at else '',
             }
 
-        if status_data.get("status") == "unknown":
+        if status_data.get('status') == 'unknown':
             # A non-completed run must never advertise a finished progress
             # bar, even when the engine is unreachable and we fall back to
             # the last persisted Django row.
             fallback_status = project.status
             fallback_progress = int(project.progress or 0)
-            if fallback_status != "completed":
+            if fallback_status != 'completed':
                 fallback_progress = min(fallback_progress, 99)
-            return JsonResponse({
-                "project_id": project_id,
-                "status": fallback_status,
-                "stage": project.stage_name,
-                "stage_index": project.stage_index,
-                "stage_count": project.stage_count,
-                "progress": fallback_progress,
-                "messages": [],
-                "layers": [],
-                "downloads": [],
-                "created_at": project.created_at.isoformat(),
-                "updated_at": project.updated_at.isoformat(),
-                "results_url": f"/api/ftth/hld/results/{project_id}/",
-            })
+            return JsonResponse(
+                {
+                    'project_id': project_id,
+                    'status': fallback_status,
+                    'stage': project.stage_name,
+                    'stage_index': project.stage_index,
+                    'stage_count': project.stage_count,
+                    'progress': fallback_progress,
+                    'messages': [],
+                    'layers': [],
+                    'downloads': [],
+                    'created_at': project.created_at.isoformat(),
+                    'updated_at': project.updated_at.isoformat(),
+                    'results_url': f'/api/ftth/hld/results/{project_id}/',
+                }
+            )
 
-        engine_status = status_data.get("status")
-        is_completed = engine_status == "completed"
+        engine_status = status_data.get('status')
+        is_completed = engine_status == 'completed'
         if engine_status and (engine_status != project.status or is_completed):
             # Persist the engine progress, but never record 100% for a run
             # that has not actually completed (guards stale DB rows).
-            persisted_progress = int(status_data.get("progress", 0) or 0)
+            persisted_progress = int(status_data.get('progress', 0) or 0)
             if not is_completed:
                 persisted_progress = min(persisted_progress, 99)
             else:
@@ -569,50 +578,49 @@ class PipelineStatusView(APIView):
             FtthProject.objects.filter(pk=project_id).update(
                 status=engine_status,
                 progress=persisted_progress,
-                stage_name=status_data.get("stage_name") or "",
-                stage_index=int(status_data.get("stage_index") or 0),
-                completed_at=(
-                    timezone.now() if is_completed else project.completed_at
-                ),
-                error_message=status_data.get("error") or "",
+                stage_name=status_data.get('stage_name') or '',
+                stage_index=int(status_data.get('stage_index') or 0),
+                completed_at=(timezone.now() if is_completed else project.completed_at),
+                error_message=status_data.get('error') or '',
             )
 
         # Attach survey-assignment info so the results/status pages can show
         # who this HLD run is assigned to for the field survey, plus the
         # survey copy status (assigned / active / submitted / ...).
         try:
-            from projects.models import Project as SurveyProject
             from assignments.models import AssignmentJob
-            copy = SurveyProject.objects.filter(
-                source_ftth_project_id=project_id
-            ).first()
+            from projects.models import Project as SurveyProject
+
+            copy = SurveyProject.objects.filter(source_ftth_project_id=project_id).first()
             assigned_engineers = []
             if copy is not None:
                 for job in AssignmentJob.objects.filter(
                     project=copy, scope=AssignmentJob.SCOPE_PROJECT
-                ).select_related("assignee"):
-                    assigned_engineers.append({
-                        "id": str(job.assignee.id),
-                        "email": job.assignee.email,
-                        "full_name": job.assignee.full_name,
-                    })
-            status_data["survey"] = {
-                "copy_project_id": str(copy.id) if copy else None,
-                "copy_name": copy.name if copy else None,
-                "status": copy.status if copy else None,
-                "assigned_engineers": assigned_engineers,
+                ).select_related('assignee'):
+                    assigned_engineers.append(
+                        {
+                            'id': str(job.assignee.id),
+                            'email': job.assignee.email,
+                            'full_name': job.assignee.full_name,
+                        }
+                    )
+            status_data['survey'] = {
+                'copy_project_id': str(copy.id) if copy else None,
+                'copy_name': copy.name if copy else None,
+                'status': copy.status if copy else None,
+                'assigned_engineers': assigned_engineers,
             }
         except Exception:
-            status_data["survey"] = None
+            status_data['survey'] = None
 
         # Persist completed layers into the GIS table (idempotent, best-effort)
         # so the results map is backed by the database, not just the engine.
-        if status_data.get("status") == "completed":
+        if status_data.get('status') == 'completed':
             try:
                 layer_names = [
-                    (l.get("name") or "").lower()
-                    for l in status_data.get("layers", [])
-                    if l.get("name")
+                    (l.get('name') or '').lower()
+                    for l in status_data.get('layers', [])
+                    if l.get('name')
                 ]
                 sync_project_layers(project_id, layer_names)
             except Exception:
@@ -635,38 +643,35 @@ class PipelineStatusView(APIView):
                 from .posthld import post_hld_state, schedule_post_hld
 
                 schedule_post_hld(project_id, project.name or project_id)
-                status_data["post_process"] = post_hld_state(project_id)
+                status_data['post_process'] = post_hld_state(project_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "HLD post-process scheduling failed for %s: %s",
-                    project_id, exc,
+                    'HLD post-process scheduling failed for %s: %s',
+                    project_id,
+                    exc,
                 )
 
         # Enrich layer counts from the persisted GIS table (fast, read-only).
         try:
             persisted = {
                 row.name: row.feature_count
-                for row in FtthLayer.objects.filter(
-                    ftth_project__project_id=project_id
-                )
+                for row in FtthLayer.objects.filter(ftth_project__project_id=project_id)
             }
-            for layer in status_data.get("layers", []):
-                persisted_name = (layer.get("name") or "").lower()
+            for layer in status_data.get('layers', []):
+                persisted_name = (layer.get('name') or '').lower()
                 if persisted_name in persisted:
-                    layer["count"] = persisted[persisted_name]
+                    layer['count'] = persisted[persisted_name]
         except Exception:
             pass
 
         # Final guard: cap the progress we serve at 99% unless the run is
         # actually completed, so a buggy/stale backend can never drive the
         # UI progress bar to 100% mid-run.
-        if status_data.get("status") != "completed":
+        if status_data.get('status') != 'completed':
             try:
-                status_data["progress"] = min(
-                    int(status_data.get("progress") or 0), 99
-                )
+                status_data['progress'] = min(int(status_data.get('progress') or 0), 99)
             except (TypeError, ValueError):
-                status_data["progress"] = 0
+                status_data['progress'] = 0
 
         return JsonResponse(status_data)
 
@@ -679,6 +684,7 @@ class PipelineStatusView(APIView):
 # into gis.trench_layer with colliding fids — the unique key is the gis row
 # ``id``. This helper injects that id (+ fclass from the roads attribution)
 # into the served layer so the frontend can match permit-matrix rows.
+
 
 def _enrich_trench_layer(project_id: str, geojson: dict) -> dict:
     """Rebuild the trenches layer from the live gis.trench_layer table.
@@ -695,9 +701,9 @@ def _enrich_trench_layer(project_id: str, geojson: dict) -> dict:
 
     with connection.cursor() as cur:
         cur.execute(
-            "SELECT id, ST_AsGeoJSON(geom), properties "
-            "FROM gis.trench_layer WHERE project_id = %s AND geom IS NOT NULL "
-            "ORDER BY id",
+            'SELECT id, ST_AsGeoJSON(geom), properties '
+            'FROM gis.trench_layer WHERE project_id = %s AND geom IS NOT NULL '
+            'ORDER BY id',
             [project_id],
         )
         rows = cur.fetchall()
@@ -712,14 +718,16 @@ def _enrich_trench_layer(project_id: str, geojson: dict) -> dict:
             except (TypeError, ValueError):
                 props = {}
         props = dict(props or {})
-        props["feature_id"] = str(gid)
-        features.append({
-            "type": "Feature",
-            "id": gid,
-            "geometry": json.loads(geom_json) if geom_json else None,
-            "properties": props,
-        })
-    return {"type": "FeatureCollection", "features": features}
+        props['feature_id'] = str(gid)
+        features.append(
+            {
+                'type': 'Feature',
+                'id': gid,
+                'geometry': json.loads(geom_json) if geom_json else None,
+                'properties': props,
+            }
+        )
+    return {'type': 'FeatureCollection', 'features': features}
 
 
 class SurfaceAIReviewView(APIView):
@@ -729,16 +737,16 @@ class SurfaceAIReviewView(APIView):
 
     def get(self, request, project_id):
         try:
-            FtthProject.objects.only("pk").get(pk=project_id)
+            FtthProject.objects.only('pk').get(pk=project_id)
         except FtthProject.DoesNotExist:
             return JsonResponse(
-                {"detail": "Project not found."},
+                {'detail': 'Project not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
         report = get_surface_ai_review(project_id)
         if report is None:
             return JsonResponse(
-                {"detail": "Surface AI review is not available."},
+                {'detail': 'Surface AI review is not available.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
         return JsonResponse(report)
@@ -759,17 +767,17 @@ class SurfaceAIPointClassifyView(APIView):
 
     def post(self, request, project_id):
         try:
-            FtthProject.objects.only("pk").get(pk=project_id)
+            FtthProject.objects.only('pk').get(pk=project_id)
         except FtthProject.DoesNotExist:
             return JsonResponse(
-                {"detail": "Project not found."},
+                {'detail': 'Project not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
         payload = request.data if isinstance(request.data, dict) else {}
-        coordinates = payload.get("coordinates")
+        coordinates = payload.get('coordinates')
         if not isinstance(coordinates, (list, tuple)) or len(coordinates) < 2:
             return JsonResponse(
-                {"detail": "coordinates must be [x, y] or a span route."},
+                {'detail': 'coordinates must be [x, y] or a span route.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if not isinstance(coordinates[0], (list, tuple)):
@@ -777,33 +785,33 @@ class SurfaceAIPointClassifyView(APIView):
                 coordinates = [float(coordinates[0]), float(coordinates[1])]
             except (TypeError, ValueError):
                 return JsonResponse(
-                    {"detail": "coordinates must be numeric."},
+                    {'detail': 'coordinates must be numeric.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         else:
-            span_id = payload.get("span_id")
+            span_id = payload.get('span_id')
             if not span_id:
                 return JsonResponse(
-                    {"detail": "A span detect needs a span_id."},
+                    {'detail': 'A span detect needs a span_id.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         try:
             item = classify_surface_at_point(
                 project_id,
                 coordinates,
-                crs=payload.get("crs") or "EPSG:4326",
-                length_m=payload.get("length_m"),
-                bearing=payload.get("bearing"),
-                span_id=payload.get("span_id"),
-                coordinates_crs=payload.get("coordinates_crs"),
-                include_imagery=bool(payload.get("include_imagery")),
-                claimed_surface=payload.get("claimed_surface"),
-                geometry_reason=payload.get("geometry_reason"),
-                geometry_confidence=payload.get("geometry_confidence"),
-                known_share=payload.get("known_share"),
+                crs=payload.get('crs') or 'EPSG:4326',
+                length_m=payload.get('length_m'),
+                bearing=payload.get('bearing'),
+                span_id=payload.get('span_id'),
+                coordinates_crs=payload.get('coordinates_crs'),
+                include_imagery=bool(payload.get('include_imagery')),
+                claimed_surface=payload.get('claimed_surface'),
+                geometry_reason=payload.get('geometry_reason'),
+                geometry_confidence=payload.get('geometry_confidence'),
+                known_share=payload.get('known_share'),
             )
         except EngineError as exc:
-            return JsonResponse({"detail": exc.detail}, status=exc.status_code)
+            return JsonResponse({'detail': exc.detail}, status=exc.status_code)
         return JsonResponse(item)
 
 
@@ -819,30 +827,30 @@ class SurfaceAIImageryView(APIView):
 
     def post(self, request, project_id):
         try:
-            FtthProject.objects.only("pk").get(pk=project_id)
+            FtthProject.objects.only('pk').get(pk=project_id)
         except FtthProject.DoesNotExist:
             return JsonResponse(
-                {"detail": "Project not found."},
+                {'detail': 'Project not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
         payload = request.data if isinstance(request.data, dict) else {}
-        coordinates = payload.get("coordinates")
+        coordinates = payload.get('coordinates')
         if not isinstance(coordinates, (list, tuple)) or len(coordinates) < 2:
             return JsonResponse(
-                {"detail": "coordinates must be [x, y] or a span route."},
+                {'detail': 'coordinates must be [x, y] or a span route.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         forwarded = {
-            "coordinates": coordinates,
-            "crs": payload.get("crs") or payload.get("coordinates_crs") or "EPSG:4326",
+            'coordinates': coordinates,
+            'crs': payload.get('crs') or payload.get('coordinates_crs') or 'EPSG:4326',
         }
-        for key in ("span_id", "coordinates_crs", "length_m", "bearing"):
+        for key in ('span_id', 'coordinates_crs', 'length_m', 'bearing'):
             if payload.get(key) is not None:
                 forwarded[key] = payload[key]
         try:
             item = preview_surface_imagery(project_id, forwarded)
         except EngineError as exc:
-            return JsonResponse({"detail": exc.detail}, status=exc.status_code)
+            return JsonResponse({'detail': exc.detail}, status=exc.status_code)
         return JsonResponse(item)
 
 
@@ -855,8 +863,10 @@ class LayerGeoJSONView(APIView):
         name = layer_name.lower()
         if name not in LAYER_NAME_MAP:
             return JsonResponse(
-                {"detail": f"Unknown layer '{layer_name}'. "
-                           f"Valid: {', '.join(LAYER_NAME_MAP.keys())}"},
+                {
+                    'detail': f"Unknown layer '{layer_name}'. "
+                    f"Valid: {', '.join(LAYER_NAME_MAP.keys())}"
+                },
                 status=status.HTTP_404_NOT_FOUND,
             )
 
@@ -864,16 +874,14 @@ class LayerGeoJSONView(APIView):
         #    A row persisted mid-run (before ingestion) can hold an empty
         #    FeatureCollection — treat that as stale and refresh from the
         #    engine instead of serving an empty layer forever.
-        row = FtthLayer.objects.filter(
-            ftth_project__project_id=project_id, name=name
-        ).first()
-        if row is not None and row.geojson and row.geojson.get("features"):
+        row = FtthLayer.objects.filter(ftth_project__project_id=project_id, name=name).first()
+        if row is not None and row.geojson and row.geojson.get('features'):
             geojson = row.geojson
             # The trench layer is the union of five sub-layers whose fids
             # collide; the permit matrix keys on the unique gis row ``id``.
             # Enrich the served features with that id (+ fclass) so the map
             # can colour segments by permit status.
-            if name in ("trenches", "trench_layer"):
+            if name in ('trenches', 'trench_layer'):
                 try:
                     geojson = _enrich_trench_layer(project_id, geojson)
                 except Exception:
@@ -884,7 +892,7 @@ class LayerGeoJSONView(APIView):
         geojson_bytes = get_layer_geojson(project_id, name)
         if geojson_bytes is None:
             return JsonResponse(
-                {"detail": f"Layer '{layer_name}' not found for this project."},
+                {'detail': f"Layer '{layer_name}' not found for this project."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
@@ -892,7 +900,7 @@ class LayerGeoJSONView(APIView):
             data = json.loads(geojson_bytes)
         except json.JSONDecodeError:
             return JsonResponse(
-                {"detail": "Invalid GeoJSON received from pipeline."},
+                {'detail': 'Invalid GeoJSON received from pipeline.'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
@@ -908,6 +916,7 @@ class LayerGeoJSONView(APIView):
 # GET /api/ftth/hld/download/<project_id>/<path:file_path>
 # ======================================================================
 
+
 class DownloadFileView(APIView):
     """Download a pipeline output file, proxied from FastAPI."""
 
@@ -917,23 +926,23 @@ class DownloadFileView(APIView):
         clean_name = Path(file_path).name
         if not clean_name:
             return JsonResponse(
-                {"detail": "Invalid file path."},
+                {'detail': 'Invalid file path.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         data = get_download_file(project_id, clean_name)
         if data is None:
             return JsonResponse(
-                {"detail": "File not found."},
+                {'detail': 'File not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
         return HttpResponse(
             data,
-            content_type="application/octet-stream",
+            content_type='application/octet-stream',
             headers={
-                "Content-Disposition": f'attachment; filename="{clean_name}"',
-                "Content-Length": str(len(data)),
+                'Content-Disposition': f'attachment; filename="{clean_name}"',
+                'Content-Length': str(len(data)),
             },
         )
 
@@ -941,6 +950,7 @@ class DownloadFileView(APIView):
 # ======================================================================
 # GET /api/ftth/hld/results/<project_id>/survey-package/
 # ======================================================================
+
 
 class SurveyPackageView(APIView):
     """
@@ -955,14 +965,16 @@ class SurveyPackageView(APIView):
             project = FtthProject.objects.get(pk=project_id)
         except FtthProject.DoesNotExist:
             return JsonResponse(
-                {"detail": "Project not found."},
+                {'detail': 'Project not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if project.status not in (FtthProject.STATUS_COMPLETED, "completed"):
+        if project.status not in (FtthProject.STATUS_COMPLETED, 'completed'):
             return JsonResponse(
-                {"detail": "Pipeline has not completed yet. Survey package is only "
-                           "available for completed pipelines."},
+                {
+                    'detail': 'Pipeline has not completed yet. Survey package is only '
+                    'available for completed pipelines.'
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -970,35 +982,31 @@ class SurveyPackageView(APIView):
             zip_bytes = generate_survey_package(project_id)
         except FileNotFoundError as exc:
             return JsonResponse(
-                {"detail": str(exc)},
+                {'detail': str(exc)},
                 status=status.HTTP_404_NOT_FOUND,
             )
         except Exception as exc:
             return JsonResponse(
-                {"detail": f"Failed to generate survey package: {exc}"},
+                {'detail': f'Failed to generate survey package: {exc}'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        zip_name = f"{project_id}_survey_package.zip"
+        zip_name = f'{project_id}_survey_package.zip'
 
         return HttpResponse(
             zip_bytes,
-            content_type="application/zip",
+            content_type='application/zip',
             headers={
-                "Content-Disposition": f'attachment; filename="{zip_name}"',
-                "Content-Length": str(len(zip_bytes)),
+                'Content-Disposition': f'attachment; filename="{zip_name}"',
+                'Content-Length': str(len(zip_bytes)),
             },
         )
-
-
-
-
-
 
 
 # ======================================================================
 # GET /api/ftth/hld/results/<project_id>/design-package/
 # ======================================================================
+
 
 class DesignPackageView(APIView):
     """
@@ -1014,14 +1022,16 @@ class DesignPackageView(APIView):
             project = FtthProject.objects.get(pk=project_id)
         except FtthProject.DoesNotExist:
             return JsonResponse(
-                {"detail": "Project not found."},
+                {'detail': 'Project not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if project.status not in (FtthProject.STATUS_COMPLETED, "completed"):
+        if project.status not in (FtthProject.STATUS_COMPLETED, 'completed'):
             return JsonResponse(
-                {"detail": "Pipeline has not completed yet. Design package is only "
-                           "available for completed pipelines."},
+                {
+                    'detail': 'Pipeline has not completed yet. Design package is only '
+                    'available for completed pipelines.'
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1029,23 +1039,23 @@ class DesignPackageView(APIView):
             zip_bytes = generate_design_package(project_id)
         except FileNotFoundError as exc:
             return JsonResponse(
-                {"detail": str(exc)},
+                {'detail': str(exc)},
                 status=status.HTTP_404_NOT_FOUND,
             )
         except Exception as exc:
             return JsonResponse(
-                {"detail": f"Failed to generate design package: {exc}"},
+                {'detail': f'Failed to generate design package: {exc}'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        zip_name = f"{project_id}_design_package.zip"
+        zip_name = f'{project_id}_design_package.zip'
 
         return HttpResponse(
             zip_bytes,
-            content_type="application/zip",
+            content_type='application/zip',
             headers={
-                "Content-Disposition": f'attachment; filename="{zip_name}"',
-                "Content-Length": str(len(zip_bytes)),
+                'Content-Disposition': f'attachment; filename="{zip_name}"',
+                'Content-Length': str(len(zip_bytes)),
             },
         )
 
@@ -1053,6 +1063,7 @@ class DesignPackageView(APIView):
 # ======================================================================
 # DELETE /api/ftth/hld/projects/<project_id>/
 # ======================================================================
+
 
 class DeleteProjectView(APIView):
     """
@@ -1070,7 +1081,7 @@ class DeleteProjectView(APIView):
             project = FtthProject.objects.get(pk=project_id)
         except FtthProject.DoesNotExist:
             return JsonResponse(
-                {"detail": "Project not found."},
+                {'detail': 'Project not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
@@ -1092,25 +1103,29 @@ class DeleteProjectView(APIView):
 
         # 3. Remove local cached files
         import shutil
+
         project_dir = HOST_OUTPUTS_DIR / project_id
         if project_dir.exists():
             shutil.rmtree(str(project_dir), ignore_errors=True)
 
-        return JsonResponse({
-            "deleted": True,
-            "project_id": project_id,
-            "engine_deleted": engine_result.get("deleted", False),
-            "engine_detail": engine_result.get("detail"),
-            # PostGIS cleanup is best-effort on the engine side; surface a
-            # failure so an orphaned project row is not discovered later.
-            "postgis_cleaned": engine_result.get("postgis_cleaned", True),
-            "postgis_error": engine_result.get("postgis_error"),
-        })
+        return JsonResponse(
+            {
+                'deleted': True,
+                'project_id': project_id,
+                'engine_deleted': engine_result.get('deleted', False),
+                'engine_detail': engine_result.get('detail'),
+                # PostGIS cleanup is best-effort on the engine side; surface a
+                # failure so an orphaned project row is not discovered later.
+                'postgis_cleaned': engine_result.get('postgis_cleaned', True),
+                'postgis_error': engine_result.get('postgis_error'),
+            }
+        )
 
 
 # ======================================================================
 # GET /api/ftth/hld/results/<project_id>/boq/
 # ======================================================================
+
 
 def _boq_anomalies(project_id):
     """Tier-1 A4: deterministic anomaly screening + optional AI summary.
@@ -1124,30 +1139,30 @@ def _boq_anomalies(project_id):
     try:
         result = detect_boq_anomalies(project_id)
     except Exception:
-        return {"anomalies": [], "checked": 0, "basis": {}}
+        return {'anomalies': [], 'checked': 0, 'basis': {}}
 
-    if result.get("anomalies"):
+    if result.get('anomalies'):
         try:
             from permits.ai.provider import AI_DISCLAIMER, chat_completion
 
             lines = [
-                "- [%s] %s: %s"
-                % (a.get("severity", ""), a.get("item_name", ""), a.get("message", ""))
-                for a in result["anomalies"]
+                '- [%s] %s: %s'
+                % (a.get('severity', ''), a.get('item_name', ''), a.get('message', ''))
+                for a in result['anomalies']
             ]
             note = chat_completion(
                 system=(
-                    "You are a fibre network quantity surveyor. In at most 3 short "
-                    "sentences, explain what these BOQ anomalies likely mean and what "
-                    "the reviewer should check first. Do not invent numbers."
+                    'You are a fibre network quantity surveyor. In at most 3 short '
+                    'sentences, explain what these BOQ anomalies likely mean and what '
+                    'the reviewer should check first. Do not invent numbers.'
                 ),
-                user="\n".join(lines),
+                user='\n'.join(lines),
                 max_tokens=400,
                 timeout_s=15.0,
             )
             if note:
-                result["ai_summary"] = note
-                result["ai_disclaimer"] = AI_DISCLAIMER
+                result['ai_summary'] = note
+                result['ai_disclaimer'] = AI_DISCLAIMER
         except Exception:
             pass
     return result
@@ -1170,37 +1185,39 @@ class BoqView(APIView):
             project = FtthProject.objects.get(pk=project_id)
         except FtthProject.DoesNotExist:
             return JsonResponse(
-                {"detail": "Project not found."},
+                {'detail': 'Project not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if project.status not in (FtthProject.STATUS_COMPLETED, "completed"):
+        if project.status not in (FtthProject.STATUS_COMPLETED, 'completed'):
             return JsonResponse(
-                {"detail": "BOQ is only available for completed pipelines."},
+                {'detail': 'BOQ is only available for completed pipelines.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
             snapshot = generate_snapshot(project_id)
         except ValueError as exc:
-            return JsonResponse({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+            return JsonResponse({'detail': str(exc)}, status=status.HTTP_404_NOT_FOUND)
         except Exception as exc:
             return JsonResponse(
-                {"detail": f"Failed to generate BOQ: {exc}"},
+                {'detail': f'Failed to generate BOQ: {exc}'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
         # Tier-1 A4: anomaly screening — flags quantities that look wrong
         # (zero length items, dominant line items, outliers vs siblings).
-        return JsonResponse({
-            "project_id": project_id,
-            "boq_rows": snapshot.boq_json,
-            "bom_rows": snapshot.bom_json,
-            "boq_totals": snapshot.boq_totals,
-            "bom_totals": snapshot.bom_totals,
-            "anomalies": _boq_anomalies(project_id),
-            "generated_at": snapshot.regenerated_at or snapshot.created_at,
-        })
+        return JsonResponse(
+            {
+                'project_id': project_id,
+                'boq_rows': snapshot.boq_json,
+                'bom_rows': snapshot.bom_json,
+                'boq_totals': snapshot.boq_totals,
+                'bom_totals': snapshot.bom_totals,
+                'anomalies': _boq_anomalies(project_id),
+                'generated_at': snapshot.regenerated_at or snapshot.created_at,
+            }
+        )
 
 
 class BoqRegenerateView(APIView):
@@ -1213,30 +1230,32 @@ class BoqRegenerateView(APIView):
             project = FtthProject.objects.get(pk=project_id)
         except FtthProject.DoesNotExist:
             return JsonResponse(
-                {"detail": "Project not found."},
+                {'detail': 'Project not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if project.status not in (FtthProject.STATUS_COMPLETED, "completed"):
+        if project.status not in (FtthProject.STATUS_COMPLETED, 'completed'):
             return JsonResponse(
-                {"detail": "BOQ is only available for completed pipelines."},
+                {'detail': 'BOQ is only available for completed pipelines.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
             snapshot = generate_snapshot(project_id, force=True)
         except Exception as exc:
             return JsonResponse(
-                {"detail": f"Failed to regenerate BOQ: {exc}"},
+                {'detail': f'Failed to regenerate BOQ: {exc}'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
-        return JsonResponse({
-            "project_id": project_id,
-            "boq_rows": snapshot.boq_json,
-            "bom_rows": snapshot.bom_json,
-            "boq_totals": snapshot.boq_totals,
-            "bom_totals": snapshot.bom_totals,
-            "anomalies": _boq_anomalies(project_id),
-            "generated_at": snapshot.regenerated_at or snapshot.created_at,
-        })
+        return JsonResponse(
+            {
+                'project_id': project_id,
+                'boq_rows': snapshot.boq_json,
+                'bom_rows': snapshot.bom_json,
+                'boq_totals': snapshot.boq_totals,
+                'bom_totals': snapshot.bom_totals,
+                'anomalies': _boq_anomalies(project_id),
+                'generated_at': snapshot.regenerated_at or snapshot.created_at,
+            }
+        )
 
 
 class BoqDownloadView(APIView):
@@ -1249,27 +1268,27 @@ class BoqDownloadView(APIView):
             project = FtthProject.objects.get(pk=project_id)
         except FtthProject.DoesNotExist:
             return JsonResponse(
-                {"detail": "Project not found."},
+                {'detail': 'Project not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if project.status not in (FtthProject.STATUS_COMPLETED, "completed"):
+        if project.status not in (FtthProject.STATUS_COMPLETED, 'completed'):
             return JsonResponse(
-                {"detail": "BOQ is only available for completed pipelines."},
+                {'detail': 'BOQ is only available for completed pipelines.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
             data = render_boq_xlsx(project_id)
         except Exception as exc:
             return JsonResponse(
-                {"detail": f"Failed to generate BOQ workbook: {exc}"},
+                {'detail': f'Failed to generate BOQ workbook: {exc}'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         return HttpResponse(
             data,
-            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             headers={
-                "Content-Disposition": f'attachment; filename="{project_id}_BOQ.xlsx"',
-                "Content-Length": str(len(data)),
+                'Content-Disposition': f'attachment; filename="{project_id}_BOQ.xlsx"',
+                'Content-Length': str(len(data)),
             },
         )
 
@@ -1277,6 +1296,7 @@ class BoqDownloadView(APIView):
 # ======================================================================
 # GET /api/ftth/hld/projects/
 # ======================================================================
+
 
 class FtthProjectListView(APIView):
     """List recent FTTH pipeline runs.
@@ -1288,13 +1308,14 @@ class FtthProjectListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        limit = int(request.GET.get("limit", 50))
+        limit = int(request.GET.get('limit', 50))
         return JsonResponse(ftth_project_payloads(limit), safe=False)
 
 
 # ======================================================================
 # POST /api/ftth/hld/projects/<project_id>/assign/
 # ======================================================================
+
 
 class FtthProjectAssignView(APIView):
     """Assign a completed HLD run to a field engineer.
@@ -1307,36 +1328,36 @@ class FtthProjectAssignView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, project_id):
-        if getattr(request.user, "role", None) != "SUBADMIN":
+        if getattr(request.user, 'role', None) != 'SUBADMIN':
             return JsonResponse(
-                {"detail": "Only SUBADMIN can assign projects."},
+                {'detail': 'Only SUBADMIN can assign projects.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
         engineer_ids = (
-            request.data.get("engineer_ids")
-            or request.POST.getlist("engineer_ids")
-            or request.data.get("engineer_id")
-            or request.POST.get("engineer_id")
+            request.data.get('engineer_ids')
+            or request.POST.getlist('engineer_ids')
+            or request.data.get('engineer_id')
+            or request.POST.get('engineer_id')
         )
         if not engineer_ids:
             return JsonResponse(
-                {"detail": "engineer_ids (list) or engineer_id is required."},
+                {'detail': 'engineer_ids (list) or engineer_id is required.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
             result = assign_hld_project(project_id, engineer_ids)
         except ValueError as exc:
-            return JsonResponse({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            return JsonResponse({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except FileNotFoundError as exc:
             return JsonResponse(
-                {"detail": f"Survey package not available: {exc}"},
+                {'detail': f'Survey package not available: {exc}'},
                 status=status.HTTP_404_NOT_FOUND,
             )
         except Exception as exc:
             return JsonResponse(
-                {"detail": f"Assignment failed: {exc}"},
+                {'detail': f'Assignment failed: {exc}'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 

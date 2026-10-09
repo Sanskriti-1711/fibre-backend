@@ -12,10 +12,10 @@ full breakdown.
 
 from __future__ import annotations
 
+from django.http import JsonResponse
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
-from django.http import JsonResponse
 
 from .expiry import summary
 
@@ -27,14 +27,16 @@ class PermitExpiryView(APIView):
 
     def get(self, request, project_id: str | None = None):
         # Also accept ?project_id= as a query param on the collection route.
-        pid = project_id or (request.GET.get("project_id") or "").strip() or None
+        pid = project_id or (request.GET.get('project_id') or '').strip() or None
         try:
-            threshold = int((request.GET.get("threshold_days") or request.GET.get("threshold") or "30").strip())
+            threshold = int(
+                (request.GET.get('threshold_days') or request.GET.get('threshold') or '30').strip()
+            )
         except ValueError:
-            return JsonResponse({"detail": "threshold_days must be an integer."}, status=400)
+            return JsonResponse({'detail': 'threshold_days must be an integer.'}, status=400)
         threshold = max(1, min(threshold, 365))
 
-        include_ok = (request.GET.get("include_ok") or "").strip().lower() in ("1", "true", "yes")
+        include_ok = (request.GET.get('include_ok') or '').strip().lower() in ('1', 'true', 'yes')
         # When include_ok is requested we still summarize at the threshold — the
         # caller gets all buckets but can filter client-side.
         data = summary(project_id=pid, threshold_days=threshold, now=timezone.now())
@@ -43,8 +45,12 @@ class PermitExpiryView(APIView):
             from .expiry import get_expiring_permits, get_expiring_submissions
 
             now = timezone.now()
-            permits_all = get_expiring_permits(pid, threshold_days=threshold, include_ok=True, now=now)
-            subs_all = get_expiring_submissions(pid, threshold_days=threshold, include_ok=True, now=now)
-            data["permits_all"] = permits_all[:200]
-            data["submissions_all"] = subs_all[:200]
+            permits_all = get_expiring_permits(
+                pid, threshold_days=threshold, include_ok=True, now=now
+            )
+            subs_all = get_expiring_submissions(
+                pid, threshold_days=threshold, include_ok=True, now=now
+            )
+            data['permits_all'] = permits_all[:200]
+            data['submissions_all'] = subs_all[:200]
         return JsonResponse(data)

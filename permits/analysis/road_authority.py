@@ -22,35 +22,55 @@ from __future__ import annotations
 #   private / service / track     -> private owner (no road-authority permit)
 ROAD_CLASS_MAP: dict[str, tuple[str, str, str]] = {
     # ── Bundesautobahn / Bundesstraße -> Bund ────────────────────────────
-    "motorway": ("DE-ROAD-BUND", "Autobahn GmbH des Bundes (Bund)", "Bundesautobahn"),
-    "motorway_link": ("DE-ROAD-BUND", "Autobahn GmbH des Bundes (Bund)", "Bundesautobahn (ramp)"),
-    "trunk": ("DE-ROAD-BUND", "Bundesstraßenverwaltung (Bund)", "Bundesstraße (trunk)"),
-    "trunk_link": ("DE-ROAD-BUND", "Bundesstraßenverwaltung (Bund)", "Bundesstraße (ramp)"),
-    "primary": ("DE-ROAD-BUND", "Bundesstraßenverwaltung (Bund)", "Bundesstraße"),
-    "primary_link": ("DE-ROAD-BUND", "Bundesstraßenverwaltung (Bund)", "Bundesstraße (ramp)"),
+    'motorway': ('DE-ROAD-BUND', 'Autobahn GmbH des Bundes (Bund)', 'Bundesautobahn'),
+    'motorway_link': ('DE-ROAD-BUND', 'Autobahn GmbH des Bundes (Bund)', 'Bundesautobahn (ramp)'),
+    'trunk': ('DE-ROAD-BUND', 'Bundesstraßenverwaltung (Bund)', 'Bundesstraße (trunk)'),
+    'trunk_link': ('DE-ROAD-BUND', 'Bundesstraßenverwaltung (Bund)', 'Bundesstraße (ramp)'),
+    'primary': ('DE-ROAD-BUND', 'Bundesstraßenverwaltung (Bund)', 'Bundesstraße'),
+    'primary_link': ('DE-ROAD-BUND', 'Bundesstraßenverwaltung (Bund)', 'Bundesstraße (ramp)'),
     # ── Landesstraße -> Land (Berlin: SenMVKU) ───────────────────────────
-    "secondary": ("DE-ROAD-LAND-BE", "Land Berlin — SenMVKU (Landesstraße)", "Landesstraße"),
-    "secondary_link": ("DE-ROAD-LAND-BE", "Land Berlin — SenMVKU (Landesstraße)", "Landesstraße (ramp)"),
-    "tertiary": ("DE-ROAD-LAND-BE", "Land Berlin — SenMVKU (Landesstraße)", "Landesstraße / Kreisstraße"),
-    "tertiary_link": ("DE-ROAD-LAND-BE", "Land Berlin — SenMVKU (Landesstraße)", "Landesstraße (ramp)"),
+    'secondary': ('DE-ROAD-LAND-BE', 'Land Berlin — SenMVKU (Landesstraße)', 'Landesstraße'),
+    'secondary_link': (
+        'DE-ROAD-LAND-BE',
+        'Land Berlin — SenMVKU (Landesstraße)',
+        'Landesstraße (ramp)',
+    ),
+    'tertiary': (
+        'DE-ROAD-LAND-BE',
+        'Land Berlin — SenMVKU (Landesstraße)',
+        'Landesstraße / Kreisstraße',
+    ),
+    'tertiary_link': (
+        'DE-ROAD-LAND-BE',
+        'Land Berlin — SenMVKU (Landesstraße)',
+        'Landesstraße (ramp)',
+    ),
     # ── Gemeindestraße / Fußweg / Radweg -> Bezirk ───────────────────────
-    "unclassified": ("DE-ROAD-BEZIRK-BE", "Bezirksamt Berlin (Gemeindestraße)", "Gemeindestraße"),
-    "residential": ("DE-ROAD-BEZIRK-BE", "Bezirksamt Berlin (Gemeindestraße)", "Gemeindestraße (residential)"),
-    "living_street": ("DE-ROAD-BEZIRK-BE", "Bezirksamt Berlin (Gemeindestraße)", "Verkehrsberuhigter Bereich"),
-    "footway": ("DE-ROAD-BEZIRK-BE", "Bezirksamt Berlin (Gehweg)", "Fußweg"),
-    "path": ("DE-ROAD-BEZIRK-BE", "Bezirksamt Berlin (Geh-/Radweg)", "Fuß-/Radweg"),
-    "cycleway": ("DE-ROAD-BEZIRK-BE", "Bezirksamt Berlin (Radweg)", "Radweg"),
-    "pedestrian": ("DE-ROAD-BEZIRK-BE", "Bezirksamt Berlin (Fußgängerzone)", "Fußgängerzone"),
-    "steps": ("DE-ROAD-BEZIRK-BE", "Bezirksamt Berlin (Treppe)", "Treppenanlage"),
-    "bridleway": ("DE-ROAD-BEZIRK-BE", "Bezirksamt Berlin (Reitweg)", "Reitweg"),
+    'unclassified': ('DE-ROAD-BEZIRK-BE', 'Bezirksamt Berlin (Gemeindestraße)', 'Gemeindestraße'),
+    'residential': (
+        'DE-ROAD-BEZIRK-BE',
+        'Bezirksamt Berlin (Gemeindestraße)',
+        'Gemeindestraße (residential)',
+    ),
+    'living_street': (
+        'DE-ROAD-BEZIRK-BE',
+        'Bezirksamt Berlin (Gemeindestraße)',
+        'Verkehrsberuhigter Bereich',
+    ),
+    'footway': ('DE-ROAD-BEZIRK-BE', 'Bezirksamt Berlin (Gehweg)', 'Fußweg'),
+    'path': ('DE-ROAD-BEZIRK-BE', 'Bezirksamt Berlin (Geh-/Radweg)', 'Fuß-/Radweg'),
+    'cycleway': ('DE-ROAD-BEZIRK-BE', 'Bezirksamt Berlin (Radweg)', 'Radweg'),
+    'pedestrian': ('DE-ROAD-BEZIRK-BE', 'Bezirksamt Berlin (Fußgängerzone)', 'Fußgängerzone'),
+    'steps': ('DE-ROAD-BEZIRK-BE', 'Bezirksamt Berlin (Treppe)', 'Treppenanlage'),
+    'bridleway': ('DE-ROAD-BEZIRK-BE', 'Bezirksamt Berlin (Reitweg)', 'Reitweg'),
     # ── private / service / track -> private owner ──────────────────────
-    "service": ("DE-ROAD-PRIVATE", "Private road owner", "Privatstraße / Erschließung"),
-    "track": ("DE-ROAD-PRIVATE", "Private road owner", "Wirtschaftsweg (privat)"),
+    'service': ('DE-ROAD-PRIVATE', 'Private road owner', 'Privatstraße / Erschließung'),
+    'track': ('DE-ROAD-PRIVATE', 'Private road owner', 'Wirtschaftsweg (privat)'),
 }
 
 # Fallback for unmapped classes — recorded honestly, never assumed.
-FALLBACK_CODE = "DE-ROAD-UNKNOWN"
-FALLBACK_LABEL = "Road authority (to be resolved from road class)"
+FALLBACK_CODE = 'DE-ROAD-UNKNOWN'
+FALLBACK_LABEL = 'Road authority (to be resolved from road class)'
 
 
 def resolve_road_authority(fclass: str) -> tuple[str, str]:
@@ -60,7 +80,7 @@ def resolve_road_authority(fclass: str) -> tuple[str, str]:
     recorded as unresolved rather than silently assigned to the wrong
     authority.
     """
-    key = (fclass or "").strip().lower()
+    key = (fclass or '').strip().lower()
     if not key:
         return FALLBACK_CODE, FALLBACK_LABEL
     entry = ROAD_CLASS_MAP.get(key)

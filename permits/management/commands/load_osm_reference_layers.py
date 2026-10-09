@@ -29,9 +29,9 @@ DEFAULT_BBOX = (13.088, 52.338, 13.761, 52.675)
 # Try mirrors in order — the public endpoints are flaky and which one
 # responds varies over time.
 OVERPASS_URLS = [
-    "https://overpass-api.de/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.private.coffee/api/interpreter",
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
 ]
 OVERPASS_TIMEOUT = 180
 
@@ -40,36 +40,35 @@ OVERPASS_TIMEOUT = 180
 # per zone type with a precise ref_type (landuse habitat / legally protected
 # area / individual tree for root-protection review).
 REFERENCE_LAYERS = {
-    "osm_railway": (
+    'osm_railway': (
         'way["railway"~"^(rail|tram|subway|light_rail|narrow_gauge|monorail)$"]',
-        "railway",
+        'railway',
     ),
-    "osm_waterway": (
+    'osm_waterway': (
         'way["waterway"~"^(river|stream|canal|ditch|drain|riverbank)$"]',
-        "waterway",
+        'waterway',
     ),
-    "osm_landuse": (
+    'osm_landuse': (
         'way["landuse"~"^(forest|meadow|grass|allotments|recreation_ground|orchard|vineyard|cemetery)$"];'
         'way["natural"~"^(wood|wetland|heath|scrub|grassland|moor|fell)$"]',
-        "type",
+        'type',
     ),
-    "osm_protected_area": (
+    'osm_protected_area': (
         'way["boundary"="protected_area"];'
         'way["leisure"~"^(nature_reserve|park)$"];'
         'way["landuse"="nature_reserve"]',
-        "type",
+        'type',
     ),
-    "osm_tree": (
-        'node["natural"="tree"];'
-        'node["landuse"="tree"]',
-        "type",
+    'osm_tree': (
+        'node["natural"="tree"];' 'node["landuse"="tree"]',
+        'type',
     ),
-    "osm_admin_boundary": (
+    'osm_admin_boundary': (
         # Gemeinde/Bezirk polygons (admin_level 6-9: Kreis, Verbandsgemeinde,
         # Gemeinde, Ortsteil/Bezirk). ``out geom`` on relations returns the
         # merged member geometry as a closed ring → Polygon per relation.
         'rel["boundary"="administrative"]["admin_level"~"^(6|7|8|9)$"]',
-        "name",
+        'name',
     ),
 }
 
@@ -78,7 +77,7 @@ DDL = (
     'CREATE TABLE IF NOT EXISTS gis."{table}" ('
     '  id BIGSERIAL PRIMARY KEY,'
     '  geom GEOMETRY(Geometry, 4326),'
-    '  properties JSONB NOT NULL DEFAULT \'{{}}\'::jsonb,'
+    "  properties JSONB NOT NULL DEFAULT '{{}}'::jsonb,"
     '  created_at TIMESTAMPTZ NOT NULL DEFAULT now())'
 )
 
@@ -94,15 +93,28 @@ import time
 
 
 def _element_props(el: dict) -> dict:
-    tags = el.get("tags") or {}
+    tags = el.get('tags') or {}
     props: dict = {}
-    for k in ("name", "railway", "waterway", "landuse", "leisure", "boundary", "natural", "admin_level"):
+    for k in (
+        'name',
+        'railway',
+        'waterway',
+        'landuse',
+        'leisure',
+        'boundary',
+        'natural',
+        'admin_level',
+    ):
         if tags.get(k):
             props[k] = tags[k]
-    props["type"] = (
-        tags.get("railway") or tags.get("waterway") or tags.get("landuse")
-        or tags.get("leisure") or tags.get("boundary") or tags.get("natural")
-        or "unknown"
+    props['type'] = (
+        tags.get('railway')
+        or tags.get('waterway')
+        or tags.get('landuse')
+        or tags.get('leisure')
+        or tags.get('boundary')
+        or tags.get('natural')
+        or 'unknown'
     )
     return props
 
@@ -116,20 +128,20 @@ def _to_geojson(el: dict) -> dict | None:
     array on each member way), so the outer-role member rings are
     concatenated into a closed Polygon ring.
     """
-    if el.get("type") == "node":
-        lon, lat = el.get("lon"), el.get("lat")
+    if el.get('type') == 'node':
+        lon, lat = el.get('lon'), el.get('lat')
         if lon is None or lat is None:
             return None
-        return {"type": "Point", "coordinates": [lon, lat]}
+        return {'type': 'Point', 'coordinates': [lon, lat]}
 
-    if el.get("type") == "relation":
+    if el.get('type') == 'relation':
         rings = []
-        for m in el.get("members") or []:
-            if m.get("type") != "way" or not m.get("geometry"):
+        for m in el.get('members') or []:
+            if m.get('type') != 'way' or not m.get('geometry'):
                 continue
-            if m.get("role") not in (None, "", "outer"):
+            if m.get('role') not in (None, '', 'outer'):
                 continue  # inner holes are not needed for containment checks
-            ring = [[g["lon"], g["lat"]] for g in m["geometry"]]
+            ring = [[g['lon'], g['lat']] for g in m['geometry']]
             if len(ring) >= 2:
                 rings.append(ring)
         if not rings:
@@ -143,35 +155,35 @@ def _to_geojson(el: dict) -> dict | None:
             outer.append(outer[0])
         if len(outer) < 4:
             return None
-        return {"type": "Polygon", "coordinates": [outer]}
+        return {'type': 'Polygon', 'coordinates': [outer]}
 
-    geom = el.get("geometry")
+    geom = el.get('geometry')
     if not geom or len(geom) < 2:
         return None
-    coords = [[g["lon"], g["lat"]] for g in geom]
+    coords = [[g['lon'], g['lat']] for g in geom]
     closed = coords[0] == coords[-1] and len(coords) > 3
     if closed:
-        return {"type": "Polygon", "coordinates": [coords]}
-    return {"type": "LineString", "coordinates": coords}
+        return {'type': 'Polygon', 'coordinates': [coords]}
+    return {'type': 'LineString', 'coordinates': coords}
 
 
 def _matches(table: str, tags: dict) -> bool:
-    if table == "osm_railway":
-        return bool(tags.get("railway"))
-    if table == "osm_waterway":
-        return bool(tags.get("waterway"))
-    if table == "osm_landuse":
-        return bool(tags.get("landuse") or tags.get("natural"))
-    if table == "osm_protected_area":
+    if table == 'osm_railway':
+        return bool(tags.get('railway'))
+    if table == 'osm_waterway':
+        return bool(tags.get('waterway'))
+    if table == 'osm_landuse':
+        return bool(tags.get('landuse') or tags.get('natural'))
+    if table == 'osm_protected_area':
         return bool(
-            tags.get("boundary") == "protected_area"
-            or tags.get("leisure") in ("nature_reserve", "park")
-            or tags.get("landuse") == "nature_reserve"
+            tags.get('boundary') == 'protected_area'
+            or tags.get('leisure') in ('nature_reserve', 'park')
+            or tags.get('landuse') == 'nature_reserve'
         )
-    if table == "osm_tree":
-        return tags.get("natural") == "tree" or tags.get("landuse") == "tree"
-    if table == "osm_admin_boundary":
-        return tags.get("boundary") == "administrative"
+    if table == 'osm_tree':
+        return tags.get('natural') == 'tree' or tags.get('landuse') == 'tree'
+    if table == 'osm_admin_boundary':
+        return tags.get('boundary') == 'administrative'
     return False
 
 
@@ -185,35 +197,29 @@ def _fetch_layer(bbox: tuple, body: str) -> list[dict]:
     results are identical either way (verified for the tree layer).
     """
     west, south, east, north = bbox
-    bbox_arg = f"({south},{west},{north},{east})"
-    statements = [s.strip() for s in body.split(";") if s.strip()]
-    scoped = ";".join(
-        re.sub(r"^(node|way|rel)", rf"\1{bbox_arg}", s) for s in statements
-    )
-    query = (
-        f"[out:json][timeout:90];"
-        f"({scoped};);"
-        "out geom;"
-    ).encode("utf-8")
+    bbox_arg = f'({south},{west},{north},{east})'
+    statements = [s.strip() for s in body.split(';') if s.strip()]
+    scoped = ';'.join(re.sub(r'^(node|way|rel)', rf'\1{bbox_arg}', s) for s in statements)
+    query = (f'[out:json][timeout:90];' f'({scoped};);' 'out geom;').encode()
     last_exc = None
     for url in OVERPASS_URLS:
         req = urllib.request.Request(
             url,
             data=query,
             headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "fiber-ftth-permits/1.0 (permits load command)",
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'fiber-ftth-permits/1.0 (permits load command)',
             },
         )
         for attempt in range(2):
             try:
                 with urllib.request.urlopen(req, timeout=OVERPASS_TIMEOUT) as resp:
-                    payload = json.loads(resp.read().decode("utf-8"))
-                return payload.get("elements", [])
+                    payload = json.loads(resp.read().decode('utf-8'))
+                return payload.get('elements', [])
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 time.sleep(3 * (attempt + 1))
-    raise CommandError(f"Overpass request failed on all mirrors: {last_exc}") from last_exc
+    raise CommandError(f'Overpass request failed on all mirrors: {last_exc}') from last_exc
 
 
 def load_categories(bbox: tuple, categories: list[str], force: bool = False) -> dict:
@@ -235,7 +241,7 @@ def load_categories(bbox: tuple, categories: list[str], force: bool = False) -> 
         elements = _fetch_layer(bbox, body)
         rows = []
         for el in elements:
-            if not _matches(table, el.get("tags") or {}):
+            if not _matches(table, el.get('tags') or {}):
                 continue
             geometry = _to_geojson(el)
             if not geometry:
@@ -245,7 +251,7 @@ def load_categories(bbox: tuple, categories: list[str], force: bool = False) -> 
             if rows:
                 cur.executemany(
                     f'INSERT INTO gis."{table}" (geom, properties) '
-                    "VALUES (ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), %s::jsonb)",
+                    'VALUES (ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), %s::jsonb)',
                     rows,
                 )
         counts[table] = len(rows)
@@ -253,21 +259,30 @@ def load_categories(bbox: tuple, categories: list[str], force: bool = False) -> 
 
 
 class Command(BaseCommand):
-    help = "Load OSM reference layers (railway/waterway/environmental/tree/admin boundary) into gis.osm_* tables."
+    help = 'Load OSM reference layers (railway/waterway/environmental/tree/admin boundary) into gis.osm_* tables.'
 
     def add_arguments(self, parser):
-        parser.add_argument("--bbox", nargs=4, type=float, metavar=("W", "S", "E", "N"),
-                            help="Bounding box (default: Berlin extent)")
-        parser.add_argument("--layer", choices=list(REFERENCE_LAYERS.keys()),
-                            help="Load only this layer")
-        parser.add_argument("--force", action="store_true",
-                            help="Truncate and reload even if a table already has rows")
+        parser.add_argument(
+            '--bbox',
+            nargs=4,
+            type=float,
+            metavar=('W', 'S', 'E', 'N'),
+            help='Bounding box (default: Berlin extent)',
+        )
+        parser.add_argument(
+            '--layer', choices=list(REFERENCE_LAYERS.keys()), help='Load only this layer'
+        )
+        parser.add_argument(
+            '--force',
+            action='store_true',
+            help='Truncate and reload even if a table already has rows',
+        )
 
     def handle(self, *args, **opts):
-        bbox = tuple(opts["bbox"]) if opts["bbox"] else DEFAULT_BBOX
-        categories = [opts["layer"]] if opts["layer"] else list(REFERENCE_LAYERS.keys())
-        self.stdout.write(f"Fetching OSM reference data for bbox {bbox} ...")
-        counts = load_categories(bbox, categories, force=opts["force"])
+        bbox = tuple(opts['bbox']) if opts['bbox'] else DEFAULT_BBOX
+        categories = [opts['layer']] if opts['layer'] else list(REFERENCE_LAYERS.keys())
+        self.stdout.write(f'Fetching OSM reference data for bbox {bbox} ...')
+        counts = load_categories(bbox, categories, force=opts['force'])
         for table, n in counts.items():
-            self.stdout.write(self.style.SUCCESS(f"  {table}: {n} features loaded"))
-        self.stdout.write(self.style.SUCCESS("Done."))
+            self.stdout.write(self.style.SUCCESS(f'  {table}: {n} features loaded'))
+        self.stdout.write(self.style.SUCCESS('Done.'))

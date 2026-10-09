@@ -1,6 +1,6 @@
 import os
-from pathlib import Path
 from datetime import timedelta
+from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -12,8 +12,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 # Production must set DJANGO_SECRET_KEY (Zeabur service variable).
 SECRET_KEY = os.getenv(
-    "DJANGO_SECRET_KEY",
-    "django-insecure-%p=ow#x9d^a8!#t%5p-m0#@(29wyu1f258$ae$a77_jz1rppf0",
+    'DJANGO_SECRET_KEY',
+    'django-insecure-%p=ow#x9d^a8!#t%5p-m0#@(29wyu1f258$ae$a77_jz1rppf0',
 )
 
 # SECURITY WARNING: don't run with debug turned on in production!
@@ -24,11 +24,11 @@ SECRET_KEY = os.getenv(
 # Local development sets DJANGO_DEBUG=true explicitly -- see `.env`,
 # `.env.example` and ../start-servers.sh -- so this default is only reached by a
 # host that did not set it.
-DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
+DEBUG = os.getenv('DJANGO_DEBUG', 'false').lower() == 'true'
 
 # Comma-separated at deploy time. Falls back to the previous permissive "*"
 # so local development is unaffected.
-ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",") if h.strip()]
+ALLOWED_HOSTS = [h.strip() for h in os.getenv('DJANGO_ALLOWED_HOSTS', '*').split(',') if h.strip()]
 
 
 # Application definition
@@ -40,7 +40,6 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    
     'rest_framework',
     'corsheaders',
     'users',
@@ -95,7 +94,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 #              Switch by setting FTTH_DB=local or uncommenting the local block.
 # ---------------------------------------------------------------------------
 
-if os.getenv("FTTH_DB", "").lower() in ("local", "dev", "docker"):
+if os.getenv('FTTH_DB', '').lower() in ('local', 'dev', 'docker'):
     # Local development — share Docker PostGIS with the FastAPI engine.
     # The Docker postgis service runs on localhost:5432 with database "ftth".
     # Django creates its tables in the "business" schema (search_path order).
@@ -108,9 +107,7 @@ if os.getenv("FTTH_DB", "").lower() in ("local", "dev", "docker"):
             'PASSWORD': os.getenv('PGPASSWORD', 'ftth'),
             'HOST': os.getenv('PGHOST', 'localhost'),
             'PORT': os.getenv('PGPORT', '5432'),
-            'OPTIONS': {
-                'options': '-c search_path=business,public'
-            },
+            'OPTIONS': {'options': '-c search_path=business,public'},
         },
     }
 else:
@@ -125,9 +122,7 @@ else:
             'PASSWORD': os.getenv('PGPASSWORD', 'D5o70r8Y19zhQI43FLCv2RSjuGpZm6xH'),
             'HOST': os.getenv('PGHOST', '91.98.18.217'),
             'PORT': os.getenv('PGPORT', '32467'),
-            'OPTIONS': {
-                'options': '-c search_path=business,public'
-            },
+            'OPTIONS': {'options': '-c search_path=business,public'},
         },
     }
 
@@ -200,7 +195,7 @@ MEDIA_ROOT = BASE_DIR / 'media'
 CORS_ALLOW_CREDENTIALS = True
 
 # Set CORS_ALLOW_ALL_ORIGINS=true in the environment if you want to allow any origin (dev only).
-CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "false").lower() == "true"
+CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'false').lower() == 'true'
 
 CORS_ALLOWED_ORIGINS = [
     # The admin/engineer UI's GitLab Pages home.  It is the origin
@@ -208,45 +203,44 @@ CORS_ALLOWED_ORIGINS = [
     # env var being set correctly: leaving it out is what made every browser
     # call fail while both services were healthy.  `EXTRA_CORS_ORIGINS`
     # below stays the mechanism for a host that moves.
-    "https://fibre-fe-98f8e0.gitlab.io",
-    "http://localhost:3000",
-    "http://localhost:8081",
-    "http://127.0.0.1:8081",
-
+    'https://fibre-fe-98f8e0.gitlab.io',
+    'http://localhost:3000',
+    'http://localhost:8081',
+    'http://127.0.0.1:8081',
 ]
 
 # Extra browser origins supplied at deploy time (comma-separated), so moving
 # the frontend to a new host needs an env var rather than a code change.
-CORS_ALLOWED_ORIGINS += [o.strip() for o in os.getenv("EXTRA_CORS_ORIGINS", "").split(",") if o.strip()]
+CORS_ALLOWED_ORIGINS += [
+    o.strip() for o in os.getenv('EXTRA_CORS_ORIGINS', '').split(',') if o.strip()
+]
 
 # Allow any https *.zeabur.app subdomain (future frontend/other services on
 # Zeabur).  Explicit origins above still take precedence for non-Zeabur domains.
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^https://[a-z0-9-]+\.zeabur\.app$",
+    r'^https://[a-z0-9-]+\.zeabur\.app$',
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     # Same origin as above: a cross-origin POST from the Pages UI is rejected
     # by CSRF before it reaches a view unless it is trusted here too.
-    "https://fibre-fe-98f8e0.gitlab.io",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:8081",
-
-  
+    'https://fibre-fe-98f8e0.gitlab.io',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:8081',
 ]
 
 # Extra CSRF-trusted origins at deploy time (comma-separated).
-CSRF_TRUSTED_ORIGINS += [o.strip() for o in os.getenv("EXTRA_CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()]
+CSRF_TRUSTED_ORIGINS += [
+    o.strip() for o in os.getenv('EXTRA_CSRF_TRUSTED_ORIGINS', '').split(',') if o.strip()
+]
 
 # REST Framework + JWT Config
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
-    'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.IsAuthenticated',
-    ),
+    'DEFAULT_PERMISSION_CLASSES': ('rest_framework.permissions.IsAuthenticated',),
 }
 
 SIMPLE_JWT = {

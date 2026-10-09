@@ -4,14 +4,14 @@
 # (ftth_approved_survey_versions / ftth_lld_runs / ftth_lld_layers) already
 # exist from when they lived in ``ftth_hld``. No database operations are run.
 
-import django.db.models.deletion
 import uuid
+
+import django.db.models.deletion
 from django.conf import settings
 from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
@@ -23,14 +23,34 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='ApprovedSurveyVersion',
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                (
+                    'id',
+                    models.UUIDField(
+                        default=uuid.uuid4, editable=False, primary_key=True, serialize=False
+                    ),
+                ),
                 ('version', models.CharField(max_length=32)),
                 ('hld_version', models.CharField(blank=True, default='', max_length=32)),
                 ('dataset', models.JSONField(default=dict)),
                 ('summary', models.JSONField(default=dict)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('created_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
-                ('ftth_project', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='approved_survey_versions', to='ftth_hld.ftthproject')),
+                (
+                    'created_by',
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    'ftth_project',
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name='approved_survey_versions',
+                        to='ftth_hld.ftthproject',
+                    ),
+                ),
             ],
             options={
                 'db_table': 'ftth_approved_survey_versions',
@@ -41,20 +61,60 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='LldRun',
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                (
+                    'id',
+                    models.UUIDField(
+                        default=uuid.uuid4, editable=False, primary_key=True, serialize=False
+                    ),
+                ),
                 ('lld_version', models.CharField(max_length=32)),
                 ('hld_version', models.CharField(blank=True, default='', max_length=32)),
                 ('algorithm_version', models.CharField(blank=True, default='', max_length=64)),
                 ('input_dataset_version', models.CharField(blank=True, default='', max_length=32)),
-                ('status', models.CharField(choices=[('running', 'Running'), ('completed', 'Completed'), ('failed', 'Failed')], default='running', max_length=20)),
+                (
+                    'status',
+                    models.CharField(
+                        choices=[
+                            ('running', 'Running'),
+                            ('completed', 'Completed'),
+                            ('failed', 'Failed'),
+                        ],
+                        default='running',
+                        max_length=20,
+                    ),
+                ),
                 ('outputs', models.IntegerField(blank=True, null=True)),
                 ('error_message', models.TextField(blank=True, default='')),
                 ('progress', models.IntegerField(default=0)),
                 ('validation', models.JSONField(default=dict)),
                 ('run_date', models.DateTimeField(auto_now_add=True)),
-                ('approved_survey_version', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='lld_runs', to='ftth_lld.approvedsurveyversion')),
-                ('ftth_project', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='lld_runs', to='ftth_hld.ftthproject')),
-                ('run_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
+                (
+                    'approved_survey_version',
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name='lld_runs',
+                        to='ftth_lld.approvedsurveyversion',
+                    ),
+                ),
+                (
+                    'ftth_project',
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name='lld_runs',
+                        to='ftth_hld.ftthproject',
+                    ),
+                ),
+                (
+                    'run_by',
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
                 'db_table': 'ftth_lld_runs',
@@ -64,13 +124,25 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='LldLayer',
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                (
+                    'id',
+                    models.UUIDField(
+                        default=uuid.uuid4, editable=False, primary_key=True, serialize=False
+                    ),
+                ),
                 ('name', models.CharField(max_length=255)),
                 ('geojson', models.JSONField(default=dict)),
                 ('feature_count', models.IntegerField(default=0)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
-                ('lld_run', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='layers', to='ftth_lld.lldrun')),
+                (
+                    'lld_run',
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name='layers',
+                        to='ftth_lld.lldrun',
+                    ),
+                ),
             ],
             options={
                 'db_table': 'ftth_lld_layers',

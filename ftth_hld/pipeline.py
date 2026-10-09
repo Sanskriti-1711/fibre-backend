@@ -18,10 +18,8 @@ import re
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
-from typing import Optional
 
 import requests
-
 from django.conf import settings
 
 from .config import (
@@ -29,7 +27,6 @@ from .config import (
     DESIGN_GEOJSON_FILES,
     DESIGN_PACKAGE_FILES,
     FTTH_ENGINE_URL,
-    STAGES,
     SURVEY_GEOJSON_FILES,
     SURVEY_PACKAGE_FILES,
 )
@@ -39,7 +36,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Where local copies of results are cached
 # ---------------------------------------------------------------------------
-HOST_OUTPUTS_DIR = settings.MEDIA_ROOT / "ftth_outputs"
+HOST_OUTPUTS_DIR = settings.MEDIA_ROOT / 'ftth_outputs'
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -50,24 +47,24 @@ _ENGINE = FTTH_ENGINE_URL
 
 def _engine_url(path: str) -> str:
     """Build an absolute URL for the FastAPI engine."""
-    return f"{_ENGINE}{path}"
+    return f'{_ENGINE}{path}'
 
 
 def _read_status(project_id):
     """Read locally-cached status JSON. Returns None if missing."""
-    path = HOST_OUTPUTS_DIR / project_id / "status.json"
+    path = HOST_OUTPUTS_DIR / project_id / 'status.json'
     if path.exists():
         try:
             return json.loads(path.read_text())
         except Exception as exc:
-            logger.warning("Corrupt status.json for %s: %s", project_id, exc)
+            logger.warning('Corrupt status.json for %s: %s', project_id, exc)
     return None
 
 
 def _write_status(data):
     """Cache a status dict to disk (for faster local reads)."""
-    project_id = data.get("project_id", "unknown")
-    path = HOST_OUTPUTS_DIR / project_id / "status.json"
+    project_id = data.get('project_id', 'unknown')
+    path = HOST_OUTPUTS_DIR / project_id / 'status.json'
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, default=str))
 
@@ -77,10 +74,15 @@ def _write_status(data):
 # ======================================================================
 
 
-def run_pipeline(excel_path: str, roads_path: str,
-                 project_id: str = None, name: str = "",
-                 poly_method: int = 3, brownfield_path: str = None,
-                 osm_layer_paths: dict = None) -> dict:
+def run_pipeline(
+    excel_path: str,
+    roads_path: str,
+    project_id: str = None,
+    name: str = '',
+    poly_method: int = 3,
+    brownfield_path: str = None,
+    osm_layer_paths: dict = None,
+) -> dict:
     """
     Upload files to the FastAPI engine and start a pipeline run.
 
@@ -96,44 +98,48 @@ def run_pipeline(excel_path: str, roads_path: str,
     Returns the JSON response from the engine (which includes
     ``project_id``, ``status``, etc.).
     """
-    url = _engine_url("/ftth/hld/run")
+    url = _engine_url('/ftth/hld/run')
 
-    with open(excel_path, "rb") as ef, open(roads_path, "rb") as rf:
+    with open(excel_path, 'rb') as ef, open(roads_path, 'rb') as rf:
         files = {
-            "excel": (Path(excel_path).name, ef, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-            "roads": (Path(roads_path).name, rf, "application/octet-stream"),
+            'excel': (
+                Path(excel_path).name,
+                ef,
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ),
+            'roads': (Path(roads_path).name, rf, 'application/octet-stream'),
         }
         if brownfield_path:
-            files["brownfield"] = (
+            files['brownfield'] = (
                 Path(brownfield_path).name,
-                open(brownfield_path, "rb"),
-                "application/octet-stream",
+                open(brownfield_path, 'rb'),
+                'application/octet-stream',
             )
         _osm_open = []
         for key, path in (osm_layer_paths or {}).items():
             if path:
-                files[key] = (Path(path).name, open(path, "rb"), "application/octet-stream")
+                files[key] = (Path(path).name, open(path, 'rb'), 'application/octet-stream')
                 _osm_open.append(key)
-        data = {"poly_method": str(poly_method)}
+        data = {'poly_method': str(poly_method)}
         if name:
-            data["name"] = name
+            data['name'] = name
         if project_id:
-            data["project_id"] = project_id
+            data['project_id'] = project_id
 
         resp = requests.post(url, files=files, data=data, timeout=120)
-        if "brownfield" in files:
-            files["brownfield"][1].close()
+        if 'brownfield' in files:
+            files['brownfield'][1].close()
         for key in _osm_open:
             files[key][1].close()
 
     if resp.status_code not in (200, 201, 202):
-        detail = "Unknown error"
+        detail = 'Unknown error'
         try:
             body = resp.json()
-            detail = body.get("detail") or body.get("message") or str(body)
+            detail = body.get('detail') or body.get('message') or str(body)
         except Exception:
             detail = resp.text[:500]
-        raise RuntimeError(f"Engine returned {resp.status_code}: {detail}")
+        raise RuntimeError(f'Engine returned {resp.status_code}: {detail}')
 
     result = resp.json()
 
@@ -163,14 +169,15 @@ def _engine_detail(resp) -> str:
     try:
         body = resp.json()
     except Exception:
-        return resp.text[:500] or "Unknown engine error"
+        return resp.text[:500] or 'Unknown engine error'
     if isinstance(body, dict):
-        return body.get("detail") or body.get("message") or str(body)
+        return body.get('detail') or body.get('message') or str(body)
     return str(body)
 
 
-def _area_payload(area: str = "", country: str = "", city: str = "",
-                  postcode: str = "", area_name: str = "") -> dict:
+def _area_payload(
+    area: str = '', country: str = '', city: str = '', postcode: str = '', area_name: str = ''
+) -> dict:
     """Structured area inputs for the engine, with the empty parts omitted.
 
     The parts are forwarded as given rather than joined into a label here: the
@@ -178,18 +185,29 @@ def _area_payload(area: str = "", country: str = "", city: str = "",
     about how "12105" plus "Berlin" becomes a search string.
     """
     payload: dict = {}
-    for key, value in (("area", area), ("country", country), ("city", city),
-                       ("postcode", postcode), ("area_name", area_name)):
-        text = str(value or "").strip()
+    for key, value in (
+        ('area', area),
+        ('country', country),
+        ('city', city),
+        ('postcode', postcode),
+        ('area_name', area_name),
+    ):
+        text = str(value or '').strip()
         if text:
             payload[key] = text
     return payload
 
 
-def resolve_area(area: str = "", boundary_only: bool = False,
-                 max_premises: int | None = None, timeout: int | None = None,
-                 country: str = "", city: str = "",
-                 postcode: str = "", area_name: str = "") -> dict:
+def resolve_area(
+    area: str = '',
+    boundary_only: bool = False,
+    max_premises: int | None = None,
+    timeout: int | None = None,
+    country: str = '',
+    city: str = '',
+    postcode: str = '',
+    area_name: str = '',
+) -> dict:
     """Area -> boundary, and (unless ``boundary_only``) its premise counts.
 
     Resolving the boundary is one Nominatim call.  The counts additionally need
@@ -206,23 +224,21 @@ def resolve_area(area: str = "", boundary_only: bool = False,
     15 minutes, so the default is now 40.
     """
     if timeout is None:
-        timeout = int(os.environ.get("FTTH_RESOLVE_TIMEOUT", "2400"))
+        timeout = int(os.environ.get('FTTH_RESOLVE_TIMEOUT', '2400'))
     payload: dict = _area_payload(area, country, city, postcode, area_name)
-    payload["boundary_only"] = bool(boundary_only)
+    payload['boundary_only'] = bool(boundary_only)
     if max_premises:
-        payload["max_premises"] = int(max_premises)
+        payload['max_premises'] = int(max_premises)
     try:
-        resp = requests.post(
-            _engine_url("/ftth/hld/resolve-area"), json=payload, timeout=timeout
-        )
+        resp = requests.post(_engine_url('/ftth/hld/resolve-area'), json=payload, timeout=timeout)
     except requests.RequestException as exc:
-        raise EngineError(502, f"Engine unreachable: {exc}") from exc
+        raise EngineError(502, f'Engine unreachable: {exc}') from exc
     if resp.status_code != 200:
         raise EngineError(resp.status_code, _engine_detail(resp))
     return resp.json()
 
 
-def get_area_fetch(area: str = "", bbox: str = "") -> dict:
+def get_area_fetch(area: str = '', bbox: str = '') -> dict:
     """What the engine's OSM download for an area is doing, for a progress poll.
 
     Read-only and cheap: it never writes to the database, so the page can poll
@@ -230,23 +246,27 @@ def get_area_fetch(area: str = "", bbox: str = "") -> dict:
     """
     params = {}
     if area:
-        params["area"] = area
+        params['area'] = area
     if bbox:
-        params["bbox"] = bbox
+        params['bbox'] = bbox
     try:
-        resp = requests.get(
-            _engine_url("/ftth/hld/area-fetch"), params=params, timeout=30
-        )
+        resp = requests.get(_engine_url('/ftth/hld/area-fetch'), params=params, timeout=30)
     except requests.RequestException as exc:
-        logger.warning("Engine unreachable for area-fetch: %s", exc)
-        return {"state": "unavailable", "label": "Could not reach the engine", "fetching": False}
+        logger.warning('Engine unreachable for area-fetch: %s', exc)
+        return {'state': 'unavailable', 'label': 'Could not reach the engine', 'fetching': False}
     if resp.status_code != 200:
-        return {"state": "unavailable", "label": "Could not reach the engine", "fetching": False}
+        return {'state': 'unavailable', 'label': 'Could not reach the engine', 'fetching': False}
     return resp.json()
 
 
-def get_input_layer(area: str, layer: str, country: str = "", city: str = "",
-                    postcode: str = "", area_name: str = "") -> dict:
+def get_input_layer(
+    area: str,
+    layer: str,
+    country: str = '',
+    city: str = '',
+    postcode: str = '',
+    area_name: str = '',
+) -> dict:
     """Fetch one complete OSM/HLD input layer for the pre-run review map.
 
     The 300 s timeout here was another reason a cold area showed a boundary and
@@ -256,24 +276,31 @@ def get_input_layer(area: str, layer: str, country: str = "", city: str = "",
     the area actually needs — up to the same 40 minutes the preview allows.
     """
     payload = _area_payload(area, country, city, postcode, area_name)
-    payload["layer"] = layer
+    payload['layer'] = layer
     try:
         resp = requests.post(
-            _engine_url("/ftth/hld/input-layers"),
+            _engine_url('/ftth/hld/input-layers'),
             json=payload,
-            timeout=int(os.environ.get("FTTH_INPUT_LAYER_TIMEOUT", "2400")),
+            timeout=int(os.environ.get('FTTH_INPUT_LAYER_TIMEOUT', '2400')),
         )
     except requests.RequestException as exc:
-        raise EngineError(502, f"Engine unreachable: {exc}") from exc
+        raise EngineError(502, f'Engine unreachable: {exc}') from exc
     if resp.status_code != 200:
         raise EngineError(resp.status_code, _engine_detail(resp))
     return resp.json()
 
 
-def run_from_area(area: str, project_id: str, name: str = "",
-                  poly_method: int = 3, country: str = "", city: str = "",
-                  postcode: str = "", area_name: str = "",
-                  brownfield_path: str = None) -> dict:
+def run_from_area(
+    area: str,
+    project_id: str,
+    name: str = '',
+    poly_method: int = 3,
+    country: str = '',
+    city: str = '',
+    postcode: str = '',
+    area_name: str = '',
+    brownfield_path: str = None,
+) -> dict:
     """Start a full HLD run from an area.
 
     The engine generates the two input files from OSM and then runs the
@@ -288,30 +315,30 @@ def run_from_area(area: str, project_id: str, name: str = "",
     otherwise it stays JSON, so an existing JSON client is untouched.
     """
     payload: dict = _area_payload(area, country, city, postcode, area_name)
-    payload["project_id"] = project_id
-    payload["poly_method"] = int(poly_method)
+    payload['project_id'] = project_id
+    payload['poly_method'] = int(poly_method)
     if name:
-        payload["name"] = name
+        payload['name'] = name
     try:
         if brownfield_path:
-            with open(brownfield_path, "rb") as bf:
+            with open(brownfield_path, 'rb') as bf:
                 files = {
-                    "brownfield": (
+                    'brownfield': (
                         Path(brownfield_path).name,
                         bf,
-                        "application/octet-stream",
+                        'application/octet-stream',
                     )
                 }
                 resp = requests.post(
-                    _engine_url("/ftth/hld/run-from-area"),
-                    data=payload, files=files, timeout=120,
+                    _engine_url('/ftth/hld/run-from-area'),
+                    data=payload,
+                    files=files,
+                    timeout=120,
                 )
         else:
-            resp = requests.post(
-                _engine_url("/ftth/hld/run-from-area"), json=payload, timeout=120
-            )
+            resp = requests.post(_engine_url('/ftth/hld/run-from-area'), json=payload, timeout=120)
     except requests.RequestException as exc:
-        raise EngineError(502, f"Engine unreachable: {exc}") from exc
+        raise EngineError(502, f'Engine unreachable: {exc}') from exc
     if resp.status_code not in (200, 201, 202):
         raise EngineError(resp.status_code, _engine_detail(resp))
     result = resp.json()
@@ -322,12 +349,12 @@ def run_from_area(area: str, project_id: str, name: str = "",
 def osm_status() -> dict:
     """What the engine's local OSM store holds (reported, not required)."""
     try:
-        resp = requests.get(_engine_url("/ftth/hld/osm-status"), timeout=15)
+        resp = requests.get(_engine_url('/ftth/hld/osm-status'), timeout=15)
         if resp.status_code == 200:
             return resp.json()
     except requests.RequestException as exc:
-        logger.warning("Engine unreachable for osm-status: %s", exc)
-    return {"loaded": False, "unavailable": True}
+        logger.warning('Engine unreachable for osm-status: %s', exc)
+    return {'loaded': False, 'unavailable': True}
 
 
 def list_countries() -> list[dict]:
@@ -338,33 +365,32 @@ def list_countries() -> list[dict]:
     so a failure returns an empty list rather than raising.
     """
     try:
-        resp = requests.get(_engine_url("/ftth/hld/countries"), timeout=15)
+        resp = requests.get(_engine_url('/ftth/hld/countries'), timeout=15)
         if resp.status_code == 200:
-            return resp.json().get("countries") or []
+            return resp.json().get('countries') or []
     except requests.RequestException as exc:
-        logger.warning("Engine unreachable for countries: %s", exc)
+        logger.warning('Engine unreachable for countries: %s', exc)
     return []
 
 
-def suggest_places(q: str, country: str = "", limit: int = 8) -> dict:
+def suggest_places(q: str, country: str = '', limit: int = 8) -> dict:
     """City/town suggestions for the area input's city combobox.
 
     Best-effort: an empty list is a normal answer while someone is typing, so a
     failure is reported as ``reason: unavailable`` instead of a 502 that would
     break the page they are still filling in.
     """
-    params = {"q": q, "limit": int(limit)}
+    params = {'q': q, 'limit': int(limit)}
     if country:
-        params["country"] = country
+        params['country'] = country
     try:
-        resp = requests.get(_engine_url("/ftth/hld/places"), params=params, timeout=30)
+        resp = requests.get(_engine_url('/ftth/hld/places'), params=params, timeout=30)
         if resp.status_code == 200:
             return resp.json()
-        return {"query": q, "places": [], "reason": "engine_error",
-                "detail": _engine_detail(resp)}
+        return {'query': q, 'places': [], 'reason': 'engine_error', 'detail': _engine_detail(resp)}
     except requests.RequestException as exc:
-        logger.warning("Engine unreachable for places: %s", exc)
-        return {"query": q, "places": [], "reason": "unavailable"}
+        logger.warning('Engine unreachable for places: %s', exc)
+        return {'query': q, 'places': [], 'reason': 'unavailable'}
 
 
 def get_status(project_id: str) -> dict:
@@ -374,7 +400,7 @@ def get_status(project_id: str) -> dict:
     Falls back to the locally-cached status if the engine is unreachable
     (so the frontend still gets a response during brief network blips).
     """
-    url = _engine_url(f"/ftth/hld/results/{project_id}")
+    url = _engine_url(f'/ftth/hld/results/{project_id}')
 
     try:
         resp = requests.get(url, timeout=10)
@@ -383,7 +409,7 @@ def get_status(project_id: str) -> dict:
             _write_status(data)  # refresh local cache
             return data
     except requests.RequestException as exc:
-        logger.warning("Engine unreachable for status %s: %s", project_id, exc)
+        logger.warning('Engine unreachable for status %s: %s', project_id, exc)
 
     # Fallback: return locally-cached status
     cached = _read_status(project_id)
@@ -391,11 +417,11 @@ def get_status(project_id: str) -> dict:
         return cached
 
     return {
-        "project_id": project_id,
-        "status": "unknown",
-        "messages": [],
-        "layers": [],
-        "downloads": [],
+        'project_id': project_id,
+        'status': 'unknown',
+        'messages': [],
+        'layers': [],
+        'downloads': [],
     }
 
 
@@ -403,22 +429,22 @@ def get_layer_geojson(project_id: str, layer_name: str) -> bytes | None:
     """
     Fetch a pipeline layer as raw GeoJSON bytes from the FastAPI engine.
     """
-    url = _engine_url(f"/ftth/hld/results/{project_id}/layers/{layer_name}")
+    url = _engine_url(f'/ftth/hld/results/{project_id}/layers/{layer_name}')
 
     try:
         resp = requests.get(url, timeout=30)
         if resp.status_code == 200:
             return resp.content
     except requests.RequestException as exc:
-        logger.warning("Engine unreachable for layer %s/%s: %s",
-                       project_id, layer_name, exc)
+        logger.warning('Engine unreachable for layer %s/%s: %s', project_id, layer_name, exc)
 
     # Fallback: try locally-cached GeoJSON
     from .config import LAYER_NAME_MAP
+
     entry = LAYER_NAME_MAP.get(layer_name.lower())
     if entry:
         stem = entry[0]
-        host_geojson = HOST_OUTPUTS_DIR / project_id / f"{stem}.geojson"
+        host_geojson = HOST_OUTPUTS_DIR / project_id / f'{stem}.geojson'
         if host_geojson.exists():
             return host_geojson.read_bytes()
 
@@ -437,58 +463,59 @@ def get_trench_design(project_id: str, include_layers: bool = True) -> dict | No
     map cannot draw — every layer is reprojected to WGS84 here, the same way the
     pipeline layers are, so MapLibre renders it at the right place.
     """
-    url = _engine_url(f"/ftth/hld/results/{project_id}/design")
+    url = _engine_url(f'/ftth/hld/results/{project_id}/design')
     try:
         resp = requests.get(
-            url, params={"layers": "true" if include_layers else "false"},
+            url,
+            params={'layers': 'true' if include_layers else 'false'},
             timeout=180,
         )
         if resp.status_code != 200:
-            logger.warning("Engine design payload %s -> HTTP %s",
-                           project_id, resp.status_code)
+            logger.warning('Engine design payload %s -> HTTP %s', project_id, resp.status_code)
             return None
         data = resp.json()
     except (requests.RequestException, ValueError) as exc:
-        logger.warning("Engine unreachable for design %s: %s", project_id, exc)
+        logger.warning('Engine unreachable for design %s: %s', project_id, exc)
         return None
 
-    layers = data.get("layers") or {}
-    source_crs = data.get("crs") or DEFAULT_SOURCE_CRS
+    layers = data.get('layers') or {}
+    source_crs = data.get('crs') or DEFAULT_SOURCE_CRS
     for name, layer in layers.items():
-        geojson = layer.get("geojson") if isinstance(layer, dict) else None
-        if not isinstance(geojson, dict) or not geojson.get("features"):
+        geojson = layer.get('geojson') if isinstance(layer, dict) else None
+        if not isinstance(geojson, dict) or not geojson.get('features'):
             continue
         # _detect_crs reads the GeoJSON `crs` member; the designer's files do
         # not carry one, so stamp the CRS the engine reported.
-        geojson.setdefault("crs", {
-            "type": "name", "properties": {"name": source_crs},
-        })
+        geojson.setdefault(
+            'crs',
+            {
+                'type': 'name',
+                'properties': {'name': source_crs},
+            },
+        )
         try:
-            layer["geojson"] = json.loads(
-                _reproject_geojson(json.dumps(geojson).encode("utf-8"))
-            )
+            layer['geojson'] = json.loads(_reproject_geojson(json.dumps(geojson).encode('utf-8')))
         except Exception as exc:  # noqa: BLE001 — keep the run usable
-            logger.warning("Design layer %s/%s not reprojected: %s",
-                           project_id, name, exc)
+            logger.warning('Design layer %s/%s not reprojected: %s', project_id, name, exc)
     if layers:
-        data["map_crs"] = "EPSG:4326"
+        data['map_crs'] = 'EPSG:4326'
     return data
 
 
 def run_trench_design(project_id: str, force: bool = False) -> dict | None:
     """Start (or re-run) the trench designer for a project on the engine."""
-    url = _engine_url(f"/ftth/hld/design/{project_id}")
+    url = _engine_url(f'/ftth/hld/design/{project_id}')
     try:
         resp = requests.post(
-            url, params={"force": "true" if force else "false"}, timeout=60,
+            url,
+            params={'force': 'true' if force else 'false'},
+            timeout=60,
         )
         if resp.status_code in (200, 202):
             return resp.json()
-        logger.warning("Engine design run %s -> HTTP %s", project_id,
-                       resp.status_code)
+        logger.warning('Engine design run %s -> HTTP %s', project_id, resp.status_code)
     except requests.RequestException as exc:
-        logger.warning("Engine unreachable to start design %s: %s",
-                       project_id, exc)
+        logger.warning('Engine unreachable to start design %s: %s', project_id, exc)
     return None
 
 
@@ -503,25 +530,23 @@ def persist_layer(project_id: str, layer_name: str, geojson_data: dict) -> int:
     Returns the feature count persisted. Safely no-ops if the project is not
     tracked by Django (e.g. the engine returned data for an unknown run).
     """
-    from .models import FtthProject, FtthLayer
+    from .models import FtthLayer, FtthProject
 
     ftth = FtthProject.objects.filter(pk=project_id).first()
     if ftth is None:
         return 0
-    features = (
-        geojson_data.get("features", []) if isinstance(geojson_data, dict) else []
-    )
+    features = geojson_data.get('features', []) if isinstance(geojson_data, dict) else []
     # ── Assign human-readable feature_id: <layer>-001, <layer>-002, … ──
     for idx, feat in enumerate(features, start=1):
-        props = feat.get("properties") or {}
-        if not props.get("feature_id"):
-            props["feature_id"] = "%s-%03d" % (layer_name, idx)
-            feat["properties"] = props
+        props = feat.get('properties') or {}
+        if not props.get('feature_id'):
+            props['feature_id'] = '%s-%03d' % (layer_name, idx)
+            feat['properties'] = props
     count = len(features)
     FtthLayer.objects.update_or_create(
         ftth_project=ftth,
         name=layer_name,
-        defaults={"geojson": geojson_data, "feature_count": count},
+        defaults={'geojson': geojson_data, 'feature_count': count},
     )
     return count
 
@@ -544,18 +569,18 @@ def backfill_feature_ids(project_id: str) -> int:
         fc = layer_obj.geojson
         if not isinstance(fc, dict):
             continue
-        features = fc.get("features", [])
+        features = fc.get('features', [])
         updated = False
         for idx, feat in enumerate(features, start=1):
-            props = feat.get("properties") or {}
-            if not props.get("feature_id"):
-                props["feature_id"] = "%s-%03d" % (layer_obj.name, idx)
-                feat["properties"] = props
+            props = feat.get('properties') or {}
+            if not props.get('feature_id'):
+                props['feature_id'] = '%s-%03d' % (layer_obj.name, idx)
+                feat['properties'] = props
                 total_updated += 1
                 updated = True
         if updated:
             layer_obj.geojson = fc
-            layer_obj.save(update_fields=["geojson"])
+            layer_obj.save(update_fields=['geojson'])
 
     return total_updated
 
@@ -572,15 +597,11 @@ def sync_project_layers(project_id: str, layer_names=None) -> dict:
     if layer_names is None:
         status_data = get_status(project_id)
         layer_names = [
-            (l.get("name") or "").lower()
-            for l in status_data.get("layers", [])
-            if l.get("name")
+            (l.get('name') or '').lower() for l in status_data.get('layers', []) if l.get('name')
         ]
     counts = {}
     for name in layer_names:
-        if FtthLayer.objects.filter(
-            ftth_project__project_id=project_id, name=name
-        ).exists():
+        if FtthLayer.objects.filter(ftth_project__project_id=project_id, name=name).exists():
             continue
         try:
             raw = get_layer_geojson(project_id, name)
@@ -598,15 +619,13 @@ def sync_project_layers(project_id: str, layer_names=None) -> dict:
 
 def get_surface_ai_review(project_id: str) -> dict | None:
     """Read the separate surface-AI review report from the engine, if present."""
-    url = _engine_url(
-        f"/ftth/hld/results/{quote(str(project_id), safe='')}/surface-ai-review"
-    )
+    url = _engine_url(f"/ftth/hld/results/{quote(str(project_id), safe='')}/surface-ai-review")
     try:
         resp = requests.get(url, timeout=30)
         if resp.status_code == 200:
             return resp.json()
     except (requests.RequestException, ValueError) as exc:
-        logger.warning("Could not load surface AI review for %s: %s", project_id, exc)
+        logger.warning('Could not load surface AI review for %s: %s', project_id, exc)
     return None
 
 
@@ -616,11 +635,20 @@ def get_surface_ai_review(project_id: str) -> dict | None:
 SURFACE_CLASSIFY_TIMEOUT_SECONDS = 300
 
 
-def classify_surface_at_point(project_id: str, coordinates, crs: str = "EPSG:4326",
-                              length_m=None, bearing=None, span_id=None,
-                              coordinates_crs=None, include_imagery=False,
-                              claimed_surface=None, geometry_reason=None,
-                              geometry_confidence=None, known_share=None) -> dict:
+def classify_surface_at_point(
+    project_id: str,
+    coordinates,
+    crs: str = 'EPSG:4326',
+    length_m=None,
+    bearing=None,
+    span_id=None,
+    coordinates_crs=None,
+    include_imagery=False,
+    claimed_surface=None,
+    geometry_reason=None,
+    geometry_confidence=None,
+    known_share=None,
+) -> dict:
     """Classify the surface at one clicked point or along one span (advisory only).
 
     ``coordinates`` is a point ``[x, y]`` for a map click, or a span's own route
@@ -632,41 +660,37 @@ def classify_surface_at_point(project_id: str, coordinates, crs: str = "EPSG:432
     unparseable JSON) is a normal 200 body.
     """
     url = _engine_url(
-        f"/ftth/hld/results/{quote(str(project_id), safe='')}"
-        "/surface-ai-review/classify"
+        f"/ftth/hld/results/{quote(str(project_id), safe='')}" "/surface-ai-review/classify"
     )
     payload = {
-        "coordinates": coordinates,
-        "crs": crs or "EPSG:4326",
+        'coordinates': coordinates,
+        'crs': crs or 'EPSG:4326',
     }
     for key, value in (
-        ("span_id", span_id), ("coordinates_crs", coordinates_crs),
-        ("length_m", length_m), ("bearing", bearing),
-        ("claimed_surface", claimed_surface),
-        ("geometry_reason", geometry_reason),
-        ("geometry_confidence", geometry_confidence),
-        ("known_share", known_share),
+        ('span_id', span_id),
+        ('coordinates_crs', coordinates_crs),
+        ('length_m', length_m),
+        ('bearing', bearing),
+        ('claimed_surface', claimed_surface),
+        ('geometry_reason', geometry_reason),
+        ('geometry_confidence', geometry_confidence),
+        ('known_share', known_share),
     ):
         if value is not None:
             payload[key] = value
     if include_imagery:
-        payload["include_imagery"] = True
+        payload['include_imagery'] = True
     try:
-        resp = requests.post(url, json=payload,
-                             timeout=SURFACE_CLASSIFY_TIMEOUT_SECONDS)
+        resp = requests.post(url, json=payload, timeout=SURFACE_CLASSIFY_TIMEOUT_SECONDS)
     except requests.RequestException as exc:
-        logger.warning("Surface point classify failed for %s: %s", project_id, exc)
-        raise EngineError(
-            502, "The engine could not complete the surface review."
-        ) from exc
+        logger.warning('Surface point classify failed for %s: %s', project_id, exc)
+        raise EngineError(502, 'The engine could not complete the surface review.') from exc
     if resp.status_code != 200:
         raise EngineError(resp.status_code, _engine_detail(resp))
     try:
         return resp.json()
     except ValueError as exc:
-        raise EngineError(
-            502, "The engine returned an unreadable surface review."
-        ) from exc
+        raise EngineError(502, 'The engine returned an unreadable surface review.') from exc
 
 
 # An imagery preview fetches one patch and never calls the model, so it is bounded
@@ -683,48 +707,39 @@ def preview_surface_imagery(project_id: str, payload: dict) -> dict:
     is forwarded as-is.
     """
     url = _engine_url(
-        f"/ftth/hld/results/{quote(str(project_id), safe='')}"
-        "/surface-ai-review/imagery"
+        f"/ftth/hld/results/{quote(str(project_id), safe='')}" "/surface-ai-review/imagery"
     )
     try:
-        resp = requests.post(url, json=payload,
-                             timeout=SURFACE_IMAGERY_TIMEOUT_SECONDS)
+        resp = requests.post(url, json=payload, timeout=SURFACE_IMAGERY_TIMEOUT_SECONDS)
     except requests.RequestException as exc:
-        logger.warning("Surface imagery preview failed for %s: %s", project_id, exc)
-        raise EngineError(
-            502, "The engine could not fetch the surface imagery."
-        ) from exc
+        logger.warning('Surface imagery preview failed for %s: %s', project_id, exc)
+        raise EngineError(502, 'The engine could not fetch the surface imagery.') from exc
     if resp.status_code != 200:
         raise EngineError(resp.status_code, _engine_detail(resp))
     try:
         return resp.json()
     except ValueError as exc:
-        raise EngineError(
-            502, "The engine returned an unreadable imagery preview."
-        ) from exc
+        raise EngineError(502, 'The engine returned an unreadable imagery preview.') from exc
 
 
 def get_download_file(project_id: str, file_path: str) -> bytes | None:
     """
     Download an output file from the FastAPI engine.
     """
-    if not file_path or "\\" in file_path or ".." in Path(file_path).parts:
+    if not file_path or '\\' in file_path or '..' in Path(file_path).parts:
         return None
     clean_path = Path(file_path)
     if clean_path.is_absolute():
         return None
     safe_path = clean_path.as_posix()
-    url = _engine_url(
-        f"/ftth/hld/download/{project_id}/{quote(safe_path, safe='/')}"
-    )
+    url = _engine_url(f"/ftth/hld/download/{project_id}/{quote(safe_path, safe='/')}")
 
     try:
         resp = requests.get(url, timeout=60)
         if resp.status_code == 200:
             return resp.content
     except requests.RequestException as exc:
-        logger.warning("Engine unreachable for download %s/%s: %s",
-                       project_id, file_path, exc)
+        logger.warning('Engine unreachable for download %s/%s: %s', project_id, file_path, exc)
 
     # Fallback: try locally-cached file
     host_file = HOST_OUTPUTS_DIR / project_id / safe_path
@@ -740,7 +755,7 @@ def get_download_file(project_id: str, file_path: str) -> bytes | None:
 
 # Regex to extract the EPSG code from a GeoJSON ``crs`` field like
 # ``urn:ogc:def:crs:EPSG::25833`` or ``EPSG:25833``.
-_EPSG_RE = re.compile(r"EPSG(?::|::|/)(\d+)", re.IGNORECASE)
+_EPSG_RE = re.compile(r'EPSG(?::|::|/)(\d+)', re.IGNORECASE)
 
 
 def _detect_crs(geojson: dict) -> str:
@@ -753,16 +768,16 @@ def _detect_crs(geojson: dict) -> str:
     lon/lat datum as EPSG:4326, so it is normalized to ``EPSG:4326`` here
     to avoid a double-reprojection that would garble every coordinate.
     """
-    crs = geojson.get("crs")
+    crs = geojson.get('crs')
     if crs and isinstance(crs, dict):
-        name = str(crs.get("properties", {}).get("name", ""))
+        name = str(crs.get('properties', {}).get('name', ''))
         upper = name.upper()
         # OGC CRS84 / WGS84 / EPSG:4326 are all already lon/lat WGS84.
-        if "CRS84" in upper or "WGS84" in upper or "EPSG:4326" in upper:
-            return "EPSG:4326"
+        if 'CRS84' in upper or 'WGS84' in upper or 'EPSG:4326' in upper:
+            return 'EPSG:4326'
         match = _EPSG_RE.search(name)
         if match:
-            return f"EPSG:{match.group(1)}"
+            return f'EPSG:{match.group(1)}'
     return DEFAULT_SOURCE_CRS
 
 
@@ -781,43 +796,44 @@ def _reproject_geojson(geojson_bytes: bytes) -> bytes:
         from pyproj import Transformer
     except ImportError:
         logger.warning(
-            "pyproj is not installed — GeoJSON will be bundled "
-            "WITHOUT reprojection. Coordinates may be wrong. "
-            "Install with: pip install pyproj"
+            'pyproj is not installed — GeoJSON will be bundled '
+            'WITHOUT reprojection. Coordinates may be wrong. '
+            'Install with: pip install pyproj'
         )
         return geojson_bytes
 
     try:
         data = json.loads(geojson_bytes)
     except json.JSONDecodeError as exc:
-        logger.error("Invalid GeoJSON for reprojection: %s", exc)
+        logger.error('Invalid GeoJSON for reprojection: %s', exc)
         return geojson_bytes  # pass through unchanged
 
     source_crs = _detect_crs(data)
 
     # If already WGS84, no reprojection needed
-    if source_crs.upper() in ("EPSG:4326", "WGS84"):
+    if source_crs.upper() in ('EPSG:4326', 'WGS84'):
         return geojson_bytes
 
-    transformer = Transformer.from_crs(source_crs, "EPSG:4326", always_xy=True)
-    features = data.get("features", [])
+    transformer = Transformer.from_crs(source_crs, 'EPSG:4326', always_xy=True)
+    features = data.get('features', [])
     reprojected = 0
 
     for feature in features:
-        geom = feature.get("geometry")
+        geom = feature.get('geometry')
         if not geom:
             continue
         _reproject_geometry(geom, transformer)
         reprojected += 1
 
     # Update / remove the CRS field — WGS84 is the GeoJSON default
-    data.pop("crs", None)
+    data.pop('crs', None)
 
     logger.info(
-        "Reprojected %d features from %s → EPSG:4326",
-        reprojected, source_crs,
+        'Reprojected %d features from %s → EPSG:4326',
+        reprojected,
+        source_crs,
     )
-    return json.dumps(data, ensure_ascii=False).encode("utf-8")
+    return json.dumps(data, ensure_ascii=False).encode('utf-8')
 
 
 def _reproject_coord(coord: list, transformer) -> list:
@@ -836,34 +852,33 @@ def _reproject_geometry(geom: dict, transformer) -> None:
     Recursively reproject all coordinate pairs in a GeoJSON geometry.
     Handles 2D and 3D coordinates. Modifies ``geom`` in place.
     """
-    gtype = geom.get("type")
-    coords = geom.get("coordinates")
+    gtype = geom.get('type')
+    coords = geom.get('coordinates')
     if coords is None:
         return
 
-    if gtype == "Point":
-        geom["coordinates"] = _reproject_coord(coords, transformer)
-    elif gtype in ("MultiPoint", "LineString"):
-        geom["coordinates"] = [
-            _reproject_coord(c, transformer) for c in coords
+    if gtype == 'Point':
+        geom['coordinates'] = _reproject_coord(coords, transformer)
+    elif gtype in ('MultiPoint', 'LineString'):
+        geom['coordinates'] = [_reproject_coord(c, transformer) for c in coords]
+    elif gtype in ('MultiLineString', 'Polygon'):
+        geom['coordinates'] = [[_reproject_coord(c, transformer) for c in ring] for ring in coords]
+    elif gtype == 'MultiPolygon':
+        geom['coordinates'] = [
+            [[_reproject_coord(c, transformer) for c in ring] for ring in poly] for poly in coords
         ]
-    elif gtype in ("MultiLineString", "Polygon"):
-        geom["coordinates"] = [
-            [_reproject_coord(c, transformer) for c in ring]
-            for ring in coords
-        ]
-    elif gtype == "MultiPolygon":
-        geom["coordinates"] = [
-            [[_reproject_coord(c, transformer) for c in ring] for ring in poly]
-            for poly in coords
-        ]
-    elif gtype == "GeometryCollection":
-        for sub in geom.get("geometries", []):
+    elif gtype == 'GeometryCollection':
+        for sub in geom.get('geometries', []):
             _reproject_geometry(sub, transformer)
 
 
-def _build_package_zip(project_id: str, gpkg_files: list, geojson_map: dict,
-                         label: str, extra_files: Optional[dict] = None) -> bytes:
+def _build_package_zip(
+    project_id: str,
+    gpkg_files: list,
+    geojson_map: dict,
+    label: str,
+    extra_files: dict | None = None,
+) -> bytes:
     """
     Build a ZIP of pipeline outputs fetched from the FastAPI engine.
 
@@ -879,7 +894,7 @@ def _build_package_zip(project_id: str, gpkg_files: list, geojson_map: dict,
     """
     zip_buffer = io.BytesIO()
 
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         files_added = 0
         extra_files = extra_files or {}
 
@@ -896,7 +911,7 @@ def _build_package_zip(project_id: str, gpkg_files: list, geojson_map: dict,
         for engine_fname, zip_fname in geojson_map.items():
             raw = get_download_file(project_id, engine_fname)
             if raw is None:
-                logger.warning("GeoJSON not found: %s/%s", project_id, engine_fname)
+                logger.warning('GeoJSON not found: %s/%s', project_id, engine_fname)
                 continue
             reprojected = _reproject_geojson(raw)
             zf.writestr(zip_fname, reprojected)
@@ -912,7 +927,7 @@ def _build_package_zip(project_id: str, gpkg_files: list, geojson_map: dict,
     if files_added == 0:
         raise FileNotFoundError(
             f"No {label} files found for project '{project_id}'. "
-            "The pipeline may still be running."
+            'The pipeline may still be running.'
         )
 
     return zip_buffer.getvalue()
@@ -935,7 +950,7 @@ def generate_survey_package(project_id: str) -> bytes:
         project_id,
         SURVEY_PACKAGE_FILES,
         SURVEY_GEOJSON_FILES,
-        "survey",
+        'survey',
     )
 
 
@@ -956,14 +971,14 @@ def generate_design_package(project_id: str) -> bytes:
     Returns the raw zip bytes.
     """
     status = _read_status(project_id) or {}
-    downloads = status.get("downloads") or []
+    downloads = status.get('downloads') or []
 
     names = []
     for dl in downloads:
-        n = dl.get("name") if isinstance(dl, dict) else str(dl)
-        if not n or n.startswith(("inputs/", "brownfield/")):
+        n = dl.get('name') if isinstance(dl, dict) else str(dl)
+        if not n or n.startswith(('inputs/', 'brownfield/')):
             continue  # raw source inputs are not design deliverables
-        if n.lower().endswith(".geojson"):
+        if n.lower().endswith('.geojson'):
             # Known layers are added reprojected (WGS84) via the map
             # below; keep any brand-new geojson raw so nothing is lost.
             if n not in DESIGN_GEOJSON_FILES:
@@ -989,16 +1004,16 @@ def generate_design_package(project_id: str) -> bytes:
     try:
         from .boq import render_boq_xlsx
 
-        extra_files["BOQ.xlsx"] = render_boq_xlsx(project_id, sheets="boq")
-        extra_files["BOM.xlsx"] = render_boq_xlsx(project_id, sheets="bom")
+        extra_files['BOQ.xlsx'] = render_boq_xlsx(project_id, sheets='boq')
+        extra_files['BOM.xlsx'] = render_boq_xlsx(project_id, sheets='bom')
     except Exception as exc:
-        logger.warning("Could not generate BOQ/BOM for design package: %s", exc)
+        logger.warning('Could not generate BOQ/BOM for design package: %s', exc)
 
     return _build_package_zip(
         project_id,
         ordered,
         DESIGN_GEOJSON_FILES,
-        "design",
+        'design',
         extra_files=extra_files,
     )
 
@@ -1009,32 +1024,32 @@ def delete_project(project_id: str) -> dict:
 
     Returns the engine's response.
     """
-    url = _engine_url(f"/ftth/hld/projects/{project_id}")
+    url = _engine_url(f'/ftth/hld/projects/{project_id}')
 
     try:
         resp = requests.delete(url, timeout=30)
         if resp.status_code == 200:
             return resp.json()
-        detail = "Unknown error"
+        detail = 'Unknown error'
         try:
             body = resp.json()
-            detail = body.get("detail") or body.get("message") or str(body)
+            detail = body.get('detail') or body.get('message') or str(body)
         except Exception:
             detail = resp.text[:500]
-        return {"deleted": False, "detail": f"Engine returned {resp.status_code}: {detail}"}
+        return {'deleted': False, 'detail': f'Engine returned {resp.status_code}: {detail}'}
     except requests.RequestException as exc:
-        return {"deleted": False, "detail": f"Engine unreachable: {exc}"}
+        return {'deleted': False, 'detail': f'Engine unreachable: {exc}'}
 
 
 def list_projects() -> list[dict]:
     """List recent pipeline runs from the FastAPI engine."""
-    url = _engine_url("/ftth/projects")
+    url = _engine_url('/ftth/projects')
     try:
         resp = requests.get(url, timeout=10)
         if resp.status_code == 200:
             return resp.json()
     except requests.RequestException as exc:
-        logger.warning("Engine unreachable for project list: %s", exc)
+        logger.warning('Engine unreachable for project list: %s', exc)
     return []
 
 
@@ -1049,7 +1064,7 @@ def ftth_project_payloads(limit: int = 50) -> list[dict]:
     engine_data = {}
     try:
         for ep in list_projects():
-            pid = ep.get("project_id")
+            pid = ep.get('project_id')
             if pid:
                 engine_data[pid] = ep
     except Exception:
@@ -1069,9 +1084,7 @@ def ftth_project_payloads(limit: int = 50) -> list[dict]:
     # Most-recently-active first: updated_at moves on every re-run/poll,
     # so a re-run of an old project surfaces at the top instead of its
     # original creation-date position (fall back to created_at when equal).
-    for p in FtthProject.objects.all().order_by(
-        "-updated_at", "-created_at"
-    )[:limit]:
+    for p in FtthProject.objects.all().order_by('-updated_at', '-created_at')[:limit]:
         enriched = engine_data.get(p.project_id, {})
         copy = survey_copies.get(p.project_id)
         engineer = p.assigned_engineer
@@ -1079,38 +1092,47 @@ def ftth_project_payloads(limit: int = 50) -> list[dict]:
         if copy is not None:
             try:
                 from assignments.models import AssignmentJob
+
                 eng_rows = AssignmentJob.objects.filter(
                     project=copy,
                     scope=AssignmentJob.SCOPE_PROJECT,
-                ).select_related("assignee")
+                ).select_related('assignee')
                 for job in eng_rows:
-                    assigned_engineers.append({
-                        "id": str(job.assignee.id),
-                        "email": job.assignee.email,
-                        "full_name": job.assignee.full_name,
-                    })
+                    assigned_engineers.append(
+                        {
+                            'id': str(job.assignee.id),
+                            'email': job.assignee.email,
+                            'full_name': job.assignee.full_name,
+                        }
+                    )
             except Exception:
                 pass
-        data.append({
-            "project_id": p.project_id,
-            "name": p.name,
-            "status": enriched.get("status", p.status),
-            "progress": enriched.get("progress", p.progress),
-            "stage_name": enriched.get("stage_name", p.stage_name),
-            "excel_filename": p.excel_filename,
-            "roads_filename": p.roads_filename,
-            "created_at": p.created_at.isoformat(),
-            "updated_at": p.updated_at.isoformat(),
-            "downloads": enriched.get("downloads", []),
-            "layers": enriched.get("layers", []),
-            "assigned_engineer": {
-                "id": str(engineer.id),
-                "email": engineer.email,
-                "full_name": engineer.full_name,
-            } if engineer else None,
-            "assigned_engineers": assigned_engineers,
-            "assigned_at": p.assigned_at.isoformat() if p.assigned_at else None,
-            "survey_copy_project_id": str(copy.id) if copy else None,
-            "survey_status": copy.status if copy else None,
-        })
+        data.append(
+            {
+                'project_id': p.project_id,
+                'name': p.name,
+                'status': enriched.get('status', p.status),
+                'progress': enriched.get('progress', p.progress),
+                'stage_name': enriched.get('stage_name', p.stage_name),
+                'excel_filename': p.excel_filename,
+                'roads_filename': p.roads_filename,
+                'created_at': p.created_at.isoformat(),
+                'updated_at': p.updated_at.isoformat(),
+                'downloads': enriched.get('downloads', []),
+                'layers': enriched.get('layers', []),
+                'assigned_engineer': (
+                    {
+                        'id': str(engineer.id),
+                        'email': engineer.email,
+                        'full_name': engineer.full_name,
+                    }
+                    if engineer
+                    else None
+                ),
+                'assigned_engineers': assigned_engineers,
+                'assigned_at': p.assigned_at.isoformat() if p.assigned_at else None,
+                'survey_copy_project_id': str(copy.id) if copy else None,
+                'survey_status': copy.status if copy else None,
+            }
+        )
     return data

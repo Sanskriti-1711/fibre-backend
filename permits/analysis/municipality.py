@@ -20,25 +20,25 @@ def attribute_municipality(project_id: str) -> dict:
     so callers can record honest gaps — never an exception.
     """
     summary = {
-        "project_id": project_id,
-        "trenches": 0,
-        "resolved": 0,
-        "rows_updated": 0,
-        "layer_missing": False,
+        'project_id': project_id,
+        'trenches': 0,
+        'resolved': 0,
+        'rows_updated': 0,
+        'layer_missing': False,
     }
 
     with connection.cursor() as cur:
         cur.execute("SELECT to_regclass('gis.osm_admin_boundary')")
         if cur.fetchone()[0] is None:
-            summary["layer_missing"] = True
+            summary['layer_missing'] = True
             return summary
 
         cur.execute(
-            "SELECT count(*) FROM gis.trench_layer WHERE project_id = %s",
+            'SELECT count(*) FROM gis.trench_layer WHERE project_id = %s',
             [project_id],
         )
-        summary["trenches"] = int(cur.fetchone()[0])
-        if summary["trenches"] == 0:
+        summary['trenches'] = int(cur.fetchone()[0])
+        if summary['trenches'] == 0:
             return summary
 
         # Midpoint of each trench -> the smallest containing admin polygon
@@ -60,7 +60,7 @@ def attribute_municipality(project_id: str) -> dict:
         rows = cur.fetchall()
         if not rows:
             return summary
-        summary["resolved"] = len(rows)
+        summary['resolved'] = len(rows)
 
         # Persist onto trench properties (traceability, mirrors fclass).
         _update_trench_properties(cur, project_id, rows)
@@ -74,38 +74,39 @@ def attribute_municipality(project_id: str) -> dict:
         # only reflects the last page, so measure the affected rows up front.
         _pid = f"'{project_id}'"
         cur.execute(
-            "SELECT count(*) FROM business.ftth_permit_matrix pm "
-            f"WHERE pm.project_id = {_pid} "
+            'SELECT count(*) FROM business.ftth_permit_matrix pm '
+            f'WHERE pm.project_id = {_pid} '
             "  AND NULLIF(pm.municipality, '') IS NULL "
             "  AND split_part(pm.route_section, '#', 1) IN ("
-            "      SELECT t.id::text FROM gis.trench_layer t "
-            f"      WHERE t.project_id = {_pid})",
+            '      SELECT t.id::text FROM gis.trench_layer t '
+            f'      WHERE t.project_id = {_pid})',
         )
         blank_before = int(cur.fetchone()[0])
         try:
             from psycopg2.extras import execute_values
+
             execute_values(
                 cur,
-                "UPDATE business.ftth_permit_matrix pm "
-                "SET municipality = m.muni "
-                "FROM (VALUES %s) AS m(route_id, muni) "
-                f"WHERE pm.project_id = {_pid} "
+                'UPDATE business.ftth_permit_matrix pm '
+                'SET municipality = m.muni '
+                'FROM (VALUES %s) AS m(route_id, muni) '
+                f'WHERE pm.project_id = {_pid} '
                 "  AND split_part(pm.route_section, '#', 1) = m.route_id::text "
                 "  AND NULLIF(pm.municipality, '') IS NULL",
                 rows,
-                template="(%s::bigint, %s)",
+                template='(%s::bigint, %s)',
                 page_size=500,
             )
         except ImportError:  # pragma: no cover - psycopg2 always present
             cur.executemany(
-                "UPDATE business.ftth_permit_matrix pm "
-                "SET municipality = %s "
-                "WHERE pm.project_id = %s "
+                'UPDATE business.ftth_permit_matrix pm '
+                'SET municipality = %s '
+                'WHERE pm.project_id = %s '
                 "  AND split_part(pm.route_section, '#', 1) = %s "
                 "  AND NULLIF(pm.municipality, '') IS NULL",
                 [(muni, project_id, str(rid)) for rid, muni in rows],
             )
-        summary["rows_updated"] = blank_before
+        summary['rows_updated'] = blank_before
     return summary
 
 
@@ -114,22 +115,23 @@ def _update_trench_properties(cur, project_id: str, rows: list) -> None:
     _pid = f"'{project_id}'"
     try:
         from psycopg2.extras import execute_values
+
         execute_values(
             cur,
-            "UPDATE gis.trench_layer t "
-            "SET properties = t.properties "
+            'UPDATE gis.trench_layer t '
+            'SET properties = t.properties '
             "  || jsonb_build_object('municipality', COALESCE(m.muni, '')) "
-            "FROM (VALUES %s) AS m(id, muni) "
-            f"WHERE t.id = m.id AND t.project_id = {_pid}",
+            'FROM (VALUES %s) AS m(id, muni) '
+            f'WHERE t.id = m.id AND t.project_id = {_pid}',
             rows,
-            template="(%s::bigint, %s)",
+            template='(%s::bigint, %s)',
             page_size=500,
         )
     except ImportError:  # pragma: no cover - psycopg2 always present
         cur.executemany(
-            "UPDATE gis.trench_layer t "
-            "SET properties = t.properties "
+            'UPDATE gis.trench_layer t '
+            'SET properties = t.properties '
             "  || jsonb_build_object('municipality', COALESCE(%s, '')) "
-            "WHERE t.id = %s AND t.project_id = %s",
+            'WHERE t.id = %s AND t.project_id = %s',
             [(muni, rid, project_id) for rid, muni in rows],
         )

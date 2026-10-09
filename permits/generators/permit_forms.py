@@ -11,7 +11,7 @@ traceability footer (rule id + version + analysis timestamp).
 from __future__ import annotations
 
 import html as _html
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import data
@@ -19,21 +19,22 @@ from . import data
 # Bezirk templates are optional — the forms degrade gracefully when the
 # bezirke module is unavailable (tests / older checkouts).
 try:
+    from ..bezirke import SENMVKU as _SENMVKU  # type: ignore
+    from ..bezirke import bezirk_fee_note as _bezirk_fee_note  # type: ignore
     from ..bezirke import bezirk_header_html as _bezirk_header_html  # type: ignore
     from ..bezirke import get_bezirk as _get_bezirk  # type: ignore
-    from ..bezirke import bezirk_fee_note as _bezirk_fee_note  # type: ignore
-    from ..bezirke import SENMVKU as _SENMVKU  # type: ignore
+
     _HAS_BEZIRKE = True
 except ImportError:  # pragma: no cover
-    _bezirk_header_html = lambda *_a, **_kw: ""  # type: ignore
+    _bezirk_header_html = lambda *_a, **_kw: ''  # type: ignore
     _get_bezirk = lambda *_a, **_kw: None  # type: ignore
-    _bezirk_fee_note = lambda *_a, **_kw: ""  # type: ignore
+    _bezirk_fee_note = lambda *_a, **_kw: ''  # type: ignore
     _SENMVKU = {}  # type: ignore
     _HAS_BEZIRKE = False
 
 
 def _e(v: Any) -> str:
-    return _html.escape("" if v is None else str(v))
+    return _html.escape('' if v is None else str(v))
 
 
 def _evidence_rows(pm) -> list[tuple[str, str]]:
@@ -41,24 +42,24 @@ def _evidence_rows(pm) -> list[tuple[str, str]]:
     rows = []
     for key, val in ev.items():
         if isinstance(val, dict):
-            present = val.get("present")
-            value = val.get("value")
+            present = val.get('present')
+            value = val.get('value')
             if present and value is not None:
-                rows.append((key.replace("_", " ").title(), _e(value)))
+                rows.append((key.replace('_', ' ').title(), _e(value)))
             elif present:
-                rows.append((key.replace("_", " ").title(), "Recorded"))
+                rows.append((key.replace('_', ' ').title(), 'Recorded'))
             else:
-                rows.append((key.replace("_", " ").title(), "—"))
+                rows.append((key.replace('_', ' ').title(), '—'))
         else:
-            rows.append((key.replace("_", " ").title(), _e(val)))
+            rows.append((key.replace('_', ' ').title(), _e(val)))
     return rows
 
 
 def _form_page(pm, project_name: str, members: list | None = None) -> str:
     authority = pm.authority
     rule = pm.rule
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    status = pm.get_status_display() if hasattr(pm, "get_status_display") else str(pm.status)
+    now = datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')
+    status = pm.get_status_display() if hasattr(pm, 'get_status_display') else str(pm.status)
     members = members or []
 
     def field(label: str, value: str) -> str:
@@ -70,39 +71,48 @@ def _form_page(pm, project_name: str, members: list | None = None) -> str:
             f'{value}</td></tr>'
         )
 
-    group_label = pm.permit_group or "Unnamed section"
+    group_label = pm.permit_group or 'Unnamed section'
     # Bezirk contact block — shown only when the municipality matches a Berlin
     # Bezirk (e.g. Tempelhof-Schöneberg). Keeps the form honest and saves the
     # planner from looking up the office.
     try:
-        _bezirk_block = _bezirk_header_html(pm.municipality or "", authority.code if authority else "") if _HAS_BEZIRKE else ""
+        _bezirk_block = (
+            _bezirk_header_html(pm.municipality or '', authority.code if authority else '')
+            if _HAS_BEZIRKE
+            else ''
+        )
     except Exception:
-        _bezirk_block = ""
-    rows = "".join([
-        field("Project", _e(project_name)),
-        field("Project ID", _e(pm.project_id)),
-        field("Permit Type", _e(pm.permit_type)),
-        field("Route / Street", _e(group_label)),
-        field("Covered Sections", f"{len(members)}"),
-        field("Layer", _e(pm.layer)),
-        field("Municipality", _e(pm.municipality or "To be resolved")),
-        field("Authority", _e(authority.name if authority else "Unassigned")),
-        field("Authority Code", _e(authority.code if authority else "—")),
-        field("Required Level", _e(rule.required_level if rule else "")),
-        field("Status", _e(status)),
-        field("Readiness", f"{pm.readiness_pct}%"),
-        field("Conditions", _e(pm.conditions or "—")),
-        field("Comments", _e(pm.comments or "—")),
-    ])
+        _bezirk_block = ''
+    rows = ''.join(
+        [
+            field('Project', _e(project_name)),
+            field('Project ID', _e(pm.project_id)),
+            field('Permit Type', _e(pm.permit_type)),
+            field('Route / Street', _e(group_label)),
+            field('Covered Sections', f'{len(members)}'),
+            field('Layer', _e(pm.layer)),
+            field('Municipality', _e(pm.municipality or 'To be resolved')),
+            field('Authority', _e(authority.name if authority else 'Unassigned')),
+            field('Authority Code', _e(authority.code if authority else '—')),
+            field('Required Level', _e(rule.required_level if rule else '')),
+            field('Status', _e(status)),
+            field('Readiness', f'{pm.readiness_pct}%'),
+            field('Conditions', _e(pm.conditions or '—')),
+            field('Comments', _e(pm.comments or '—')),
+        ]
+    )
 
-    ev_rows = "".join(
-        f'<tr><td style="padding:4px 8px;border:1px solid #E5E7EB;font-size:12px;">'
-        f'{k}</td><td style="padding:4px 8px;border:1px solid #E5E7EB;font-size:12px;">'
-        f'{v}</td></tr>'
-        for k, v in _evidence_rows(pm)
-    ) or '<tr><td colspan="2" style="padding:6px 8px;font-size:12px;color:#6B7280;">No evidence recorded yet.</td></tr>'
+    ev_rows = (
+        ''.join(
+            f'<tr><td style="padding:4px 8px;border:1px solid #E5E7EB;font-size:12px;">'
+            f'{k}</td><td style="padding:4px 8px;border:1px solid #E5E7EB;font-size:12px;">'
+            f'{v}</td></tr>'
+            for k, v in _evidence_rows(pm)
+        )
+        or '<tr><td colspan="2" style="padding:6px 8px;font-size:12px;color:#6B7280;">No evidence recorded yet.</td></tr>'
+    )
 
-    member_rows = "".join(
+    member_rows = ''.join(
         f'<tr><td style="padding:4px 8px;border:1px solid #E5E7EB;font-size:12px;">'
         f'{_e(m.route_section)}</td>'
         f'<td style="padding:4px 8px;border:1px solid #E5E7EB;font-size:12px;">'
@@ -146,28 +156,31 @@ def application_forms(project_id: str, project_name: str) -> list[dict[str, Any]
     UTILITY_REUSE rows are informational and never get an application form.
     """
     rows = [
-        pm for pm in data.permit_rows(project_id)
-        if pm.rule and pm.rule.rule_id != "UTILITY_REUSE_001"
+        pm
+        for pm in data.permit_rows(project_id)
+        if pm.rule and pm.rule.rule_id != 'UTILITY_REUSE_001'
     ]
     groups: dict[tuple, list] = {}
     for pm in rows:
-        groups.setdefault((pm.rule_id, pm.permit_group or ""), []).append(pm)
+        groups.setdefault((pm.rule_id, pm.permit_group or ''), []).append(pm)
 
     forms = []
     for (rule_id, group), members in groups.items():
         head = members[0]
-        slug = (head.permit_type or "permit").lower().replace(" ", "_")
-        gslug = (group or "unnamed").lower().replace(" ", "_")[:48] or "unnamed"
-        forms.append({
-            "name": f"form_{slug}_{gslug}",
-            "kind": "FORM",
-            "filename": f"forms/{slug}_{gslug}.html",
-            "content": _form_page(head, project_name, members),
-            "description": (
-                f"Application form — {head.permit_type} ({group or 'unnamed'}, "
-                f"{len(members)} sections)"
-            ),
-        })
+        slug = (head.permit_type or 'permit').lower().replace(' ', '_')
+        gslug = (group or 'unnamed').lower().replace(' ', '_')[:48] or 'unnamed'
+        forms.append(
+            {
+                'name': f'form_{slug}_{gslug}',
+                'kind': 'FORM',
+                'filename': f'forms/{slug}_{gslug}.html',
+                'content': _form_page(head, project_name, members),
+                'description': (
+                    f"Application form — {head.permit_type} ({group or 'unnamed'}, "
+                    f"{len(members)} sections)"
+                ),
+            }
+        )
     return forms
 
 
@@ -183,35 +196,41 @@ def hld_permit_overview(project_id: str, project_name: str) -> dict[str, Any]:
     Uses DIN 5008 / German business-letter layout conventions.
     """
     rows = data.permit_rows(project_id)
-    now = datetime.now(timezone.utc).strftime("%d.%m.%Y, %H:%M")
+    now = datetime.now(UTC).strftime('%d.%m.%Y, %H:%M')
 
     # Summarize by permit type
     by_type: dict[str, dict[str, Any]] = {}
     for pm in rows:
-        ptype = pm.permit_type or "Unknown"
-        b = by_type.setdefault(ptype, {
-            "count": 0, "ready": 0, "streets": set(),
-            "authorities": set(), "evidence_missing": [],
-        })
-        b["count"] += 1
-        if pm.status == "READY" or pm.status == "APPROVED":
-            b["ready"] += 1
+        ptype = pm.permit_type or 'Unknown'
+        b = by_type.setdefault(
+            ptype,
+            {
+                'count': 0,
+                'ready': 0,
+                'streets': set(),
+                'authorities': set(),
+                'evidence_missing': [],
+            },
+        )
+        b['count'] += 1
+        if pm.status == 'READY' or pm.status == 'APPROVED':
+            b['ready'] += 1
         if pm.permit_group:
-            b["streets"].add(pm.permit_group)
+            b['streets'].add(pm.permit_group)
         if pm.authority:
-            b["authorities"].add(pm.authority.name)
+            b['authorities'].add(pm.authority.name)
         rule = pm.rule or {}
-        required = list(getattr(rule, "evidence_required", None) or [])
+        required = list(getattr(rule, 'evidence_required', None) or [])
         for key in required:
-            if not (pm.evidence or {}).get(key, {}).get("present"):
-                if key not in b["evidence_missing"]:
-                    b["evidence_missing"].append(key)
+            if not (pm.evidence or {}).get(key, {}).get('present'):
+                if key not in b['evidence_missing']:
+                    b['evidence_missing'].append(key)
 
-    type_rows = ""
+    type_rows = ''
     for ptype, b in sorted(by_type.items()):
         type_rows += (
             f'<tr><td style="padding:6px 8px;border:1px solid #CCC;font-size:12px;">'
-            f'{_e(ptype)}</td>'
+            f"{_e(ptype)}</td>"
             f'<td style="padding:6px 8px;border:1px solid #CCC;font-size:12px;text-align:center;">'
             f'{b["count"]}</td>'
             f'<td style="padding:6px 8px;border:1px solid #CCC;font-size:12px;text-align:center;">'
@@ -223,7 +242,7 @@ def hld_permit_overview(project_id: str, project_name: str) -> dict[str, Any]:
             f'{_e(", ".join(sorted(b["authorities"])[:3]))}'
             f'{"..." if len(b["authorities"]) > 3 else ""}</td>'
             f'{_e(", ".join(b["evidence_missing"][:5]) or chr(8212))}</td>'
-            f'</tr>'
+            f"</tr>"
         )
 
     content = f"""<!DOCTYPE html>
@@ -275,20 +294,18 @@ def hld_permit_overview(project_id: str, project_name: str) -> dict[str, Any]:
 </body></html>"""
 
     return {
-        "name": f"hld_permit_overview_{project_name[:32]}",
-        "kind": "FORM",
-        "filename": "forms/hld_permit_overview.html",
-        "content": content,
-        "description": (
-            f"HLD-Stufe Permitu00fcbersicht \u2013 {len(rows)} Genehmigungszeilen, "
-            f"{len(by_type)} Kategorien"
+        'name': f'hld_permit_overview_{project_name[:32]}',
+        'kind': 'FORM',
+        'filename': 'forms/hld_permit_overview.html',
+        'content': content,
+        'description': (
+            f'HLD-Stufe Permitu00fcbersicht \u2013 {len(rows)} Genehmigungszeilen, '
+            f'{len(by_type)} Kategorien'
         ),
     }
 
 
-def german_street_opening_form(
-    project_id: str, project_name: str
-) -> list[dict[str, Any]]:
+def german_street_opening_form(project_id: str, project_name: str) -> list[dict[str, Any]]:
     """German-standard street-opening permit (Aufbruchgenehmigung).
 
     One form per street-level ROAD permit group at LLD stage, patterned
@@ -298,28 +315,34 @@ def german_street_opening_form(
     surface/reinstatement, traffic impact, and a supporting-documents
     checklist.
     """
-    rows = [pm for pm in data.permit_rows(project_id)
-            if pm.permit_type == "Road Opening" and pm.rule]
+    rows = [
+        pm for pm in data.permit_rows(project_id) if pm.permit_type == 'Road Opening' and pm.rule
+    ]
     trench = data.trench_stats(project_id)
     groups: dict[tuple, list] = {}
     for pm in rows:
-        groups.setdefault((pm.permit_group or "Unnamed", pm.municipality or ""), []).append(pm)
+        groups.setdefault((pm.permit_group or 'Unnamed', pm.municipality or ''), []).append(pm)
 
     forms = []
-    now = datetime.now(timezone.utc).strftime("%d.%m.%Y")
+    now = datetime.now(UTC).strftime('%d.%m.%Y')
     for (street, municipality), members in groups.items():
         head = members[0]
         total_m = sum(
-            float((pm.evidence or {}).get("length_m", {}).get("value", 0) or 0)
-            for pm in members
-        ) or round(trench.get("total_length_m", 0) / max(len(groups), 1), 1)
+            float((pm.evidence or {}).get('length_m', {}).get('value', 0) or 0) for pm in members
+        ) or round(trench.get('total_length_m', 0) / max(len(groups), 1), 1)
 
         # Bezirk contact block for the Aufbruch form
         try:
-            _aufbruch_bezirk = _bezirk_header_html(municipality or "", head.authority.code if head.authority else "") if _HAS_BEZIRKE else ""
+            _aufbruch_bezirk = (
+                _bezirk_header_html(
+                    municipality or '', head.authority.code if head.authority else ''
+                )
+                if _HAS_BEZIRKE
+                else ''
+            )
         except Exception:
-            _aufbruch_bezirk = ""
-        section_rows = ""
+            _aufbruch_bezirk = ''
+        section_rows = ''
         for pm in members[:30]:
             section_rows += (
                 f'<tr><td style="padding:3px 6px;border:1px solid #CCC;font-size:11px;">'
@@ -431,15 +454,17 @@ def german_street_opening_form(
   Rechtlich unverbindlich \u2022 Vor Einreichung von einem Fachingenieur pru00fcfen lassen
 </p>
 </body></html>"""
-        gslug = street.lower().replace(" ", "_")[:40] or "unnamed"
-        forms.append({
-            "name": f"german_aufbruch_{gslug}",
-            "kind": "FORM",
-            "filename": f"forms/aufbruchgenehmigung_{gslug}.html",
-            "content": content,
-            "description": (
-                f"Aufbruchgenehmigung \u2013 {street} "
-                f"({len(members)} Abschnitte, {total_m:.0f} m)"
-            ),
-        })
+        gslug = street.lower().replace(' ', '_')[:40] or 'unnamed'
+        forms.append(
+            {
+                'name': f'german_aufbruch_{gslug}',
+                'kind': 'FORM',
+                'filename': f'forms/aufbruchgenehmigung_{gslug}.html',
+                'content': content,
+                'description': (
+                    f'Aufbruchgenehmigung \u2013 {street} '
+                    f'({len(members)} Abschnitte, {total_m:.0f} m)'
+                ),
+            }
+        )
     return forms

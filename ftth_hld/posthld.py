@@ -49,22 +49,22 @@ logger = logging.getLogger(__name__)
 # Ordered steps. The order is load-bearing: sections read the road attribution,
 # the matrix reads the sections, the package reads the matrix.
 STEP_ORDER = (
-    "layers",
-    "road_class",
-    "trench_sections",
-    "permit_matrix",
-    "permit_package",
+    'layers',
+    'road_class',
+    'trench_sections',
+    'permit_matrix',
+    'permit_package',
 )
 
 STEP_LABELS = {
-    "layers": "Sync HLD layers into the GIS database",
-    "road_class": "Attribute OSM road class onto the trench segments",
-    "trench_sections": "Expand trenches into street-attributed sections",
-    "permit_matrix": "Run the permit rule engine",
-    "permit_package": "Generate the preliminary permit package",
+    'layers': 'Sync HLD layers into the GIS database',
+    'road_class': 'Attribute OSM road class onto the trench segments',
+    'trench_sections': 'Expand trenches into street-attributed sections',
+    'permit_matrix': 'Run the permit rule engine',
+    'permit_package': 'Generate the preliminary permit package',
 }
 
-PACKAGE_PREFIX = "HLD detailed preliminary permit package"
+PACKAGE_PREFIX = 'HLD detailed preliminary permit package'
 
 # A worker that dies leaves its row ``running``; after this long the next poll
 # may claim it again. Generous: the road attribution alone is ~4 minutes.
@@ -74,6 +74,7 @@ STALE_SECONDS = 3600
 # ---------------------------------------------------------------------------
 # Guards
 # ---------------------------------------------------------------------------
+
 
 def _gis_relation(name: str) -> bool:
     """Does ``gis.<name>`` exist?
@@ -87,7 +88,7 @@ def _gis_relation(name: str) -> bool:
     """
     try:
         with connection.cursor() as cur:
-            cur.execute("SELECT to_regclass(%s)", ["gis." + name])
+            cur.execute('SELECT to_regclass(%s)', ['gis.' + name])
             return cur.fetchone()[0] is not None
     except Exception:  # noqa: BLE001
         return False
@@ -105,8 +106,8 @@ def trench_content_revision(project_id: str) -> str:
     table is absent or the project has no trenches, so the chain is safe to
     call on a fresh project and from a test database without the GIS schema.
     """
-    if not _gis_relation("trench_layer"):
-        return ""
+    if not _gis_relation('trench_layer'):
+        return ''
     try:
         with connection.cursor() as cur:
             cur.execute(
@@ -116,21 +117,21 @@ def trench_content_revision(project_id: str) -> str:
             )
             count, digest = cur.fetchone()
     except Exception:  # noqa: BLE001 - no gis schema / no table is not an error
-        return ""
+        return ''
     count = int(count or 0)
     if not count:
-        return ""
-    return "%d:%s" % (count, digest or "")
+        return ''
+    return '%d:%s' % (count, digest or '')
 
 
 def road_class_gaps(project_id: str) -> int:
     """Trench rows still missing a road class (``fclass``)."""
-    if not _gis_relation("trench_layer"):
+    if not _gis_relation('trench_layer'):
         return 0
     try:
         with connection.cursor() as cur:
             cur.execute(
-                "SELECT count(*) FROM gis.trench_layer WHERE project_id = %s "
+                'SELECT count(*) FROM gis.trench_layer WHERE project_id = %s '
                 "AND properties->>'fclass' IS NULL",
                 [project_id],
             )
@@ -160,22 +161,21 @@ def _missing_layers(project_id: str, layer_names=None) -> list[str]:
     if layer_names is None:
         try:
             from .pipeline import get_status
+
             layer_names = [
-                (l.get("name") or "").lower()
-                for l in get_status(project_id).get("layers", [])
-                if l.get("name")
+                (l.get('name') or '').lower()
+                for l in get_status(project_id).get('layers', [])
+                if l.get('name')
             ]
         except Exception:  # noqa: BLE001
             return []
     have = set(
-        FtthLayer.objects.filter(ftth_project__project_id=project_id)
-        .values_list("name", flat=True)
+        FtthLayer.objects.filter(ftth_project__project_id=project_id).values_list('name', flat=True)
     )
     return [n for n in layer_names if n and n.lower() not in have]
 
 
-def _pending_steps(project_id: str, row, revision: str,
-                   layer_names=None) -> list[str]:
+def _pending_steps(project_id: str, row, revision: str, layer_names=None) -> list[str]:
     """The steps that are genuinely out of date — in ``STEP_ORDER``.
 
     ``revision`` is the trench content revision right now. Empty means the
@@ -186,7 +186,7 @@ def _pending_steps(project_id: str, row, revision: str,
     """
     pending = []
     if _missing_layers(project_id, layer_names):
-        pending.append("layers")
+        pending.append('layers')
     if not revision:
         return pending
     # A row that has never run (a project whose chain ran inline before this
@@ -194,17 +194,17 @@ def _pending_steps(project_id: str, row, revision: str,
     # the old completion hook did — so the first poll after deploying this does
     # not re-run a permit matrix and a package that are already there. From the
     # second run on, the recorded revision decides.
-    stale = row is not None and (row.trench_revision or "") != revision
+    stale = row is not None and (row.trench_revision or '') != revision
     if stale or road_class_gaps(project_id):
-        pending.append("road_class")
+        pending.append('road_class')
     from permits.analysis.trench_sections import sections_are_fresh
 
     if stale or not sections_are_fresh(project_id):
-        pending.append("trench_sections")
+        pending.append('trench_sections')
     if stale or not _matrix_exists(project_id):
-        pending.append("permit_matrix")
+        pending.append('permit_matrix')
     if stale or not _package_exists(project_id):
-        pending.append("permit_package")
+        pending.append('permit_package')
     return pending
 
 
@@ -212,57 +212,64 @@ def _pending_steps(project_id: str, row, revision: str,
 # The steps
 # ---------------------------------------------------------------------------
 
-def _step_layers(project_id: str, project_name: str = "") -> str:
+
+def _step_layers(project_id: str, project_name: str = '') -> str:
     from .pipeline import sync_project_layers
 
     counts = sync_project_layers(project_id)
-    return "synced %d layer(s)" % len(counts)
+    return 'synced %d layer(s)' % len(counts)
 
 
-def _step_road_class(project_id: str, project_name: str = "") -> str:
+def _step_road_class(project_id: str, project_name: str = '') -> str:
     from permits.analysis.road_class import ensure_road_class
 
     summary = ensure_road_class(project_id)
-    if summary.get("error"):
-        raise RuntimeError(summary["error"])
-    return "attributed %s/%s trench(es) from %s road(s)" % (
-        summary.get("attributed"), summary.get("trenches"), summary.get("roads"),
+    if summary.get('error'):
+        raise RuntimeError(summary['error'])
+    return 'attributed %s/%s trench(es) from %s road(s)' % (
+        summary.get('attributed'),
+        summary.get('trenches'),
+        summary.get('roads'),
     )
 
 
-def _step_trench_sections(project_id: str, project_name: str = "") -> str:
+def _step_trench_sections(project_id: str, project_name: str = '') -> str:
     from permits.analysis.trench_sections import build_trench_sections
 
     summary = build_trench_sections(project_id)
-    return "%s section(s) from %s trench row(s), %s street-attributed" % (
-        summary.get("sections"), summary.get("rows"), summary.get("attributed"),
+    return '%s section(s) from %s trench row(s), %s street-attributed' % (
+        summary.get('sections'),
+        summary.get('rows'),
+        summary.get('attributed'),
     )
 
 
-def _step_permit_matrix(project_id: str, project_name: str = "") -> str:
+def _step_permit_matrix(project_id: str, project_name: str = '') -> str:
     from permits.rules.engine import run_analysis
 
     summary = run_analysis(project_id)
-    return "%s row(s) from %s rule(s) fired" % (
-        summary.get("rows_created", 0), len(summary.get("rules_fired", [])),
+    return '%s row(s) from %s rule(s) fired' % (
+        summary.get('rows_created', 0),
+        len(summary.get('rules_fired', [])),
     )
 
 
-def _step_permit_package(project_id: str, project_name: str = "") -> str:
+def _step_permit_package(project_id: str, project_name: str = '') -> str:
     from permits.generators.hld_package import generate_hld_package
 
     summary = generate_hld_package(project_id, project_name or project_id)
-    return "v%s, %s file(s)" % (
-        summary.get("version"), len(summary.get("files", [])),
+    return 'v%s, %s file(s)' % (
+        summary.get('version'),
+        len(summary.get('files', [])),
     )
 
 
 STEP_FUNCS = {
-    "layers": _step_layers,
-    "road_class": _step_road_class,
-    "trench_sections": _step_trench_sections,
-    "permit_matrix": _step_permit_matrix,
-    "permit_package": _step_permit_package,
+    'layers': _step_layers,
+    'road_class': _step_road_class,
+    'trench_sections': _step_trench_sections,
+    'permit_matrix': _step_permit_matrix,
+    'permit_package': _step_permit_package,
 }
 
 
@@ -270,8 +277,8 @@ STEP_FUNCS = {
 # Runner
 # ---------------------------------------------------------------------------
 
-def run_post_hld(project_id: str, project_name: str = "",
-                 steps=None) -> dict:
+
+def run_post_hld(project_id: str, project_name: str = '', steps=None) -> dict:
     """Run the post-HLD steps and record each outcome on the row.
 
     Each step is recorded as it finishes, so a long chain (the road
@@ -287,7 +294,7 @@ def run_post_hld(project_id: str, project_name: str = "",
     HldPostProcess.objects.filter(pk=row.pk).update(
         status=HldPostProcess.STATUS_RUNNING,
         started_at=timezone.now(),
-        error_message="",
+        error_message='',
     )
 
     revision = trench_content_revision(project_id)
@@ -299,18 +306,18 @@ def run_post_hld(project_id: str, project_name: str = "",
             continue
         started = time.monotonic()
         try:
-            detail = step(project_id, project_name) or ""
-            ok, error = True, ""
+            detail = step(project_id, project_name) or ''
+            ok, error = True, ''
         except Exception as exc:  # noqa: BLE001 - one step must not kill the chain
             ok, error = False, str(exc)
-            failures.append("%s: %s" % (name, exc))
-            logger.warning("post-HLD %s step %s failed: %s", project_id, name, exc)
+            failures.append('%s: %s' % (name, exc))
+            logger.warning('post-HLD %s step %s failed: %s', project_id, name, exc)
         outcomes[name] = {
-            "ok": ok,
-            "seconds": round(time.monotonic() - started, 2),
-            "detail": detail if ok else "",
-            "error": error,
-            "at": timezone.now().isoformat(),
+            'ok': ok,
+            'seconds': round(time.monotonic() - started, 2),
+            'detail': detail if ok else '',
+            'error': error,
+            'at': timezone.now().isoformat(),
         }
         HldPostProcess.objects.filter(pk=row.pk).update(steps=outcomes)
 
@@ -318,19 +325,18 @@ def run_post_hld(project_id: str, project_name: str = "",
     # applied to is already gone, and the next poll should re-schedule.
     revision_now = trench_content_revision(project_id)
     HldPostProcess.objects.filter(pk=row.pk).update(
-        status=(
-            HldPostProcess.STATUS_FAILED if failures
-            else HldPostProcess.STATUS_DONE
-        ),
-        trench_revision="" if failures else revision_now,
+        status=(HldPostProcess.STATUS_FAILED if failures else HldPostProcess.STATUS_DONE),
+        trench_revision='' if failures else revision_now,
         steps=outcomes,
-        error_message="; ".join(failures)[:2000],
+        error_message='; '.join(failures)[:2000],
         finished_at=timezone.now(),
     )
     logger.info(
-        "post-HLD %s: %s step(s) run (%s), revision %s",
-        project_id, len(steps), "failed" if failures else "ok",
-        revision_now or "(no trenches)",
+        'post-HLD %s: %s step(s) run (%s), revision %s',
+        project_id,
+        len(steps),
+        'failed' if failures else 'ok',
+        revision_now or '(no trenches)',
     )
     return outcomes
 
@@ -340,7 +346,7 @@ def _worker(project_id: str, project_name: str, steps) -> None:
     try:
         run_post_hld(project_id, project_name, steps)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("post-HLD worker for %s died: %s", project_id, exc)
+        logger.warning('post-HLD worker for %s died: %s', project_id, exc)
         HldPostProcess.objects.filter(project_id=project_id).update(
             status=HldPostProcess.STATUS_FAILED,
             error_message=str(exc)[:2000],
@@ -357,15 +363,14 @@ def _spawn_disabled() -> bool:
     worker thread could only fail or fight the rollback; and
     ``PipelineStatusView`` must stay request-cheap in tests.
     """
-    if os.environ.get("FTTH_POST_HLD_SYNC") == "1":
+    if os.environ.get('FTTH_POST_HLD_SYNC') == '1':
         return True
-    if os.environ.get("PYTEST_CURRENT_TEST"):
+    if os.environ.get('PYTEST_CURRENT_TEST'):
         return True
-    return "test" in sys.argv
+    return 'test' in sys.argv
 
 
-def schedule_post_hld(project_id: str, project_name: str = "",
-                      layer_names=None):
+def schedule_post_hld(project_id: str, project_name: str = '', layer_names=None):
     """Claim the post-HLD chain for ``project_id`` and run it off-request.
 
     Returns the ``HldPostProcess`` row, or ``None`` when the caller should do
@@ -380,8 +385,11 @@ def schedule_post_hld(project_id: str, project_name: str = "",
     try:
         row, _created = HldPostProcess.objects.get_or_create(project_id=project_id)
         now = timezone.now()
-        if (row.status == HldPostProcess.STATUS_RUNNING and row.started_at
-                and now - row.started_at < timedelta(seconds=STALE_SECONDS)):
+        if (
+            row.status == HldPostProcess.STATUS_RUNNING
+            and row.started_at
+            and now - row.started_at < timedelta(seconds=STALE_SECONDS)
+        ):
             return row
 
         revision = trench_content_revision(project_id)
@@ -405,18 +413,16 @@ def schedule_post_hld(project_id: str, project_name: str = "",
         )
         if not claimed:
             return HldPostProcess.objects.filter(pk=row.pk).first()
-        logger.info(
-            "post-HLD %s scheduled off-request: %s", project_id, ", ".join(pending)
-        )
+        logger.info('post-HLD %s scheduled off-request: %s', project_id, ', '.join(pending))
         threading.Thread(
             target=_worker,
             args=(project_id, project_name, pending),
-            name="post-hld-%s" % project_id[:8],
+            name='post-hld-%s' % project_id[:8],
             daemon=True,
         ).start()
         return HldPostProcess.objects.filter(pk=row.pk).first()
     except Exception as exc:  # noqa: BLE001 - the status poll must never fail on this
-        logger.warning("post-HLD scheduling for %s failed: %s", project_id, exc)
+        logger.warning('post-HLD scheduling for %s failed: %s', project_id, exc)
         return None
 
 
@@ -427,14 +433,14 @@ def post_hld_state(project_id: str) -> dict:
     except Exception:  # noqa: BLE001
         return {}
     if row is None:
-        return {"status": "none", "steps": {}, "remaining": list(STEP_ORDER)}
+        return {'status': 'none', 'steps': {}, 'remaining': list(STEP_ORDER)}
     steps = row.steps or {}
     return {
-        "status": row.status,
-        "trench_revision": row.trench_revision,
-        "steps": steps,
-        "remaining": [n for n in STEP_ORDER if n not in steps],
-        "error": row.error_message,
-        "started_at": row.started_at.isoformat() if row.started_at else None,
-        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        'status': row.status,
+        'trench_revision': row.trench_revision,
+        'steps': steps,
+        'remaining': [n for n in STEP_ORDER if n not in steps],
+        'error': row.error_message,
+        'started_at': row.started_at.isoformat() if row.started_at else None,
+        'finished_at': row.finished_at.isoformat() if row.finished_at else None,
     }

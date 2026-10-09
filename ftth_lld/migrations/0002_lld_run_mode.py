@@ -4,7 +4,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('ftth_lld', '0001_initial'),
     ]
@@ -13,6 +12,13 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='lldrun',
             name='mode',
-            field=models.CharField(choices=[('verify', 'Verify (apply survey changes)'), ('replan', 'Full re-plan (re-run design algorithm)')], default='verify', max_length=20),
+            field=models.CharField(
+                choices=[
+                    ('verify', 'Verify (apply survey changes)'),
+                    ('replan', 'Full re-plan (re-run design algorithm)'),
+                ],
+                default='verify',
+                max_length=20,
+            ),
         ),
     ]

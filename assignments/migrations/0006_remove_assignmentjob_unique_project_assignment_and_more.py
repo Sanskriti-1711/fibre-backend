@@ -5,7 +5,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('assignments', '0005_remove_assignmentjob_layer_name'),
         ('projects', '0011_alter_project_status'),
@@ -19,6 +18,10 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='assignmentjob',
-            constraint=models.UniqueConstraint(condition=models.Q(('scope', 'project')), fields=('project', 'assignee'), name='unique_project_assignment'),
+            constraint=models.UniqueConstraint(
+                condition=models.Q(('scope', 'project')),
+                fields=('project', 'assignee'),
+                name='unique_project_assignment',
+            ),
         ),
     ]

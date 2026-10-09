@@ -1,10 +1,9 @@
 """Tier-1 A1/A2 fields on SurveyFeature: GPS capture quality + photo tags."""
-import django.core.validators
+
 from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('survey', '0008_approvalrecord'),
     ]

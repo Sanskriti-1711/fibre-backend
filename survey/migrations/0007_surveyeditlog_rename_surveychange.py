@@ -10,7 +10,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('projects', '0014_remove_surveychange_created_by_and_more'),
         ('survey', '0006_surveyfeature_is_removal'),

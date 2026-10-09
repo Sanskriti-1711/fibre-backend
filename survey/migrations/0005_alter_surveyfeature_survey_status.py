@@ -4,7 +4,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('survey', '0004_surveyfeature_review_notes'),
     ]
@@ -13,6 +12,19 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='surveyfeature',
             name='survey_status',
-            field=models.CharField(choices=[('new', 'New'), ('modified', 'Modified'), ('removed', 'Removed'), ('pending_review', 'Pending Review'), ('needs_correction', 'Needs Correction'), ('rejected', 'Rejected'), ('approved', 'Approved'), ('completed', 'Completed')], default='new', max_length=20),
+            field=models.CharField(
+                choices=[
+                    ('new', 'New'),
+                    ('modified', 'Modified'),
+                    ('removed', 'Removed'),
+                    ('pending_review', 'Pending Review'),
+                    ('needs_correction', 'Needs Correction'),
+                    ('rejected', 'Rejected'),
+                    ('approved', 'Approved'),
+                    ('completed', 'Completed'),
+                ],
+                default='new',
+                max_length=20,
+            ),
         ),
     ]

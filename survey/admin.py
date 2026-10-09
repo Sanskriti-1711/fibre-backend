@@ -1,18 +1,19 @@
 """Admin configuration for the survey app."""
 
 from django.contrib import admin
+
 from .models import (
-    GPSTrace,
-    GPSPoint,
-    TrenchSurvey,
     ExistingAsset,
-    RiskAssessment,
-    Hazard,
     FieldEvidence,
+    GPSPoint,
+    GPSTrace,
+    Hazard,
+    RiskAssessment,
     SurveyEditLog,
+    SurveyFeature,
     SurveyStatus,
     SyncQueueItem,
-    SurveyFeature,
+    TrenchSurvey,
 )
 
 
@@ -81,7 +82,16 @@ class SyncQueueItemAdmin(admin.ModelAdmin):
 
 @admin.register(SurveyFeature)
 class SurveyFeatureAdmin(admin.ModelAdmin):
-    list_display = ['id', 'engineer', 'project', 'layer_id', 'survey_status', 'sync_status', 'version_number', 'updated_at']
+    list_display = [
+        'id',
+        'engineer',
+        'project',
+        'layer_id',
+        'survey_status',
+        'sync_status',
+        'version_number',
+        'updated_at',
+    ]
     list_filter = ['survey_status', 'sync_status', 'layer_id']
     search_fields = ['id', 'layer_id', 'layer_name', 'original_hld_feature__id']
     readonly_fields = ['created_at', 'updated_at', 'original_geometry', 'original_attributes']

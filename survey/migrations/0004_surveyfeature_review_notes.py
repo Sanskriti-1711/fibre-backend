@@ -4,7 +4,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('survey', '0003_surveyfeature_photo'),
     ]
@@ -13,6 +12,10 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='surveyfeature',
             name='review_notes',
-            field=models.TextField(blank=True, default='', help_text='Planner/approver notes from the approval decision'),
+            field=models.TextField(
+                blank=True,
+                default='',
+                help_text='Planner/approver notes from the approval decision',
+            ),
         ),
     ]

@@ -24,12 +24,12 @@ class PermitQaView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, project_id: str | None = None):
-        pid = project_id or (request.GET.get("project_id") or "").strip() or None
+        pid = project_id or (request.GET.get('project_id') or '').strip() or None
         # When project_id is supplied on the collection route via ?project_id=
         # respect it — mirrors the expiry view's convenience.
         try:
             if pid and not FtthProject.objects.filter(pk=pid).exists():
-                return JsonResponse({"detail": "Project not found."}, status=404)
+                return JsonResponse({'detail': 'Project not found.'}, status=404)
         except Exception:
             pass
         if pid:
@@ -37,9 +37,9 @@ class PermitQaView(APIView):
                 data = qa_for_project(pid)
                 return JsonResponse(data)
             except Exception as exc:  # pragma: no cover
-                return JsonResponse({"detail": f"QA failed: {exc}"}, status=500)
+                return JsonResponse({'detail': f'QA failed: {exc}'}, status=500)
         try:
             data = qa_summary(project_id=None)
             return JsonResponse(data)
         except Exception as exc:  # pragma: no cover
-            return JsonResponse({"detail": f"QA summary failed: {exc}"}, status=500)
+            return JsonResponse({'detail': f'QA summary failed: {exc}'}, status=500)

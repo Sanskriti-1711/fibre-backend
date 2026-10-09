@@ -24,42 +24,45 @@ class Command(BaseCommand):
     help = "Backfill road fclass onto HLD trench segments from each project's roads input."
 
     def add_arguments(self, parser):
-        parser.add_argument("--project", help="Only backfill this project_id")
-        parser.add_argument("--analyze", action="store_true",
-                            help="Run the permit analysis after backfilling")
+        parser.add_argument('--project', help='Only backfill this project_id')
+        parser.add_argument(
+            '--analyze', action='store_true', help='Run the permit analysis after backfilling'
+        )
 
     def handle(self, *args, **opts):
         with connection.cursor() as cur:
-            if opts["project"]:
+            if opts['project']:
                 cur.execute(
-                    "SELECT DISTINCT project_id FROM gis.trench_layer "
-                    "WHERE project_id = %s", [opts["project"]]
+                    'SELECT DISTINCT project_id FROM gis.trench_layer ' 'WHERE project_id = %s',
+                    [opts['project']],
                 )
             else:
                 cur.execute(
-                    "SELECT DISTINCT project_id FROM gis.trench_layer "
-                    "ORDER BY project_id"
+                    'SELECT DISTINCT project_id FROM gis.trench_layer ' 'ORDER BY project_id'
                 )
             project_ids = [r[0] for r in cur.fetchall()]
 
         if not project_ids:
-            self.stdout.write(self.style.WARNING("No projects with trench rows found."))
+            self.stdout.write(self.style.WARNING('No projects with trench rows found.'))
             return
 
         total_attributed = 0
         for project_id in project_ids:
             roads = project_roads_file(project_id)
             summary = attribute_road_class(project_id, roads)
-            total_attributed += summary.get("attributed", 0)
+            total_attributed += summary.get('attributed', 0)
             self.stdout.write(
                 f"  {project_id[:12]}… trenches={summary['trenches']} "
                 f"roads={summary['roads']} attributed={summary['attributed']}"
-                + (f"  ({summary.get('error')})" if summary.get("error") else "")
+                + (f"  ({summary.get('error')})" if summary.get('error') else '')
             )
-        self.stdout.write(self.style.SUCCESS(f"Total trench segments attributed: {total_attributed}"))
+        self.stdout.write(
+            self.style.SUCCESS(f'Total trench segments attributed: {total_attributed}')
+        )
 
-        if opts["analyze"]:
+        if opts['analyze']:
             from permits.rules.engine import run_analysis
+
             for project_id in project_ids:
                 summary = run_analysis(project_id)
                 self.stdout.write(

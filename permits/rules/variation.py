@@ -29,10 +29,12 @@ logger = logging.getLogger(__name__)
 # Statuses whose approval is superseded by a route change. Submitted /
 # under-review rows are not locked to anything yet — the survey evidence
 # hook refreshes their evidence in place instead.
-VARIABLE_STATUSES = frozenset({
-    PermitMatrix.STATUS_APPROVED,
-    PermitMatrix.STATUS_CLOSED,
-})
+VARIABLE_STATUSES = frozenset(
+    {
+        PermitMatrix.STATUS_APPROVED,
+        PermitMatrix.STATUS_CLOSED,
+    }
+)
 
 
 def _route_section_candidates(sf) -> list[str]:
@@ -44,7 +46,7 @@ def _route_section_candidates(sf) -> list[str]:
     always finds the rows the evidence hook would enrich.
     """
     candidates = []
-    for value in (getattr(sf, "original_hld_feature_id", None), getattr(sf, "id", None)):
+    for value in (getattr(sf, 'original_hld_feature_id', None), getattr(sf, 'id', None)):
         if value:
             candidates.append(str(value))
     # De-duplicate while preserving order.
@@ -61,16 +63,16 @@ def create_variations(ftth_project_id: str, sf, user=None) -> dict:
     never raises — the caller must not fail because of permit bookkeeping.
     """
     summary = {
-        "project_id": ftth_project_id,
-        "route_sections": [],
-        "variations_created": 0,
-        "notes": [],
+        'project_id': ftth_project_id,
+        'route_sections': [],
+        'variations_created': 0,
+        'notes': [],
     }
     try:
         route_sections = _route_section_candidates(sf)
         if not route_sections:
             return summary
-        summary["route_sections"] = route_sections
+        summary['route_sections'] = route_sections
 
         rows = list(
             PermitMatrix.objects.filter(
@@ -97,36 +99,46 @@ def create_variations(ftth_project_id: str, sf, user=None) -> dict:
             pm.approval_date = None
             pm.expiry_date = None
             note = (
-                f"VARIATION: {old_status} superseded by survey change "
-                f"{change_id} — now revision {pm.revision} (was r{old_revision}). "
-                "Must pass evidence → ready → submitted → approved again."
+                f'VARIATION: {old_status} superseded by survey change '
+                f'{change_id} — now revision {pm.revision} (was r{old_revision}). '
+                'Must pass evidence → ready → submitted → approved again.'
             )
-            pm.comments = f"{note}\n{pm.comments}".strip() if pm.comments else note
-            pm.save(update_fields=[
-                "revision", "status", "submission", "submission_date",
-                "approval_date", "expiry_date", "comments", "updated_at",
-            ])
+            pm.comments = f'{note}\n{pm.comments}'.strip() if pm.comments else note
+            pm.save(
+                update_fields=[
+                    'revision',
+                    'status',
+                    'submission',
+                    'submission_date',
+                    'approval_date',
+                    'expiry_date',
+                    'comments',
+                    'updated_at',
+                ]
+            )
             PermitEvent.objects.create(
                 permit=pm,
-                event="VARIATION_REQUIRED",
+                event='VARIATION_REQUIRED',
                 detail={
-                    "change_id": change_id,
-                    "route_section": pm.route_section,
-                    "from_revision": old_revision,
-                    "to_revision": pm.revision,
-                    "from_status": old_status,
-                    "to_status": pm.status,
-                    "from_submission": str(old_submission) if old_submission else None,
-                    "by": getattr(user, "email", None) if user else None,
+                    'change_id': change_id,
+                    'route_section': pm.route_section,
+                    'from_revision': old_revision,
+                    'to_revision': pm.revision,
+                    'from_status': old_status,
+                    'to_status': pm.status,
+                    'from_submission': str(old_submission) if old_submission else None,
+                    'by': getattr(user, 'email', None) if user else None,
                 },
             )
-            summary["variations_created"] += 1
+            summary['variations_created'] += 1
 
         logger.info(
-            "Variations created for %s from change %s: %s row(s)",
-            ftth_project_id, change_id, summary["variations_created"],
+            'Variations created for %s from change %s: %s row(s)',
+            ftth_project_id,
+            change_id,
+            summary['variations_created'],
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Variation creation failed for %s: %s", ftth_project_id, exc)
-        summary["notes"].append(str(exc))
+        logger.warning('Variation creation failed for %s: %s', ftth_project_id, exc)
+        summary['notes'].append(str(exc))
     return summary

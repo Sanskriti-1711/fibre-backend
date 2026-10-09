@@ -14,7 +14,7 @@ class ProjectCompletionAPIView(APIView):
             project = Project.objects.get(id=project_id)
         except Project.DoesNotExist:
             return Response(
-                {"detail": "Project not found"},
+                {'detail': 'Project not found'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
