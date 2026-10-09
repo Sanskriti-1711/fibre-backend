@@ -190,6 +190,51 @@ def check_cors() -> Result:
     )
 
 
+def engine_health_result(payload: dict, ms: float) -> Result:
+    """Grade the engine's /health payload.
+
+    Separate from the request so the payload shapes can be graded in a test
+    without a live engine.  Both flags it reads are nested, and reading the
+    wrong level is silent:
+
+      * ``postgis`` is ``db_info()``, i.e. ``{"available": true|false}``.  That
+        dict is ALWAYS truthy, so the obvious ``if d.get("postgis")`` reported
+        "postgis ok" and a PASS on an engine with no database at all.  The live
+        Zeabur engine has answered ``{"available": false}`` since it came up on
+        2026-07-17 while this monitor, and the docs quoting it, read "postgis
+        ok" -- a broken link that looked like a healthy one for 81 days.
+
+      * ``qgis_process`` is a resolved PATH, or ``null`` when the engine found
+        no launcher.  A path proves only that one was found, never that it
+        runs, and ``null`` used to be dropped from the line entirely while the
+        check still PASSed.
+
+    A bare boolean is still accepted for ``postgis``, for older builds.
+    """
+    parts: list[str] = []
+    up = payload.get("uptime_seconds")
+    if isinstance(up, (int, float)):
+        parts.append(f"up {up / 86400:.1f}d")
+
+    qgis = payload.get("qgis_process")
+    qgis_missing = not qgis
+    parts.append(f"qgis {'ok' if not qgis_missing else 'MISSING'}")
+
+    postgis = payload.get("postgis")
+    if isinstance(postgis, dict):
+        postgis_ok: bool | None = bool(postgis.get("available"))
+    elif postgis is None:
+        postgis_ok = None
+    else:
+        postgis_ok = bool(postgis)
+    if postgis_ok is not None:
+        parts.append(f"postgis {'ok' if postgis_ok else 'DOWN'}")
+
+    parts.append(f"{ms:.0f}ms")
+    bad = qgis_missing or postgis_ok is False
+    return Result("engine /health", "WARN" if bad else "PASS", ", ".join(parts))
+
+
 def check_engine() -> Result:
     t0 = time.time()
     try:
@@ -203,18 +248,7 @@ def check_engine() -> Result:
         d = json.loads(body)
     except ValueError:
         return Result("engine /health", "WARN", f"200 but body is not JSON ({ms:.0f}ms)")
-    parts = []
-    up = d.get("uptime_seconds")
-    if isinstance(up, (int, float)):
-        parts.append(f"up {up / 86400:.1f}d")
-    qgis = d.get("qgis_process")
-    if qgis is not None:
-        parts.append(f"qgis {'ok' if qgis else 'MISSING'}")
-    if d.get("postgis") is not None:
-        parts.append(f"postgis {'ok' if d.get('postgis') else 'DOWN'}")
-    parts.append(f"{ms:.0f}ms")
-    bad = qgis is False or d.get("postgis") is False
-    return Result("engine /health", "WARN" if bad else "PASS", ", ".join(parts))
+    return engine_health_result(d, ms)
 
 
 def check_backend_engine_proxy(engine_result: Result) -> Result:

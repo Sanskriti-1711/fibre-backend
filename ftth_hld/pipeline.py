@@ -272,13 +272,20 @@ def get_input_layer(area: str, layer: str, country: str = "", city: str = "",
 
 def run_from_area(area: str, project_id: str, name: str = "",
                   poly_method: int = 3, country: str = "", city: str = "",
-                  postcode: str = "", area_name: str = "") -> dict:
+                  postcode: str = "", area_name: str = "",
+                  brownfield_path: str = None) -> dict:
     """Start a full HLD run from an area.
 
     The engine generates the two input files from OSM and then runs the
     untouched pipeline on them, so the run is identical to a manual upload from
     the engine onwards.  Returns immediately (202) — input generation and the
     design both happen in the engine's background task.
+
+    ``brownfield_path`` is optional: a ZIP (or single vector file) of existing
+    infrastructure that the engine unzips and feeds to the pipeline's BF_*
+    parameters, exactly as the manual-upload path does.  When present the
+    request becomes multipart (the area fields travel as form fields);
+    otherwise it stays JSON, so an existing JSON client is untouched.
     """
     payload: dict = _area_payload(area, country, city, postcode, area_name)
     payload["project_id"] = project_id
@@ -286,9 +293,23 @@ def run_from_area(area: str, project_id: str, name: str = "",
     if name:
         payload["name"] = name
     try:
-        resp = requests.post(
-            _engine_url("/ftth/hld/run-from-area"), json=payload, timeout=120
-        )
+        if brownfield_path:
+            with open(brownfield_path, "rb") as bf:
+                files = {
+                    "brownfield": (
+                        Path(brownfield_path).name,
+                        bf,
+                        "application/octet-stream",
+                    )
+                }
+                resp = requests.post(
+                    _engine_url("/ftth/hld/run-from-area"),
+                    data=payload, files=files, timeout=120,
+                )
+        else:
+            resp = requests.post(
+                _engine_url("/ftth/hld/run-from-area"), json=payload, timeout=120
+            )
     except requests.RequestException as exc:
         raise EngineError(502, f"Engine unreachable: {exc}") from exc
     if resp.status_code not in (200, 201, 202):

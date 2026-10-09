@@ -337,6 +337,9 @@ class RunFromAreaView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        # request.data is a QueryDict for a multipart upload and a dict for a
+        # JSON body; _area_inputs reads either. An optional brownfield ZIP
+        # arrives via request.FILES, alongside the area fields.
         fields = _area_inputs(request.data)
         if not _has_locator(fields):
             return JsonResponse(
@@ -348,6 +351,7 @@ class RunFromAreaView(APIView):
             poly_method = int(request.data.get("poly_method", 3))
         except (TypeError, ValueError):
             poly_method = 3
+        brownfield = request.FILES.get("brownfield")
 
         project_id = uuid.uuid4().hex
         FtthProject.objects.create(
@@ -356,6 +360,17 @@ class RunFromAreaView(APIView):
             created_by=request.user if request.user.is_authenticated else None,
             status=FtthProject.STATUS_QUEUED,
         )
+
+        # Optional brownfield (existing infrastructure) ZIP / vector file, saved
+        # to the project's host input dir exactly like the upload path does.
+        brownfield_path = None
+        if brownfield:
+            host_input_dir = HOST_OUTPUTS_DIR / project_id / "inputs"
+            host_input_dir.mkdir(parents=True, exist_ok=True)
+            brownfield_path = host_input_dir / (brownfield.name or "brownfield.zip")
+            with open(brownfield_path, "wb") as f:
+                for chunk in brownfield.chunks():
+                    f.write(chunk)
 
         try:
             engine_result = run_from_area(
@@ -367,6 +382,7 @@ class RunFromAreaView(APIView):
                 city=fields.get("city", ""),
                 postcode=fields.get("postcode", ""),
                 area_name=fields.get("area_name", ""),
+                brownfield_path=str(brownfield_path) if brownfield_path else None,
             )
         except EngineError as exc:
             # The row was already created, so mark it failed rather than leaving
