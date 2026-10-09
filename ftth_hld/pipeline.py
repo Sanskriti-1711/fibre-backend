@@ -872,6 +872,41 @@ def _reproject_geometry(geom: dict, transformer) -> None:
             _reproject_geometry(sub, transformer)
 
 
+def _engine_deliverable_names(project_id: str) -> list:
+    """
+    Filenames the engine reports for a project, minus the raw source inputs.
+
+    Both packages have to contain **every layer the run produced**, and a
+    curated list alone silently drops a layer the pipeline gained after the
+    list was written (``Trench_Nodes``, ``Poles``, the aerial pair). The
+    engine's own ``downloads`` is the single source of truth for what exists,
+    so both packages are driven from it and the curated lists are only the
+    fallback for an engine that cannot be reached.
+    """
+    status = _read_status(project_id) or {}
+    names = []
+    for dl in status.get('downloads') or []:
+        n = dl.get('name') if isinstance(dl, dict) else str(dl)
+        if not n or n.startswith(('inputs/', 'brownfield/')):
+            continue  # raw source inputs are not design deliverables
+        if n.lower().endswith('.geojson') and (
+            n in DESIGN_GEOJSON_FILES or n in SURVEY_GEOJSON_FILES
+        ):
+            # Known layers are added reprojected (WGS84) via the map below;
+            # keep any brand-new geojson raw so nothing is lost.
+            continue
+        names.append(n)
+
+    # Deduplicate while preserving order
+    seen = set()
+    ordered = []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            ordered.append(n)
+    return ordered
+
+
 def _build_package_zip(
     project_id: str,
     gpkg_files: list,
@@ -897,6 +932,19 @@ def _build_package_zip(
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         files_added = 0
         extra_files = extra_files or {}
+        # A ZIP must not carry the same name twice: a layer served as both a
+        # GeoPackage and a GeoJSON can reach this list twice (the plain file
+        # pass, and the GeoJSON fallback below when the GeoJSON is absent).
+        # Duplicate entries make some unzippers overwrite and others refuse.
+        written: set = set()
+
+        def _write(name: str, payload: bytes) -> None:
+            nonlocal files_added
+            if name in written:
+                return
+            written.add(name)
+            zf.writestr(name, payload)
+            files_added += 1
 
         # 1. Original GPKG / document files (skipped when an override exists)
         for fname in gpkg_files:
@@ -904,23 +952,31 @@ def _build_package_zip(
                 continue
             data = get_download_file(project_id, fname)
             if data is not None:
-                zf.writestr(fname, data)
-                files_added += 1
+                _write(fname, data)
 
         # 2. GeoJSON versions (reprojected to WGS84)
         for engine_fname, zip_fname in geojson_map.items():
             raw = get_download_file(project_id, engine_fname)
             if raw is None:
+                # The layer can exist as a GeoPackage with no GeoJSON beside it
+                # (an intermediate the results map does not publish, or a
+                # project built before the engine exported one for every
+                # layer). Bundle the GeoPackage rather than dropping the layer
+                # from the package — an absent layer is the one failure a
+                # reader cannot work around. `_write` skips it when the plain
+                # file pass already bundled that GeoPackage.
+                gpkg_fname = engine_fname.rsplit('.', 1)[0] + '.gpkg'
+                gpkg = get_download_file(project_id, gpkg_fname)
+                if gpkg is not None:
+                    _write(gpkg_fname, gpkg)
+                    continue
                 logger.warning('GeoJSON not found: %s/%s', project_id, engine_fname)
                 continue
-            reprojected = _reproject_geojson(raw)
-            zf.writestr(zip_fname, reprojected)
-            files_added += 1
+            _write(zip_fname, _reproject_geojson(raw))
 
         # 3. Extra generated documents (override engine files of same name)
         for zip_fname, data in extra_files.items():
-            zf.writestr(zip_fname, data)
-            files_added += 1
+            _write(zip_fname, data)
 
     zip_buffer.seek(0)
 
@@ -946,9 +1002,12 @@ def generate_survey_package(project_id: str) -> bytes:
 
     Returns the raw zip bytes.
     """
+    # Driven by the engine's own layer list so a layer the run produced is
+    # never missing from the pack (the curated list is the offline fallback).
+    ordered = _engine_deliverable_names(project_id) or list(SURVEY_PACKAGE_FILES)
     return _build_package_zip(
         project_id,
-        SURVEY_PACKAGE_FILES,
+        ordered,
         SURVEY_GEOJSON_FILES,
         'survey',
     )
@@ -996,7 +1055,6 @@ def generate_design_package(project_id: str) -> bytes:
 
     if not ordered:
         ordered = list(DESIGN_PACKAGE_FILES)
-
     # Inject the database-computed BOQ/BOM over the engine's hardcoded
     # template files (see ftth_hld/boq.py — quantities come from the
     # persisted HLD layers, priced by the BoqRate card).
