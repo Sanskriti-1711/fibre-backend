@@ -217,6 +217,63 @@ def check_engine() -> Result:
     return Result("engine /health", "WARN" if bad else "PASS", ", ".join(parts))
 
 
+def check_backend_engine_proxy(engine_result: Result) -> Result:
+    """Check the backend's own view of the engine.
+
+    Sole purpose: catch a backend configured to call the *wrong* engine.  Every
+    other check here probes the engine directly and stays green while the
+    backend's proxy is broken -- on 2026-10-09 the live backend answered
+    ``engine_url: http://127.0.0.1:8080`` while this script passed cleanly.
+
+    Grading compares hosts rather than testing reachability, because
+    reachability races a cold start: the backend probes with a 15s timeout while
+    this script will wait out a ~76s free-tier boot.  So a host mismatch is a
+    hard FAIL (that is the misconfiguration), whereas a matching host the
+    backend cannot currently reach is only a WARN -- the engine check already
+    owns engine outages, and a napping engine must not raise a second alert.
+    """
+    t0 = time.time()
+    try:
+        code, _, body = _request("GET", f"{BACKEND_URL}/healthz/engine")
+    except ConnectionError as e:
+        return Result("backend -> engine", "WARN", f"unreachable -- {e}")
+    ms = (time.time() - t0) * 1000
+    if code == 404:
+        return Result("backend -> engine", "WARN",
+                      "404 -- the deployed revision predates the engine probe")
+    try:
+        d = json.loads(body)
+    except ValueError:
+        return Result("backend -> engine", "FAIL",
+                      f"HTTP {code} and body is not JSON ({ms:.0f}ms)")
+    return backend_engine_proxy_result(d, ms)
+
+
+def backend_engine_proxy_result(payload: dict, ms: float) -> Result:
+    """Grade a ``/healthz/engine`` payload.
+
+    Split from the request so the payload shapes can be graded without a live
+    backend -- the same reason ``engine_health_result`` exists for the engine.
+
+    The host is compared regardless of ``ok``: a backend silently calling a
+    *different* engine that happens to be healthy is exactly the drift this
+    check exists to catch, and an ``ok`` short-circuit would hide it.
+    """
+    configured = payload.get("engine_url")
+    if not configured:
+        return Result("backend -> engine", "WARN",
+                      f"payload carries no engine_url ({ms:.0f}ms)")
+    if configured != ENGINE_URL:
+        err = payload.get("error") or "engine probe failed"
+        return Result("backend -> engine", "FAIL",
+                      f"backend calls {configured}, not {ENGINE_URL} -- {err}")
+    if payload.get("ok"):
+        return Result("backend -> engine", "PASS", f"{configured} ({ms:.0f}ms)")
+    err = payload.get("error") or "engine probe failed"
+    return Result("backend -> engine", "WARN",
+                  f"{configured} not reachable from the backend -- {err}")
+
+
 def check_database() -> Result:
     t0 = time.time()
     try:
@@ -241,7 +298,9 @@ def main() -> int:
     results.append(check_backend_liveness())
     results.append(check_backend_api())
     results.append(check_cors())
-    results.append(check_engine())
+    engine_result = check_engine()
+    results.append(engine_result)
+    results.append(check_backend_engine_proxy(engine_result))
     results.append(check_database())
 
     failed = [r for r in results if r.status == "FAIL"]
