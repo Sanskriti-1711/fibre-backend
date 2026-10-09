@@ -25,9 +25,10 @@ Everything is overridable by environment variable:
 
   FRONTEND_URL    default https://fibre-fe-98f8e0.gitlab.io
   FRONTEND_ORIGIN default = FRONTEND_URL's origin
-  BACKEND_URL     default https://fiberbackend.zeabur.app
-  ENGINE_URL      default https://ftth.zeabur.app
+  BACKEND_URL     default https://fibre-backend-wml3.onrender.com
+  ENGINE_URL      default https://ftth-planning.onrender.com
   PG_HOST / PG_PORT  default 91.98.18.217 / 32467
+  CHECK_TIMEOUT   default 120 seconds, per request
 
 No credentials are needed or read -- the database check is a TCP connect
 only, so this is safe to run anywhere and safe to share its output.
@@ -47,11 +48,17 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-TIMEOUT = float(os.getenv("CHECK_TIMEOUT", "20"))
+# Per-request timeout, in seconds.
+# 20s is NOT enough for the hosts this checks.  Measured 2026-10-09: a cold
+# Render engine took 85.7s to answer /health and the backend 17.7s, because the
+# free tier sleeps when idle.  A short timeout therefore reports a false FAIL --
+# and the scheduled monitor opens a "Stack check failing" issue -- every time the
+# stack has napped.  Override with CHECK_TIMEOUT.
+TIMEOUT = float(os.getenv("CHECK_TIMEOUT", "120"))
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://fibre-fe-98f8e0.gitlab.io").rstrip("/")
-BACKEND_URL = os.getenv("BACKEND_URL", "https://fiberbackend.zeabur.app").rstrip("/")
-ENGINE_URL = os.getenv("ENGINE_URL", "https://ftth.zeabur.app").rstrip("/")
+BACKEND_URL = os.getenv("BACKEND_URL", "https://fibre-backend-wml3.onrender.com").rstrip("/")
+ENGINE_URL = os.getenv("ENGINE_URL", "https://ftth-planning.onrender.com").rstrip("/")
 PG_HOST = os.getenv("PG_HOST", "91.98.18.217")
 PG_PORT = int(os.getenv("PG_PORT", "32467"))
 

@@ -17,8 +17,14 @@ SECRET_KEY = os.getenv(
 )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-# Default: DEBUG on (original behavior); set DJANGO_DEBUG=false in production.
-DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
+# Default: DEBUG OFF. A host that forgets this variable must come up safe, not
+# in debug. Leaving it on 404'd with the URLconf and a traceback (observed on the
+# live service, 2026-10-09) and, through ftth_hld.config._default_engine_url(),
+# silently pointed the HLD/LLD engine at http://127.0.0.1:8080 in production.
+# Local development sets DJANGO_DEBUG=true explicitly -- see `.env`,
+# `.env.example` and ../start-servers.sh -- so this default is only reached by a
+# host that did not set it.
+DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
 
 # Comma-separated at deploy time. Falls back to the previous permissive "*"
 # so local development is unaffected.
@@ -197,26 +203,16 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "false").lower() == "true"
 
 CORS_ALLOWED_ORIGINS = [
-    "https://fiberbackend.zeabur.app",
-    "https://fiber.zeabur.app",
-    "https://fe.dippuzen.com",
-    "https://qadmin.dippuzen.com",
     # The admin/engineer UI's GitLab Pages home.  It is the origin
     # fibre-fe deploys to, so a preflight from it must not depend on a host
     # env var being set correctly: leaving it out is what made every browser
     # call fail while both services were healthy.  `EXTRA_CORS_ORIGINS`
     # below stays the mechanism for a host that moves.
     "https://fibre-fe-98f8e0.gitlab.io",
-    "http://127.0.0.1:5500",
-    "http://localhost:5500",
-    "http://localhost:8765",
-    "http://127.0.0.1:8765",
     "http://localhost:3000",
-    "http://127.0.0.1:3000",
     "http://localhost:8081",
-    "http://localhost:8123",
     "http://127.0.0.1:8081",
-    "http://127.0.0.1:8123",
+
 ]
 
 # Extra browser origins supplied at deploy time (comma-separated), so moving
@@ -230,20 +226,14 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    "https://fiberbackend.zeabur.app",
-    "https://fe.dippuzen.com",
-    "https://qadmin.dippuzen.com",
     # Same origin as above: a cross-origin POST from the Pages UI is rejected
     # by CSRF before it reaches a view unless it is trusted here too.
     "https://fibre-fe-98f8e0.gitlab.io",
-    "http://127.0.0.1:5500",
-    "http://localhost:5500",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "http://localhost:8081",
-    "http://localhost:8123",
-    "http://127.0.0.1:8081",
-    "http://127.0.0.1:8123",
+
+  
 ]
 
 # Extra CSRF-trusted origins at deploy time (comma-separated).

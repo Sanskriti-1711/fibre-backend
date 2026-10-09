@@ -15,8 +15,8 @@ import os
 # qgis_process.
 #
 # Resolution order:
-#   1. FTTH_ENGINE_URL env var (always wins — set this on Zeabur if the
-#      production engine moves).
+#   1. FTTH_ENGINE_URL env var (always wins — set this in the deployment
+#      environment if the production engine moves).
 #   2. Local development (FTTH_DB=local|dev|docker — same flag settings.py
 #      uses) → http://127.0.0.1:8080 (the FastAPI engine started from
 #      HLD_Planning_01/web/backend).
@@ -24,8 +24,8 @@ import os
 #      ``localhost`` resolves to IPv6 ::1 first, and every HTTP request burns
 #      ~2s waiting for the IPv6 connect to fail before falling back to IPv4.
 #      With ~40 file fetches per design-package download that added ~80s.
-#   3. Production default → https://ftth.zeabur.app (live engine built from
-#      the sanskriti17/ftth_planning Docker image).
+#   3. Production default → https://ftth-planning.onrender.com (the live
+#      engine built from the sanskriti17/ftth_planning Docker image).
 def _default_engine_url() -> str:
     if os.getenv("FTTH_DB", "").lower() in ("local", "dev", "docker"):
         return "http://127.0.0.1:8080"
@@ -37,7 +37,7 @@ def _default_engine_url() -> str:
             return "http://127.0.0.1:8080"
     except Exception:
         pass
-    return "https://ftth.zeabur.app"
+    return "https://ftth-planning.onrender.com"
 
 
 FTTH_ENGINE_URL = os.getenv("FTTH_ENGINE_URL", _default_engine_url()).rstrip("/")
