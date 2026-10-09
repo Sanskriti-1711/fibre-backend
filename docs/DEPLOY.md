@@ -115,7 +115,7 @@ Environment variables (Render → Environment):
 | `DJANGO_DEBUG` | `false` | Otherwise Django serves verbose error pages publicly. **Required.** |
 | `DJANGO_ALLOWED_HOSTS` | `<service>.onrender.com` | Replaces the permissive `*`. |
 | `PGDATABASE` / `PGUSER` / `PGPASSWORD` / `PGHOST` / `PGPORT` | the Zeabur database | Must match what the engine writes to. See section 1. |
-| `FTTH_ENGINE_URL` | `https://ftth.zeabur.app` | Keeps HLD/LLD working on the existing engine. |
+| `FTTH_ENGINE_URL` | `https://ftth-planning.onrender.com` | Keeps HLD/LLD working on the existing engine. |
 | `EXTRA_CORS_ORIGINS` | the deployed frontend origin | e.g. `https://fe.example.com`. Comma-separated for several. |
 | `EXTRA_CSRF_TRUSTED_ORIGINS` | same origin | Required for admin/login POSTs. |
 | `DJANGO_DEBUG` / `CORS_ALLOW_ALL_ORIGINS` | leave unset | Falls back to existing behaviour. |
@@ -153,8 +153,8 @@ Sample response:
 ```json
 {
   "ok": true,
-  "engine_url": "https://ftth.zeabur.app",
-  "checked_url": "https://ftth.zeabur.app/health",
+  "engine_url": "https://ftth-planning.onrender.com",
+  "checked_url": "https://ftth-planning.onrender.com/health",
   "latency_ms": 1328,
   "http_status": 200,
   "engine_status": "ok",
@@ -210,7 +210,7 @@ The frontend resolves its API base URL in `fiber-fe/js/ftth-config.js`:
 
 ```js
 var LOCAL_API = 'http://localhost:8000';
-var PROD_API  = 'https://fiberbackend.zeabur.app';   // <- the live, not-yours backend
+var PROD_API  = 'https://fibre-backend-wml3.onrender.com';   // <- the live backend
 ```
 
 Change `PROD_API` (and `FTTH_BASE_URL` if it should differ) to the new backend
@@ -232,7 +232,7 @@ Also update `CORS_ALLOWED_ORIGINS` / `CSRF_TRUSTED_ORIGINS` in
 
 Log in from the deployed frontend, open a project, and load an HLD/LLD results
 page. That single flow exercises the frontend, the backend, the shared
-database and the Zeabur engine together. If the map is blank but the API
+database and the HLD engine together. If the map is blank but the API
 answers, the engine is writing somewhere your backend isn't reading — re-read
 section 1.
 
