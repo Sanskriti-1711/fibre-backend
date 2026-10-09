@@ -139,9 +139,9 @@ Set the **health check path** to `/healthz`.
 | `/healthz` | Liveness. Touches no external dependency. | **The platform's health check.** |
 | `/healthz/engine` | Dependency probe for the FastAPI engine. `200` healthy, `503` unreachable/unhealthy. | **Your monitor.** |
 
-`/healthz/engine` exists because the engine runs on Zeabur, where there is no
-access to its logs, metrics or restarts — the backend is the only vantage point
-you have on it.
+`/healthz/engine` exists because the engine runs on a host you have no log,
+metric or restart access to — the backend is the only vantage point you have on
+it.
 
 **Do not point the platform's health check at `/healthz/engine`.** A non-200
 there makes the platform tear down and restart the container, so an engine
@@ -174,12 +174,22 @@ Notes for whoever wires up the alerting:
   modes stay distinguishable.
 - `uptime_seconds` resets when the engine restarts. Since you cannot see the
   engine directly, a drop to a low value is your only signal that it bounced.
-  It sat at ~6,986,800s (~81 days) when this was written.
+  On the free tier it resets to ~0 every time the sleeping engine is woken.
 - The probe is inherently slow: the engine's `/health` gathers PostGIS and OSM
-  status before replying, measured at ~1.3s warm and ~5.3s cold. The client
-  timeout is therefore **15s**. Do not tune it down toward the observed
+  status before replying, measured at ~2.5–3s against the current engine. The
+  client timeout is therefore **15s**. Do not tune it down toward the observed
   latency — the timeout is per socket operation, so a 5s value does not even
   fire reliably on a 5.3s response.
+- **A `503` just after the stack has been idle is expected, and is NOT a
+  timeout.** The engine runs on a sleeping free tier: while it boots, the
+  platform's edge answers `502` in ~150ms and this probe reports any non-200 as
+  `503`. Raising `ENGINE_PROBE_TIMEOUT` therefore changes nothing — the failure
+  arrives long before any timeout could fire (measured 2026-10-09: `502` in
+  143ms, while the engine took 76s to become healthy). During a cold start the
+  engine genuinely is not serving, so `503` is the honest answer: a monitor
+  should read it as degraded, not as an outage. `tools/check_stack.py`'s
+  `backend -> engine` check does exactly that — WARN when the backend points at
+  the host being monitored, FAIL only when it is configured for a different one.
 - The response is trimmed on purpose: the engine's own `/health` exposes its
   `qgis_process` filesystem path and database details, and this endpoint is
   unauthenticated so a monitor can reach it.
