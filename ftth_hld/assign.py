@@ -129,6 +129,7 @@ def _field_data_queries(survey):
     recorded against, which is damage all the same. Kept in one place so a new
     record of field work is one line away from being protected.
     """
+    from assignments.models import AssignmentJob as Job
     from survey.models import (
         ApprovalRecord,
         ExistingAsset,
@@ -147,6 +148,9 @@ def _field_data_queries(survey):
         (SurveyFeature, {'project': survey}),
         (ApprovalRecord, {'survey_feature__project': survey}),
         (GPSTrace, {'project': survey}),
+        # A feature-scope job is a planner's record, and the collector drops it
+        # with the feature it points at.
+        (Job, {'feature__in': features, 'scope': AssignmentJob.SCOPE_FEATURE}),
         (TrenchSurvey, {'feature__in': features}),
         (ExistingAsset, {'feature__in': features}),
         (RiskAssessment, {'feature__in': features}),

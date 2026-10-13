@@ -182,6 +182,7 @@ class ReassignGuardTests(SimpleTestCase):
             'SurveyFeature',
             'ApprovalRecord',
             'GPSTrace',
+            'AssignmentJob',
             'TrenchSurvey',
             'ExistingAsset',
             'RiskAssessment',
