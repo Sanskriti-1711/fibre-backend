@@ -9,18 +9,21 @@ The whole call was ~22s inside a request the host ends somewhere around 20-45s,
 and a browser saw the re-assignment die at 20.8s with no reply at all --
 reported to the planner as "could not reach the design service".
 
-These tests pin the two decisions that took that work out: the package is built
-once and then reused, and a copy that already holds that exact import is not
-imported again. Both hinge on the stored file being named for its own content
-hash, which is why that name -- and the fact that an older, uuid-named file is
-canonicalised rather than trusted or rebuilt -- is asserted here.
+What is left of the cost is the engine round trips a package build needs (one
+per layer, and a directory listing), which cannot be cached without the copy
+falling behind the package the platform serves. So the tests pin the decision
+that took the rest out: a copy that already holds the current package --
+identified by the stored file being named for its own content hash -- is not
+imported again, while an older, uuid-named file is not trusted as the import
+and the copy is re-imported from the current build.
 """
 
 from __future__ import annotations
 
-import hashlib
+import io
 import shutil
 import tempfile
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -29,9 +32,46 @@ from django.test import SimpleTestCase, override_settings
 
 from ftth_hld import assign
 
-PACKAGE = b'survey-package-bytes'
-DIGEST = hashlib.sha256(PACKAGE).hexdigest()
+
+def _package(entries: dict) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in entries.items():
+            archive.writestr(name, payload)
+    return buffer.getvalue()
+
+
+LAYERS = {'objects.geojson': b'{"objects": 1}', 'pdps.geojson': b'{"pdps": 1}'}
+PACKAGE = _package(LAYERS)
+DIGEST = assign._package_hash(PACKAGE)
 LEGACY_NAME = 'c349495181824d0f9b3929503d682673'  # what the old code wrote
+
+
+class PackageIdentityTests(SimpleTestCase):
+    """Two builds of the same run do not produce the same zip bytes.
+
+    Measured 2026-10-13 against the live engine: 15 identical entry names and
+    15 identical entry hashes, in containers that differ. A copy holds the
+    entries, so the archive's own bytes must not be the identity -- otherwise
+    every assignment rebuilds, compares two hashes that can never match, and
+    re-imports 2,164 rows to arrive where it started.
+    """
+
+    def _built(self, payload: bytes) -> str:
+        return assign._package_hash(payload)
+
+    def test_the_archive_bytes_are_not_the_identity(self):
+        reordered = _package(
+            {'pdps.geojson': LAYERS['pdps.geojson'], 'objects.geojson': LAYERS['objects.geojson']}
+        )
+
+        self.assertNotEqual(PACKAGE, reordered)
+        self.assertEqual(self._built(PACKAGE), self._built(reordered))
+
+    def test_a_changed_layer_changes_the_identity(self):
+        changed = _package({**LAYERS, 'objects.geojson': b'{"objects": 2}'})
+
+        self.assertNotEqual(self._built(PACKAGE), self._built(changed))
 
 
 class SurveyPackageTests(SimpleTestCase):
@@ -55,29 +95,27 @@ class SurveyPackageTests(SimpleTestCase):
         path.write_bytes(payload)
         return path
 
-    def test_a_stored_package_is_reused_instead_of_rebuilt(self):
-        """The package on disk is the one the download endpoint serves."""
-        stored = self._stored(DIGEST)
-        session = SimpleNamespace(stored_file_path=str(stored))
+    def test_the_package_is_the_current_build_and_is_named_for_its_bytes(self):
+        """The copy is imported from what the engine serves now."""
+        session = SimpleNamespace(stored_file_path=None)
 
-        with mock.patch.object(assign, 'generate_survey_package') as build:
+        with mock.patch.object(assign, 'generate_survey_package', return_value=PACKAGE) as build:
             _session, path, digest = assign._survey_package('project', 'p' * 32, session)
 
-        build.assert_not_called()
+        build.assert_called_once_with('p' * 32)
         self.assertEqual(digest, DIGEST)
-        self.assertEqual(Path(path), stored)
-        # Canonical already: nothing about the copy is written.
-        self.sessions.objects.update_or_create.assert_not_called()
+        self.assertEqual(Path(path).name, f'{DIGEST}.zip')
+        self.assertEqual(Path(path).read_bytes(), PACKAGE)
 
-    def test_a_legacy_name_is_canonicalised_and_the_bytes_are_untouched(self):
-        """An older copy gets the hash name without its package changing."""
-        stored = self._stored(LEGACY_NAME)
+    def test_an_older_name_is_replaced_by_the_current_build(self):
+        """A stored package under another name is not trusted as the import."""
+        stored = self._stored(LEGACY_NAME, b'older-package')
         session = SimpleNamespace(stored_file_path=str(stored))
 
-        with mock.patch.object(assign, 'generate_survey_package') as build:
+        with mock.patch.object(assign, 'generate_survey_package', return_value=PACKAGE) as build:
             _session, path, digest = assign._survey_package('project', 'p' * 32, session)
 
-        build.assert_not_called()
+        build.assert_called_once()
         self.assertEqual(Path(path).read_bytes(), PACKAGE)
         self.assertEqual(Path(path).name, f'{DIGEST}.zip')
         self.sessions.objects.update_or_create.assert_called_once()
@@ -85,6 +123,17 @@ class SurveyPackageTests(SimpleTestCase):
             self.sessions.objects.update_or_create.call_args.kwargs['defaults']['stored_file_path'],
             path,
         )
+
+    def test_a_package_with_the_same_entries_keeps_the_record(self):
+        """Same bytes, same name: the record already points at it."""
+        stored = self._stored(DIGEST)
+        session = SimpleNamespace(stored_file_path=str(stored))
+
+        with mock.patch.object(assign, 'generate_survey_package', return_value=PACKAGE):
+            _session, path, digest = assign._survey_package('project', 'p' * 32, session)
+
+        self.assertEqual(Path(path), stored)
+        self.sessions.objects.update_or_create.assert_not_called()
 
     def test_a_missing_package_is_built(self):
         session = SimpleNamespace(stored_file_path=str(Path(self.media) / 'imports' / 'gone.zip'))

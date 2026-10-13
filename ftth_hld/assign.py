@@ -25,6 +25,8 @@ Flow
 from __future__ import annotations
 
 import hashlib
+import io
+import zipfile
 from pathlib import Path
 
 from django.conf import settings
@@ -42,37 +44,44 @@ SURVEY_SUFFIX = ' - Survey'
 
 
 def _package_hash(payload: bytes) -> str:
-    """Content hash of a survey package -- also the name it is stored under."""
-    return hashlib.sha256(payload).hexdigest()
+    """Identity of a survey package: its entries' names and bytes.
+
+    Not the sha256 of the zip itself. Two builds of the same run carry the same
+    entries -- measured 2026-10-13: 15 identical names, 15 identical entry
+    hashes -- inside containers that do not match byte for byte, because the
+    archive rewrite is not something a copy cares about. What the copy holds is
+    the entries, so that is what is hashed, and the digest is also the name the
+    package is stored under.
+    """
+    digest = hashlib.sha256()
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        for name in sorted(archive.namelist()):
+            entry = archive.read(name)
+            digest.update(f'{name}:{len(entry)}:'.encode())
+            digest.update(hashlib.sha256(entry).digest())
+    return digest.hexdigest()
 
 
 def _survey_package(survey, ftth_project_id: str, session=None):
-    """The field-survey package for a copy: the stored one, or a fresh build.
+    """The run's current survey package, stored under its own content hash.
 
     Returns ``(import_session, path, content_hash)``.
 
-    Building the package is one engine round trip per layer -- measured at
-    7.8s on 2026-10-13 -- and it fails the whole assignment when the engine
-    cannot answer, for bytes that are already on disk: the copy's package is
-    the file the package-download endpoint serves for that copy, and the run it
-    came from has to be completed before it can be assigned at all. So the
-    package is built once, when the copy is created, and reused afterwards.
+    The package is built here, as it is on every download
+    (``generate_survey_package``), because a run's layers can still be written
+    after it is published -- one project's pole and aerial stages wrote two
+    hours later, and a package built before that was missing them. A copy has
+    to be imported from the package the platform is serving now.
 
-    A package is stored under its own content hash (``imports/<sha256>.zip``),
-    whatever it was called before. The name is how a later assignment knows the
-    rows it is looking at came from exactly these bytes, and older copies get
-    that name the first time they are assigned again -- the bytes do not change
-    when the name does.
+    Storing it under its content hash (``imports/<sha256>.zip``) is what lets
+    the next assignment tell whether the copy already holds these exact bytes,
+    and therefore whether the import has to run at all.
     """
     if session is None:
         session = ImportSession.objects.filter(project=survey).first()
     stored_path = session.stored_file_path if session else None
-    payload = None
-    if stored_path and Path(stored_path).exists():
-        payload = Path(stored_path).read_bytes()
-    if not payload:
-        payload = generate_survey_package(ftth_project_id)
 
+    payload = generate_survey_package(ftth_project_id)
     digest = _package_hash(payload)
     stored = Path(settings.MEDIA_ROOT) / 'imports' / f'{digest}.zip'
     if str(stored) != stored_path:
@@ -95,12 +104,14 @@ def _holds_this_import(survey, stored_path, package_hash: str) -> bool:
     """Does the copy already hold the import of exactly these package bytes?
 
     ``stored_path`` is the file the copy's import came from -- the path as it
-    was recorded before this assignment touched it. That name has to be the
-    file's own content hash: it is what the assignment flow writes, in the same
-    transaction as the import, so the name is the proof that the rows and these
-    bytes belong together. A copy whose package is missing, or was written by
-    the older code under a random uuid name, answers False and is imported
-    again -- once; the name is canonical from then on.
+    was recorded before this assignment touched it -- and it has to be named
+    for its own content hash, which the assignment flow writes in the same
+    transaction as the import. The name is then the proof that the rows and
+    these bytes belong together: the bytes are current (``_survey_package``
+    just built them) and the copy was imported from them and nothing has
+    replaced them since. A copy whose package is missing, or was written by the
+    older code under a random uuid name, answers False and is imported again --
+    once; the name is canonical from then on.
     """
     if not stored_path or not package_hash:
         return False
@@ -198,15 +209,15 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
         layer_names = [l['name'] for l in layers]
 
         if _holds_this_import(survey, imported_from, package_hash):
-            # Re-assignment is idempotent, so re-importing a package the copy
-            # already holds is work that produces the rows that are already
-            # there. Measured 2026-10-13: dropping and re-inserting 2,164
-            # features is 5.74s of collector plus ~4.5s of INSERTs -- 10s of a
-            # request the host ends somewhere around 20-45s, spent to arrive
-            # back where it started (a browser saw this path die at 20.8s with
-            # no reply at all and reported it as "could not reach the design
-            # service"). Only a copy that does not already hold this package
-            # pays for the import.
+            # The copy was imported from these exact bytes, so re-importing it
+            # produces the rows that are already there. Measured 2026-10-13:
+            # dropping and re-inserting 2,164 features is 5.74s of Django
+            # collector plus ~4.5s of INSERTs -- 10s of a request the host ends
+            # somewhere around 20-45s, spent to arrive back where it started
+            # (a browser saw this path die at 20.8s with no reply at all and
+            # reported it as "could not reach the design service"). Only a copy
+            # that does not already hold the current package pays for the
+            # import.
             features_created = Feature.objects.filter(project=survey).count()
         else:
             # Drop any previous import so we never accumulate duplicates; the
