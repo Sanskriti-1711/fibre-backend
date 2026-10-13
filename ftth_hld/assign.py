@@ -24,8 +24,8 @@ Flow
 
 from __future__ import annotations
 
-import os
-import uuid
+import hashlib
+from pathlib import Path
 
 from django.conf import settings
 from django.db import transaction
@@ -39,6 +39,74 @@ from .models import FtthProject
 from .pipeline import generate_survey_package
 
 SURVEY_SUFFIX = ' - Survey'
+
+
+def _package_hash(payload: bytes) -> str:
+    """Content hash of a survey package -- also the name it is stored under."""
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _survey_package(survey, ftth_project_id: str, session=None):
+    """The field-survey package for a copy: the stored one, or a fresh build.
+
+    Returns ``(import_session, path, content_hash)``.
+
+    Building the package is one engine round trip per layer -- measured at
+    7.8s on 2026-10-13 -- and it fails the whole assignment when the engine
+    cannot answer, for bytes that are already on disk: the copy's package is
+    the file the package-download endpoint serves for that copy, and the run it
+    came from has to be completed before it can be assigned at all. So the
+    package is built once, when the copy is created, and reused afterwards.
+
+    A package is stored under its own content hash (``imports/<sha256>.zip``),
+    whatever it was called before. The name is how a later assignment knows the
+    rows it is looking at came from exactly these bytes, and older copies get
+    that name the first time they are assigned again -- the bytes do not change
+    when the name does.
+    """
+    if session is None:
+        session = ImportSession.objects.filter(project=survey).first()
+    stored_path = session.stored_file_path if session else None
+    payload = None
+    if stored_path and Path(stored_path).exists():
+        payload = Path(stored_path).read_bytes()
+    if not payload:
+        payload = generate_survey_package(ftth_project_id)
+
+    digest = _package_hash(payload)
+    stored = Path(settings.MEDIA_ROOT) / 'imports' / f'{digest}.zip'
+    if str(stored) != stored_path:
+        stored.parent.mkdir(parents=True, exist_ok=True)
+        if not stored.exists():
+            stored.write_bytes(payload)
+        session, _ = ImportSession.objects.update_or_create(
+            project=survey,
+            defaults={
+                'original_filename': f'{ftth_project_id}_survey_package.zip',
+                'stored_file_path': str(stored),
+                'status': 'imported',
+                'validation_summary': None,
+            },
+        )
+    return session, str(stored), digest
+
+
+def _holds_this_import(survey, stored_path, package_hash: str) -> bool:
+    """Does the copy already hold the import of exactly these package bytes?
+
+    ``stored_path`` is the file the copy's import came from -- the path as it
+    was recorded before this assignment touched it. That name has to be the
+    file's own content hash: it is what the assignment flow writes, in the same
+    transaction as the import, so the name is the proof that the rows and these
+    bytes belong together. A copy whose package is missing, or was written by
+    the older code under a random uuid name, answers False and is imported
+    again -- once; the name is canonical from then on.
+    """
+    if not stored_path or not package_hash:
+        return False
+    if Path(stored_path).stem != package_hash:
+        return False
+    return Feature.objects.filter(project=survey).exists()
 
 
 def find_survey_copy(ftth_project_id: str):
@@ -118,24 +186,10 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
             survey.status = 'assigned'
             survey.save(update_fields=['name', 'status', 'updated_at'])
 
-        # ── 2. Generate + store the survey package ZIP ───────────────────
-        zip_bytes = generate_survey_package(ftth_project_id)
-        filename = f'{uuid.uuid4().hex}.zip'
-        rel_path = os.path.join('imports', filename)
-        full_path = os.path.join(settings.MEDIA_ROOT, rel_path)
-        os.makedirs(os.path.dirname(full_path), exist_ok=True)
-        with open(full_path, 'wb') as f:
-            f.write(zip_bytes)
-
-        ImportSession.objects.update_or_create(
-            project=survey,
-            defaults={
-                'original_filename': f'{ftth_project_id}_survey_package.zip',
-                'stored_file_path': full_path,
-                'status': 'imported',
-                'validation_summary': None,
-            },
-        )
+        # ── 2. The survey package: built once, then reused ───────────────
+        session = ImportSession.objects.filter(project=survey).first()
+        imported_from = session.stored_file_path if session else None
+        session, full_path, package_hash = _survey_package(survey, ftth_project_id, session)
 
         # ── 3. Import the WGS84 GeoJSON layers as Feature rows ───────────
         from projects.api.import_views import discover_zip_layers, import_zip_layers
@@ -143,12 +197,27 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
         layers = discover_zip_layers(full_path)
         layer_names = [l['name'] for l in layers]
 
-        # Re-assigning the same HLD run must be idempotent: drop any
-        # previously imported features so we never accumulate duplicates.
-        # The enclosing transaction guarantees old features survive a
-        # failed re-import.
-        Feature.objects.filter(project=survey).delete()
-        features_created = import_zip_layers(survey, full_path, layer_names)
+        if _holds_this_import(survey, imported_from, package_hash):
+            # Re-assignment is idempotent, so re-importing a package the copy
+            # already holds is work that produces the rows that are already
+            # there. Measured 2026-10-13: dropping and re-inserting 2,164
+            # features is 5.74s of collector plus ~4.5s of INSERTs -- 10s of a
+            # request the host ends somewhere around 20-45s, spent to arrive
+            # back where it started (a browser saw this path die at 20.8s with
+            # no reply at all and reported it as "could not reach the design
+            # service"). Only a copy that does not already hold this package
+            # pays for the import.
+            features_created = Feature.objects.filter(project=survey).count()
+        else:
+            # Drop any previous import so we never accumulate duplicates; the
+            # enclosing transaction guarantees the old features survive a
+            # failed re-import. Left to Django's collector on purpose: the
+            # database will not cascade for us (Django writes every foreign key
+            # as ON DELETE NO ACTION, and nine tables reference Feature), and a
+            # bare DELETE would leave orphans for the deferred constraint to
+            # reject at commit -- as a 502, after the import.
+            Feature.objects.filter(project=survey).delete()
+            features_created = import_zip_layers(survey, full_path, layer_names)
 
         # Features imported as pending; a project-scope assignment marks the
         # whole project as assigned (matches existing assignment semantics).
