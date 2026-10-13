@@ -135,6 +135,26 @@ class SurveyPackageTests(SimpleTestCase):
         self.assertEqual(Path(path), stored)
         self.sessions.objects.update_or_create.assert_not_called()
 
+    def test_a_deleted_package_is_written_back_even_when_the_name_matches(self):
+        """The host's disk does not survive a deploy.
+
+        The record can point at the right name while the file is gone, and the
+        import reads the file: the live service answered 404 "Survey package not
+        available" for a package whose name and content had not changed, because
+        the container holding it had been replaced between the two calls.
+        """
+        stored = Path(self.media) / 'imports' / f'{DIGEST}.zip'
+        session = SimpleNamespace(stored_file_path=str(stored))
+        self.assertFalse(stored.exists())
+
+        with mock.patch.object(assign, 'generate_survey_package', return_value=PACKAGE):
+            _session, path, digest = assign._survey_package('project', 'p' * 32, session)
+
+        self.assertEqual(digest, DIGEST)
+        self.assertTrue(Path(path).exists())
+        self.assertEqual(Path(path).read_bytes(), PACKAGE)
+        self.sessions.objects.update_or_create.assert_not_called()
+
     def test_a_missing_package_is_built(self):
         session = SimpleNamespace(stored_file_path=str(Path(self.media) / 'imports' / 'gone.zip'))
 

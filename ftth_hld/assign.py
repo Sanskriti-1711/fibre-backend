@@ -84,10 +84,16 @@ def _survey_package(survey, ftth_project_id: str, session=None):
     payload = generate_survey_package(ftth_project_id)
     digest = _package_hash(payload)
     stored = Path(settings.MEDIA_ROOT) / 'imports' / f'{digest}.zip'
+    # The bytes are written whenever they are missing, even when the record
+    # already points at this name: the host's disk does not survive a deploy,
+    # and the file is what the import reads. Found on the live service -- the
+    # assignment answered 404 "Survey package not available" for a package whose
+    # name and content had not changed, because the container that held the file
+    # had been replaced between the two calls.
+    stored.parent.mkdir(parents=True, exist_ok=True)
+    if not stored.exists():
+        stored.write_bytes(payload)
     if str(stored) != stored_path:
-        stored.parent.mkdir(parents=True, exist_ok=True)
-        if not stored.exists():
-            stored.write_bytes(payload)
         session, _ = ImportSession.objects.update_or_create(
             project=survey,
             defaults={
