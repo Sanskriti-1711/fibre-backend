@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import time
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
@@ -612,9 +613,10 @@ def sync_project_layers(project_id: str, layer_names=None, force: bool = False) 
         ]
     counts = {}
     for name in layer_names:
-        if not force and FtthLayer.objects.filter(
-            ftth_project__project_id=project_id, name=name
-        ).exists():
+        if (
+            not force
+            and FtthLayer.objects.filter(ftth_project__project_id=project_id, name=name).exists()
+        ):
             continue
         try:
             raw = get_layer_geojson(project_id, name)
@@ -878,11 +880,13 @@ def _db_layer_geojson(project_id: str, file_path: str) -> bytes | None:
             geometry = json.loads(geom_json)
         except (TypeError, ValueError):
             continue
-        features.append({
-            'type': 'Feature',
-            'geometry': geometry,
-            'properties': dict(props or {}),
-        })
+        features.append(
+            {
+                'type': 'Feature',
+                'geometry': geometry,
+                'properties': dict(props or {}),
+            }
+        )
 
     if not features:
         return None
@@ -896,14 +900,84 @@ def _db_layer_geojson(project_id: str, file_path: str) -> bytes | None:
         'features': features,
     }
     logger.info(
-        'Served %s/%s from gis.%s (%d features)', project_id, file_path, table, len(features),
+        'Served %s/%s from gis.%s (%d features)',
+        project_id,
+        file_path,
+        table,
+        len(features),
     )
     return json.dumps(payload).encode('utf-8')
 
 
+# How many output files a project's engine may 404 in a row before we stop
+# asking it for the rest of the run.
+#
+# A run's files are either all on the engine's disk or none of them are -- the
+# disk belongs to the machine that executed the pipeline. The engine still
+# *lists* every file for a run it restored from the shared database row, so a
+# package built on another host asks for each one and gets a 404 back. Measured
+# 2026-10-13 against the live engine, project 24cd3573f4884a578c1b98a80bbd4040:
+# 160 output files listed, 160 requests, 160 x 404, ~54s of pure dead time
+# inside the survey assignment. One 404 is not proof (a run can legitimately
+# lack an optional layer); three in a row is.
+ENGINE_MISS_LIMIT = 3
+
+# Seconds to wait before asking an engine about a project again after its files
+# went missing there. The files can come back (the run is re-executed on this
+# engine), so the verdict is explicitly temporary: it only spares us the dead
+# round trips of a package build, it never decides correctness -- the host
+# cache and the shared database still serve every layer they hold.
+ENGINE_MISS_COOLDOWN = 600.0
+
+# project_id -> (consecutive 404s, monotonic time of the last one)
+_ENGINE_FILE_MISSES: dict[str, tuple[int, float]] = {}
+
+
+def _engine_files_missing(project_id: str) -> bool:
+    """True while this engine is known not to have the run's output files.
+
+    Only once ENGINE_MISS_LIMIT files have 404'd in a row: one absent layer is
+    a normal run, and writing the engine off for it would silently drop every
+    file the engine *does* have from the next package.
+    """
+    misses = _ENGINE_FILE_MISSES.get(project_id)
+    if not misses:
+        return False
+    count, seen_at = misses
+    if count < ENGINE_MISS_LIMIT:
+        return False
+    if time.monotonic() - seen_at > ENGINE_MISS_COOLDOWN:
+        _ENGINE_FILE_MISSES.pop(project_id, None)
+        return False
+    return True
+
+
+def _note_engine_download(project_id: str, found: bool) -> None:
+    """Track consecutive engine 404s so a package stops paying for them."""
+    if found:
+        _ENGINE_FILE_MISSES.pop(project_id, None)
+        return
+    count, _seen_at = _ENGINE_FILE_MISSES.get(project_id, (0, 0.0))
+    count += 1
+    _ENGINE_FILE_MISSES[project_id] = (count, time.monotonic())
+    if count >= ENGINE_MISS_LIMIT:
+        logger.info(
+            'Engine has none of %s output files (%d consecutive 404s); '
+            'serving the rest of this run from the host cache and the shared '
+            'database for the next %ds.',
+            project_id,
+            count,
+            int(ENGINE_MISS_COOLDOWN),
+        )
+
+
 def get_download_file(project_id: str, file_path: str) -> bytes | None:
     """
-    Download an output file from the FastAPI engine.
+    Fetch one of a run's output files, from wherever it still exists.
+
+    Order: the engine's disk (the canonical file), then this host's cache of
+    the outputs, then the shared database -- which holds the layer itself even
+    when the engine's disk (or this host's cache) does not.
     """
     if not file_path or '\\' in file_path or '..' in Path(file_path).parts:
         return None
@@ -911,14 +985,17 @@ def get_download_file(project_id: str, file_path: str) -> bytes | None:
     if clean_path.is_absolute():
         return None
     safe_path = clean_path.as_posix()
-    url = _engine_url(f"/ftth/hld/download/{project_id}/{quote(safe_path, safe='/')}")
 
-    try:
-        resp = requests.get(url, timeout=60)
-        if resp.status_code == 200:
-            return resp.content
-    except requests.RequestException as exc:
-        logger.warning('Engine unreachable for download %s/%s: %s', project_id, file_path, exc)
+    if not _engine_files_missing(project_id):
+        url = _engine_url(f"/ftth/hld/download/{project_id}/{quote(safe_path, safe='/')}")
+        try:
+            resp = requests.get(url, timeout=60)
+            if resp.status_code == 200:
+                _note_engine_download(project_id, True)
+                return resp.content
+            _note_engine_download(project_id, False)
+        except requests.RequestException as exc:
+            logger.warning('Engine unreachable for download %s/%s: %s', project_id, file_path, exc)
 
     # Fallback: try locally-cached file
     host_file = HOST_OUTPUTS_DIR / project_id / safe_path
@@ -1073,8 +1150,23 @@ def _engine_deliverable_names(project_id: str) -> list:
     names = []
     for dl in status.get('downloads') or []:
         n = dl.get('name') if isinstance(dl, dict) else str(dl)
-        if not n or n.startswith(('inputs/', 'brownfield/')):
-            continue  # raw source inputs are not design deliverables
+        if not n or '/' in n or '\\' in n:
+            # Raw source inputs (``inputs/...``, ``brownfield/...``) are not
+            # deliverables -- and neither is anything else in a subdirectory.
+            # The engine also lists the trench designer's scratch runs
+            # (``design_all/``, ``design_chain/``, ``design_crossings/``,
+            # ``design_defaults/``, ``design_score/``, ``design_score_compare/``
+            # and ``brownfield_readback_check/``), each holding its own copy of
+            # ``Aerial_Drops`` and ``Final_Trenches``. Bundling them put SIX
+            # duplicate copies of those two layers into the survey package --
+            # 2,640 of its 4,804 Feature rows -- under exactly the same layer
+            # names as the real ones, so the field engineer received the same
+            # trench layer six times over. Each copy also cost an engine round
+            # trip, every one of them a 404 whenever the run's files are not on
+            # this engine's disk. A deliverable is a file in the run's output
+            # root: every name in SURVEY_PACKAGE_FILES / DESIGN_PACKAGE_FILES
+            # and every key in the two GeoJSON maps is a bare filename.
+            continue
         if n.lower().endswith('.geojson') and (
             n in DESIGN_GEOJSON_FILES or n in SURVEY_GEOJSON_FILES
         ):
@@ -1222,8 +1314,10 @@ def generate_design_package(project_id: str) -> bytes:
     names = []
     for dl in downloads:
         n = dl.get('name') if isinstance(dl, dict) else str(dl)
-        if not n or n.startswith(('inputs/', 'brownfield/')):
-            continue  # raw source inputs are not design deliverables
+        if not n or '/' in n or '\\' in n:
+            # Raw source inputs AND the trench designer's per-variant scratch
+            # runs -- see _engine_deliverable_names for the full reasoning.
+            continue
         if n.lower().endswith('.geojson'):
             # Known layers are added reprojected (WGS84) via the map
             # below; keep any brand-new geojson raw so nothing is lost.

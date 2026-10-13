@@ -57,14 +57,36 @@ def discover_zip_layers(file_path):
     return layers
 
 
+# Rows per INSERT when importing a package. The features are built in memory
+# and written in batches instead of one INSERT per feature: the shared database
+# is a network hop away (measured 32ms per query on 2026-10-13, and ~150ms from
+# the deploy region), so a per-row loop over a real survey package -- 2,164
+# rows for a typical run, 4,804 with the duplicate layers that used to be
+# bundled -- cost 70-150s of pure latency inside a synchronous request. That is
+# what pushed the survey assignment past the platform's request budget and made
+# it fail with a 502. Batches keep the same rows, the same order and the same
+# timestamps (`bulk_create` still runs each field's `pre_save`).
+IMPORT_BATCH_SIZE = 500
+
+
 def import_zip_layers(project, file_path, selected_layers):
     """Create Feature records from .geojson layers inside a zip.
 
     Extracted from GpkgImportView so the survey-package auto-import can
     reuse the same import logic without an HTTP round-trip. Returns the
     number of features created.
+
+    Writes in batches of IMPORT_BATCH_SIZE (see above); a caller sees the
+    finished rows in one go, exactly as before.
     """
     features_created = 0
+    pending = []
+
+    def _flush():
+        if pending:
+            Feature.objects.bulk_create(pending, batch_size=IMPORT_BATCH_SIZE)
+            pending.clear()
+
     selected_lower = [s.lower() for s in (selected_layers or [])]
     with zipfile.ZipFile(file_path, 'r') as zf:
         for info in zf.infolist():
@@ -98,16 +120,21 @@ def import_zip_layers(project, file_path, selected_layers):
                     props = {}
                 if not geom or not isinstance(geom, dict):
                     continue
-                Feature.objects.create(
-                    project=project,
-                    layer_name=layer_name,
-                    layer_id=layer_name,
-                    properties=props,
-                    geometry=geom,
-                    field_schema=field_schema,
-                    status=Feature.STATUS_PENDING,
+                pending.append(
+                    Feature(
+                        project=project,
+                        layer_name=layer_name,
+                        layer_id=layer_name,
+                        properties=props,
+                        geometry=geom,
+                        field_schema=field_schema,
+                        status=Feature.STATUS_PENDING,
+                    )
                 )
                 features_created += 1
+                if len(pending) >= IMPORT_BATCH_SIZE:
+                    _flush()
+    _flush()
     return features_created
 
 
