@@ -120,6 +120,50 @@ def _holds_this_import(survey, stored_path, package_hash: str) -> bool:
     return Feature.objects.filter(project=survey).exists()
 
 
+def _field_data_queries(survey):
+    """Every place an engineer's work on this copy can be recorded.
+
+    Read by the re-assignment guard. The typed field tables point at the copy's
+    Feature rows, which a re-import replaces with new ids: the rows survive the
+    foreign key (it is ``SET NULL``) but stop describing the feature they were
+    recorded against, which is damage all the same. Kept in one place so a new
+    record of field work is one line away from being protected.
+    """
+    from survey.models import (
+        ApprovalRecord,
+        ExistingAsset,
+        FieldEvidence,
+        GPSTrace,
+        Hazard,
+        RiskAssessment,
+        SurveyEditLog,
+        SurveyFeature,
+        SurveyStatus,
+        TrenchSurvey,
+    )
+
+    features = Feature.objects.filter(project=survey)
+    return [
+        (SurveyFeature, {'project': survey}),
+        (ApprovalRecord, {'survey_feature__project': survey}),
+        (GPSTrace, {'project': survey}),
+        (TrenchSurvey, {'feature__in': features}),
+        (ExistingAsset, {'feature__in': features}),
+        (RiskAssessment, {'feature__in': features}),
+        (Hazard, {'feature__in': features}),
+        (FieldEvidence, {'feature__in': features}),
+        (SurveyEditLog, {'feature__in': features}),
+        (SurveyStatus, {'feature__in': features}),
+    ]
+
+
+def _holds_field_data(survey) -> bool:
+    """Has anyone recorded work against this copy yet?"""
+    return any(
+        model.objects.filter(**lookup).exists() for model, lookup in _field_data_queries(survey)
+    )
+
+
 def find_survey_copy(ftth_project_id: str):
     """Return the Survey copy Project for an HLD run, or None."""
     return Project.objects.filter(source_ftth_project_id=ftth_project_id).first()
@@ -176,22 +220,21 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
                 source_ftth_project_id=ftth_project_id,
             )
         else:
-            # Data-safety guard: once an engineer accepts the copy (active),
-            # re-assigning would wipe their survey progress. Refuse instead.
-            if survey.status in (
-                'in_progress',
-                'active',
-                'submitted',
-                'under_review',
-                'reviewed',
-                'accepted',
-                'redo',
-                'completed',
-            ):
+            # Data-safety guard: re-assigning replaces the copy's features, so
+            # it must not happen once anything has been recorded against them --
+            # a survey change, a typed field row, a GPS trace, an approval.
+            #
+            # The reason has to be the data, not the status. An engineer who
+            # has accepted a copy and not touched it has nothing to lose, and
+            # refusing there left a planner unable to correct a mis-assignment
+            # from this page at all (only the mobile app can undo an
+            # acceptance). Measured 2026-10-13 on the live copy: accepted by the
+            # engineer, and zero rows in every table an edit would write.
+            if _holds_field_data(survey):
                 raise ValueError(
-                    f"Survey copy '{survey.name}' is already {survey.status}; "
-                    're-assigning would erase survey data and approvals. '
-                    'Re-assign only while the copy is pending.'
+                    f"Survey copy '{survey.name}' already holds field-survey data; "
+                    're-assigning would replace the features it was recorded against. '
+                    'Re-assign only before the engineer records work.'
                 )
             survey.name = f'{hld.name or ftth_project_id}{SURVEY_SUFFIX}'
             survey.status = 'assigned'

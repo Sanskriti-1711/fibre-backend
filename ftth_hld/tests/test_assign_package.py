@@ -154,6 +154,60 @@ class SurveyPackageTests(SimpleTestCase):
         self.assertEqual(Path(path).read_bytes(), PACKAGE)
 
 
+class ReassignGuardTests(SimpleTestCase):
+    """A copy may be replaced until someone has recorded something in it.
+
+    The guard used to refuse by ``status``, which made an accepted-but-untouched
+    copy impossible to re-assign from the results page: an engineer who taps
+    "accept" and does nothing else could not be replaced or corrected. The
+    decision now reads the data, so the tests pin which records count and that
+    any single one of them is enough.
+    """
+
+    @staticmethod
+    def _probes(*recorded: bool):
+        probes = []
+        for flag in recorded:
+            model = mock.Mock()
+            model.objects.filter.return_value.exists.return_value = flag
+            probes.append((model, {}))
+        return probes
+
+    def test_every_record_of_field_work_is_probed(self):
+        probes = assign._field_data_queries(None)
+        models = [model.__name__ for model, _lookup in probes]
+
+        self.assertEqual(len(models), len(set(models)))
+        for name in (
+            'SurveyFeature',
+            'ApprovalRecord',
+            'GPSTrace',
+            'TrenchSurvey',
+            'ExistingAsset',
+            'RiskAssessment',
+            'Hazard',
+            'FieldEvidence',
+            'SurveyEditLog',
+            'SurveyStatus',
+        ):
+            self.assertIn(name, models)
+        # The typed rows hang off the copy's features, which a re-import replaces.
+        typed = dict((model.__name__, lookup) for model, lookup in probes)
+        self.assertIn('feature__in', typed['TrenchSurvey'])
+
+    def test_a_copy_with_nothing_recorded_can_be_replaced(self):
+        with mock.patch.object(
+            assign, '_field_data_queries', return_value=self._probes(False, False, False)
+        ):
+            self.assertFalse(assign._holds_field_data(None))
+
+    def test_any_single_record_makes_the_copy_irreplaceable(self):
+        with mock.patch.object(
+            assign, '_field_data_queries', return_value=self._probes(False, True, False)
+        ):
+            self.assertTrue(assign._holds_field_data(None))
+
+
 class HoldsThisImportTests(SimpleTestCase):
     """When may an assignment leave the copy's features alone?"""
 
