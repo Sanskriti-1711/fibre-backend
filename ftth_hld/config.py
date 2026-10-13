@@ -131,6 +131,71 @@ LAYER_NAME_MAP = {
     'ducts': ('Feeder_Ducts', 'duct_layer'),
 }
 
+# Maps an engine output **file stem** → the `gis.*` table that backs it.
+#
+# The engine's own output files live on the engine's disk, which is NOT
+# duplicated on the host that serves this API. Every run also publishes its
+# layers into the shared PostGIS database, and that is the store the results
+# map already reads (`FtthLayer`, and `gis.*` straight from SQL). So when the
+# engine cannot serve a file - a restarted container, a run executed on another
+# machine, or a project whose engine-side exports predate a change - the
+# download path falls back to this table and the layer is still delivered
+# instead of silently vaporising from both packages.
+#
+# Stems are exactly as the engine names them in its ``downloads`` list, and
+# every table here is one the engine creates (see `postgis.LAYER_TABLES`).
+LAYER_STEM_GIS_TABLES = {
+    'Objects': 'object_layer',
+    'Polygons': 'polygon_layer',
+    'PDPs': 'pdps',
+    'MFG': 'mfg',
+    'MFG_Service_Areas': 'mfg_service_areas',
+    # Feeder/Distribution/Drop share one merged table, distinguishable by STAGE.
+    'Feeder_Cable': 'cable_layer',
+    'Distribution_Cable': 'cable_layer',
+    'Aerial_Cable': 'aerial_cable_layer',
+    'Feeder_Ducts': 'duct_layer',
+    'Distribution_Ducts': 'duct_layer',
+    'Drop_Ducts': 'duct_layer',
+    'Final_Trenches': 'trench_layer',
+    'Trench_Nodes': 'trench_nodes',
+    'Chambers': 'chambers',
+    'Coupleurs': 'coupleur_layer',
+    'Poles': 'poles',
+    'Existing_Infrastructure': 'brownfield',
+    'Existing_Infrastructure_Points': 'brownfield',
+    'Aerial_Spans': 'aerial_span_layer',
+    'Aerial_Cable': 'aerial_cable_layer',
+    'Aerial_Drops': 'aerial_drops',
+}
+
+# Stems that are SUB-LAYERS of one merged table: the feeder / distribution /
+# drop ducts all live in `gis.duct_layer`, and the feeder / distribution cables
+# in `gis.cable_layer`. They are told apart by the ``sublayer`` property the
+# engine stamps on every row, so a fallback serving the whole table under
+# `Feeder_Ducts.geojson` would hand back every duct in the design under a
+# feeder-only name (810 rows where the engine's own file holds 522 + 288, or 6
+# feeder cables against 359 cables). Filter on the property instead.
+LAYER_STEM_SUBLAYER = {
+    'Feeder_Cable': 'Feeder_Cable',
+    'Distribution_Cable': 'Distribution_Cable',
+    'Feeder_Ducts': 'Feeder_Ducts',
+    'Distribution_Ducts': 'Distribution_Ducts',
+    'Drop_Ducts': 'Drop_Ducts',
+}
+
+# Stems that share a table and are told apart by GEOMETRY rather than by a
+# property. The brownfield layer publishes its lines (existing ducts, trenches)
+# and its points (existing chambers, poles, cabinets) as two files, and the
+# engine ingests both into the one `gis.brownfield` table — so serving the whole
+# table under `Existing_Infrastructure_Points.geojson` would hand back the
+# polygons AND the points (108 rows where the engine's own file holds 11), and a
+# points-only layer would arrive carrying linework.
+LAYER_STEM_GEOMETRY = {
+    'Existing_Infrastructure': ('MULTILINESTRING', 'LINESTRING'),
+    'Existing_Infrastructure_Points': ('MULTIPOINT', 'POINT'),
+}
+
 # Pipeline steps for step-by-step execution (matches HLD_Planning_01 ONECLICK_OUTPUTS)
 PIPELINE_STEPS = [
     {
@@ -204,6 +269,12 @@ SURVEY_PACKAGE_FILES = [
     # The field team must know which drop legs are on the pole line and why,
     # otherwise an aerial leg looks like a missing trench on the map.
     'Aerial_Drops.gpkg',
+    # What the pole / aerial stage actually BUILDS for those legs: the overhead
+    # span that is never dug and the cable it carries. Published by the engine
+    # and drawn on the map, so a survey package without them is missing part of
+    # the network the crew is surveying against.
+    'Aerial_Spans.gpkg',
+    'Aerial_Cable.gpkg',
     'Final_Trenches.gpkg',
     'Feeder_Ducts.gpkg',
     'Distribution_Ducts.gpkg',
@@ -230,6 +301,8 @@ SURVEY_GEOJSON_FILES = {
     'Distribution_Cable.geojson': 'distribution_cable.geojson',
     'Chambers.geojson': 'chambers.geojson',
     'Aerial_Drops.geojson': 'aerial_drops.geojson',
+    'Aerial_Spans.geojson': 'aerial_spans.geojson',
+    'Aerial_Cable.geojson': 'aerial_cable.geojson',
     'Trench_Nodes.geojson': 'trench_nodes.geojson',
     'Final_Trenches.geojson': 'final_trenches.geojson',
     'Feeder_Ducts.geojson': 'feeder_ducts.geojson',
@@ -254,6 +327,8 @@ DESIGN_PACKAGE_FILES = [
     'MFG_Service_Areas.gpkg',
     'Final_Trenches.gpkg',
     'Aerial_Drops.gpkg',
+    'Aerial_Spans.gpkg',
+    'Aerial_Cable.gpkg',
     'Trench_Nodes.gpkg',
     'Pseudo_HH.gpkg',
     'Feeder_Cable.gpkg',
@@ -286,6 +361,8 @@ DESIGN_GEOJSON_FILES = {
     'Coupleurs.geojson': 'coupleurs.geojson',
     'Final_Trenches.geojson': 'final_trenches.geojson',
     'Aerial_Drops.geojson': 'aerial_drops.geojson',
+    'Aerial_Spans.geojson': 'aerial_spans.geojson',
+    'Aerial_Cable.geojson': 'aerial_cable.geojson',
     'Trench_Nodes.geojson': 'trench_nodes.geojson',
     'Chambers.geojson': 'chambers.geojson',
     'Poles.geojson': 'poles.geojson',

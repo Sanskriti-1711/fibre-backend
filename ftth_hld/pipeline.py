@@ -27,6 +27,9 @@ from .config import (
     DESIGN_GEOJSON_FILES,
     DESIGN_PACKAGE_FILES,
     FTTH_ENGINE_URL,
+    LAYER_STEM_GEOMETRY,
+    LAYER_STEM_GIS_TABLES,
+    LAYER_STEM_SUBLAYER,
     SURVEY_GEOJSON_FILES,
     SURVEY_PACKAGE_FILES,
 )
@@ -585,12 +588,20 @@ def backfill_feature_ids(project_id: str) -> int:
     return total_updated
 
 
-def sync_project_layers(project_id: str, layer_names=None) -> dict:
+def sync_project_layers(project_id: str, layer_names=None, force: bool = False) -> dict:
     """Fetch every HLD output layer and persist it into ``FtthLayer`` rows.
 
     Idempotent — layers already in the DB are skipped so repeated polls stay
     cheap. If ``layer_names`` is omitted it is derived from the engine status.
     Returns ``{layer_name: feature_count}`` for the layers persisted.
+
+    ``force`` re-persists a layer whose name is already stored. Skipping by
+    NAME is right for a poll (a run gaining a layer must not rewrite thousands
+    of features every few seconds) but wrong after a re-run of the same
+    project: every name the project already had keeps the PREVIOUS design's
+    geometry, and the map, the BOQ and the permit matrix are all read from
+    those rows — a re-run that halved the ducts kept showing the old ones.
+    See ``republish_project_layers`` for the forced path.
     """
     from .models import FtthLayer
 
@@ -601,7 +612,9 @@ def sync_project_layers(project_id: str, layer_names=None) -> dict:
         ]
     counts = {}
     for name in layer_names:
-        if FtthLayer.objects.filter(ftth_project__project_id=project_id, name=name).exists():
+        if not force and FtthLayer.objects.filter(
+            ftth_project__project_id=project_id, name=name
+        ).exists():
             continue
         try:
             raw = get_layer_geojson(project_id, name)
@@ -615,6 +628,68 @@ def sync_project_layers(project_id: str, layer_names=None) -> dict:
             continue
         counts[name] = persist_layer(project_id, name, data)
     return counts
+
+
+def republish_project_layers(project_id: str, layer_names=None) -> dict:
+    """Publish the engine's CURRENT layers over whatever the platform stored.
+
+    For a run that finished after its publish — the pole and aerial stages of
+    one project wrote two hours after theirs — every layer the project already
+    had kept the previous design's geometry on the platform while PostGIS held
+    the new one, so the results map, the BOQ and the permits disagreed with the
+    engine. This is the forced, explicit counterpart of the polling sync:
+
+    * every layer the engine reports is re-persisted, whatever is stored;
+    * a layer the engine no longer reports is REMOVED when the engine owns it —
+      a re-run that drops the couplers must not leave the previous design's
+      couplers on the map, and a stored row is served as-is forever (the layer
+      view only refreshes a row that is absent or empty);
+    * layers the PLATFORM derives are left alone — `trench_sections` is built
+      from the trenches by the post-HLD chain, which its own revision guard
+      re-arms once the republished trenches land.
+
+    Never call this from a poll: `_ingest_outputs` on the engine clears a
+    project's GIS rows before reloading them, so mid-run the engine reports
+    fewer layers than the project has, and a prune at that moment would delete
+    rows that are about to be republished.
+
+    Returns ``{'published': {name: features}, 'removed': [name, ...]}``.
+    """
+    from .models import FtthLayer
+
+    status_data = get_status(project_id) or {}
+    names = [
+        (layer.get('name') or '').lower()
+        for layer in status_data.get('layers') or []
+        if layer.get('name')
+    ]
+    published = sync_project_layers(project_id, names or layer_names, force=True)
+
+    engine_names = set(names if layer_names is None else layer_names)
+    derived = _derived_layer_names()
+    removed = []
+    stored = FtthLayer.objects.filter(ftth_project__project_id=project_id).values_list(
+        'name', flat=True
+    )
+    for name in stored:
+        if name in engine_names or name in derived:
+            continue
+        FtthLayer.objects.filter(ftth_project__project_id=project_id, name=name).delete()
+        removed.append(name)
+    if removed:
+        logger.info('Republished %s: removed stale layer(s) %s', project_id, ', '.join(removed))
+    return {'published': published, 'removed': removed}
+
+
+def _derived_layer_names() -> set:
+    """Layer names the PLATFORM builds from the engine's layers.
+
+    They have no engine counterpart, so a republish must not prune them: the
+    post-HLD chain owns them and rebuilds them when their source changed.
+    """
+    from permits.analysis.trench_sections import SECTION_LAYER
+
+    return {SECTION_LAYER}
 
 
 def get_surface_ai_review(project_id: str) -> dict | None:
@@ -722,6 +797,110 @@ def preview_surface_imagery(project_id: str, payload: dict) -> dict:
         raise EngineError(502, 'The engine returned an unreadable imagery preview.') from exc
 
 
+def _db_cursor():
+    """Open a cursor on the shared database.
+
+    A one-line indirection on purpose: patching ``connection.cursor`` itself
+    makes Django's own test teardown fail (it restores a wrapper it hung on the
+    connection), so the DB-backed layer fallback is exercised by patching this
+    instead.
+    """
+    from django.db import connection
+
+    return connection.cursor()
+
+
+def _db_layer_geojson(project_id: str, file_path: str) -> bytes | None:
+    """
+    Serve a layer file from the shared database when the engine cannot.
+
+    Every run publishes its layers into the shared PostGIS database, which is
+    the store the results map already reads — but the engine's own output
+    **files** live on the engine's disk, and that is not the same machine that
+    serves this API. A run executed elsewhere (or a container restarted without
+    a persistent volume) leaves the project's map perfectly intact while every
+    ``/ftth/hld/download/...`` returns 404, and both download packages come out
+    all but empty — a layer the database holds must never silently vanish from
+    a package.
+
+    Returns GeoJSON bytes for a layer table that carries this project's rows,
+    or ``None`` when the file is not a layer GeoJSON or the table is empty.
+    Only stems named in :data:`LAYER_STEM_GIS_TABLES` are served, so no
+    caller-supplied name ever reaches the SQL.
+    """
+    if not file_path.lower().endswith('.geojson'):
+        return None
+    stem = Path(file_path).stem
+    table = LAYER_STEM_GIS_TABLES.get(stem)
+    if not table:
+        return None
+
+    # A sub-layer of a merged table is served as itself, not as the whole table.
+    where = 'project_id = %s AND geom IS NOT NULL'
+    params = [project_id]
+    sublayer = LAYER_STEM_SUBLAYER.get(stem)
+    if sublayer:
+        where += " AND properties->>'sublayer' = %s"
+        params.append(sublayer)
+    # Some stems differ by GEOMETRY rather than by a property (the brownfield
+    # lines and its points share one table), so filter on the geometry type.
+    # The tuple is a literal whitelist, never caller-supplied.
+    geometry = LAYER_STEM_GEOMETRY.get(stem)
+    if geometry:
+        types = ', '.join(f"'{name}'" for name in geometry)
+        where += f' AND GeometryType(geom) IN ({types})'
+
+    try:
+        with _db_cursor() as cur:
+            cur.execute(
+                f'SELECT ST_AsGeoJSON(geom), properties, ST_SRID(geom) '
+                f'FROM gis."{table}" WHERE {where}',
+                params,
+            )
+            rows = cur.fetchall()
+    except Exception as exc:  # noqa: BLE001 - a missing table must not fail the download
+        logger.warning('DB layer fallback failed for %s/%s: %s', project_id, file_path, exc)
+        return None
+
+    srid = None
+    features = []
+    for geom_json, props, row_srid in rows:
+        if not geom_json:
+            continue
+        if srid is None and row_srid:
+            srid = int(row_srid)
+        if isinstance(props, str):
+            try:
+                props = json.loads(props)
+            except (TypeError, ValueError):
+                props = {}
+        try:
+            geometry = json.loads(geom_json)
+        except (TypeError, ValueError):
+            continue
+        features.append({
+            'type': 'Feature',
+            'geometry': geometry,
+            'properties': dict(props or {}),
+        })
+
+    if not features:
+        return None
+
+    # The `gis.*` geometry is stored in the project CRS, and this declares it so
+    # `_reproject_geojson` converts it once (to WGS84) instead of assuming the
+    # default and garbling the coordinates.
+    payload = {
+        'type': 'FeatureCollection',
+        'crs': {'type': 'name', 'properties': {'name': f'EPSG:{srid or 4326}'}},
+        'features': features,
+    }
+    logger.info(
+        'Served %s/%s from gis.%s (%d features)', project_id, file_path, table, len(features),
+    )
+    return json.dumps(payload).encode('utf-8')
+
+
 def get_download_file(project_id: str, file_path: str) -> bytes | None:
     """
     Download an output file from the FastAPI engine.
@@ -746,7 +925,9 @@ def get_download_file(project_id: str, file_path: str) -> bytes | None:
     if host_file.exists() and host_file.is_file():
         return host_file.read_bytes()
 
-    return None
+    # Last resort: the shared database, which holds the layer itself even when
+    # the engine's disk (or this host's cache) does not.
+    return _db_layer_geojson(project_id, safe_path)
 
 
 # ---------------------------------------------------------------------------
@@ -877,13 +1058,18 @@ def _engine_deliverable_names(project_id: str) -> list:
     Filenames the engine reports for a project, minus the raw source inputs.
 
     Both packages have to contain **every layer the run produced**, and a
-    curated list alone silently drops a layer the pipeline gained after the
-    list was written (``Trench_Nodes``, ``Poles``, the aerial pair). The
+    curated list alone silently drops a layer the pipeline gained after    the list was written (``Trench_Nodes``, ``Poles``, the aerial pair). The
     engine's own ``downloads`` is the single source of truth for what exists,
     so both packages are driven from it and the curated lists are only the
     fallback for an engine that cannot be reached.
+
+    The status is read through ``get_status`` (which ASKS the engine) and not
+    ``_read_status``: the latter is the disk cache of the last poll and nothing
+    invalidates it, so a package built after a run finished late was assembled
+    from the list that predated its last layers — one project's aerial chain
+    and poles were missing from both packages while their files sat on disk.
     """
-    status = _read_status(project_id) or {}
+    status = get_status(project_id) or {}
     names = []
     for dl in status.get('downloads') or []:
         n = dl.get('name') if isinstance(dl, dict) else str(dl)
@@ -1029,7 +1215,8 @@ def generate_design_package(project_id: str) -> bytes:
 
     Returns the raw zip bytes.
     """
-    status = _read_status(project_id) or {}
+    # `get_status`, not the disk cache — see _engine_deliverable_names.
+    status = get_status(project_id) or {}
     downloads = status.get('downloads') or []
 
     names = []
