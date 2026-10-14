@@ -287,3 +287,77 @@ class PackageContentsTests(SimpleTestCase):
         ):
             entries = self._entries(pipeline.generate_design_package(self.PROJECT))
         self.assertIn('Objects.gpkg', entries)
+
+
+class PackageReportTests(SimpleTestCase):
+    """A package says what it could not carry, instead of dropping it silently.
+
+    Measured on the live service 2026-10-14: the engine's output files for these
+    runs were gone, which left the survey ZIP with 16 GeoJSON layers and **not
+    one of its 17 GeoPackages** — a valid zip, served with 200, that said
+    nothing about the gap. Every package now carries PACKAGE_REPORT.txt, fills
+    the caller's `report`, and logs the shortfall at WARNING; only "nothing at
+    all could be bundled" is still an error.
+    """
+
+    PROJECT = 'c' * 32
+
+    def _build(self, download, status):
+        report: dict = {}
+        with (
+            mock.patch.object(pipeline, 'get_status', return_value=status),
+            mock.patch.object(pipeline, '_read_status', return_value=status),
+            mock.patch.object(pipeline, 'get_download_file', side_effect=download),
+        ):
+            blob = pipeline.generate_survey_package(self.PROJECT, report)
+        return zipfile.ZipFile(io.BytesIO(blob)), report
+
+    def test_a_missing_geopackage_is_named_in_the_archive_and_the_report(self):
+        def download(_project_id, name):
+            return None if name.endswith('.gpkg') else _feature_collection(1)
+
+        zf, report = self._build(download, _status('Objects.gpkg', 'Objects.geojson'))
+
+        text = zf.read(pipeline.PACKAGE_REPORT_NAME).decode('utf-8')
+        self.assertIn('THIS PACKAGE IS INCOMPLETE', text)
+        self.assertIn('Objects.gpkg', text)
+        self.assertEqual([item['name'] for item in report['missing']], ['Objects.gpkg'])
+        self.assertFalse(report['complete'])
+        self.assertIn('objects.geojson', report['bundled'])
+
+    def test_a_whole_package_reports_itself_complete(self):
+        def download(_project_id, name):
+            return b'gpkg-bytes' if name.endswith('.gpkg') else _feature_collection(1)
+
+        zf, report = self._build(download, _status('Objects.gpkg', 'Objects.geojson'))
+
+        text = zf.read(pipeline.PACKAGE_REPORT_NAME).decode('utf-8')
+        self.assertIn('Every file in the package contract is present.', text)
+        self.assertNotIn('THIS PACKAGE IS INCOMPLETE', text)
+        self.assertEqual(report['missing'], [])
+        self.assertEqual(report['substituted'], [])
+        self.assertTrue(report['complete'])
+
+    def test_a_geojson_replaced_by_its_geopackage_is_a_substitution(self):
+        """The layer is present, under another name — not a silent absence.
+
+        Only this layer's GeoPackage is on the engine, so its GeoJSON is
+        replaced rather than reported as absent.
+        """
+
+        def download(_project_id, name):
+            return b'gpkg-bytes' if name == 'Aerial_Spans.gpkg' else None
+
+        zf, report = self._build(download, _status('Aerial_Spans.gpkg'))
+
+        self.assertEqual(
+            [item['name'] for item in report['substituted']], ['aerial_spans.geojson']
+        )
+        self.assertIn('Aerial_Spans.gpkg', report['substituted'][0]['reason'])
+        self.assertIn('Aerial_Spans.gpkg', zf.namelist())
+        self.assertNotIn('aerial_spans.geojson', zf.namelist())
+        self.assertFalse(report['complete'])
+
+    def test_nothing_fetchable_is_still_an_error(self):
+        with self.assertRaises(FileNotFoundError):
+            self._build(lambda _p, _n: None, _status())

@@ -952,10 +952,46 @@ class DownloadFileView(APIView):
 # ======================================================================
 
 
+def _package_response_headers(report: dict) -> dict:
+    """Tell the caller what the package could NOT carry.
+
+    A package missing half its contract is still a valid zip served with 200,
+    so the only place a caller (or a monitor) can notice is here: measured
+    2026-10-14, a run whose files had left the engine's disk produced a survey
+    ZIP with 16 GeoJSON layers and none of its 17 GeoPackages, and the response
+    said nothing. The names are also inside the ZIP (``PACKAGE_REPORT.txt``).
+    """
+    missing = report.get('missing') or []
+    substituted = report.get('substituted') or []
+    absent = missing + substituted
+    headers = {
+        'X-Package-Complete': 'true' if report.get('complete') else 'false',
+        'X-Package-Bundled': str(len(report.get('bundled') or [])),
+        'X-Package-Missing': str(len(absent)),
+    }
+    if absent:
+        # A header has to stay small; the full list is in the archive.
+        headers['X-Package-Missing-Names'] = ','.join(
+            str(item.get('name')) for item in absent[:10]
+        )[:480]
+        logger.warning(
+            '%s package for %s: %d file(s) unavailable — %s',
+            report.get('label'),
+            report.get('project_id'),
+            len(absent),
+            ', '.join(str(item.get('name')) for item in absent[:8]),
+        )
+    return headers
+
+
 class SurveyPackageView(APIView):
     """
     Generate and download a survey package — a single ZIP containing
     all output GPKG files + BOQ + BOM for field engineers.
+
+    Answers with ``X-Package-Complete: false`` and ``X-Package-Missing`` when
+    any file in the contract could not be fetched, instead of serving a partial
+    archive as if it were whole.
     """
 
     permission_classes = [IsAuthenticated]
@@ -978,8 +1014,9 @@ class SurveyPackageView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        report: dict = {}
         try:
-            zip_bytes = generate_survey_package(project_id)
+            zip_bytes = generate_survey_package(project_id, report)
         except FileNotFoundError as exc:
             return JsonResponse(
                 {'detail': str(exc)},
@@ -999,6 +1036,7 @@ class SurveyPackageView(APIView):
             headers={
                 'Content-Disposition': f'attachment; filename="{zip_name}"',
                 'Content-Length': str(len(zip_bytes)),
+                **_package_response_headers(report),
             },
         )
 
@@ -1035,8 +1073,9 @@ class DesignPackageView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        report: dict = {}
         try:
-            zip_bytes = generate_design_package(project_id)
+            zip_bytes = generate_design_package(project_id, report)
         except FileNotFoundError as exc:
             return JsonResponse(
                 {'detail': str(exc)},
@@ -1056,6 +1095,7 @@ class DesignPackageView(APIView):
             headers={
                 'Content-Disposition': f'attachment; filename="{zip_name}"',
                 'Content-Length': str(len(zip_bytes)),
+                **_package_response_headers(report),
             },
         )
 

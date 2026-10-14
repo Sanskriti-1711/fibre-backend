@@ -1185,12 +1185,62 @@ def _engine_deliverable_names(project_id: str) -> list:
     return ordered
 
 
+# The entry every package carries, naming what it could not bundle. Not a
+# layer: readers select by extension (`discover_zip_layers` takes `.geojson`).
+PACKAGE_REPORT_NAME = 'PACKAGE_REPORT.txt'
+
+
+def _package_report_text(
+    label: str,
+    project_id: str,
+    bundled: list,
+    missing: list,
+    substituted: list,
+) -> str:
+    """The human-readable half of the package report (the other half is the
+    ``report`` dict and the WARNING log line)."""
+    lines = [
+        f'{label} package — run {project_id}',
+        '',
+        f'bundled: {len(bundled)} file(s)',
+        f'missing: {len(missing)} file(s)',
+        f'substituted: {len(substituted)} file(s)',
+        '',
+    ]
+    if missing:
+        lines.append(
+            'These files are part of the package contract and could not be fetched:'
+        )
+        lines.extend(f'  {item["name"]} — {item["reason"]}' for item in missing)
+        lines.append('')
+    if substituted:
+        lines.append('These files are in the package under a different name:')
+        lines.extend(f'  {item["name"]} — {item["reason"]}' for item in substituted)
+        lines.append('')
+    if missing or substituted:
+        lines.extend(
+            [
+                'THIS PACKAGE IS INCOMPLETE. It carries the files listed above, '
+                'and no others.',
+                'A run\'s output files live on the engine that executed it; when '
+                'that disk is gone, a',
+                'layer can still be served as GeoJSON from the shared database, '
+                'which a GeoPackage cannot.',
+                'Re-run the pipeline to publish the missing files again.',
+            ]
+        )
+    else:
+        lines.append('Every file in the package contract is present.')
+    return '\n'.join(lines) + '\n'
+
+
 def _build_package_zip(
     project_id: str,
     gpkg_files: list,
     geojson_map: dict,
     label: str,
     extra_files: dict | None = None,
+    report: dict | None = None,
 ) -> bytes:
     """
     Build a ZIP of pipeline outputs fetched from the FastAPI engine.
@@ -1204,6 +1254,15 @@ def _build_package_zip(
     ``extra_files`` (optional) maps zip filename → bytes and **overrides**
     any engine file of the same name — used to inject the database-computed
     BOQ/BOM workbooks over the engine's hardcoded templates.
+
+    Whatever could not be fetched is **reported, never dropped in silence**:
+    the ZIP always carries a ``PACKAGE_REPORT.txt`` naming every contract file
+    that is absent (and every one substituted), ``report`` is filled in when
+    the caller wants the same facts in the response, and the missing names are
+    logged at WARNING. Measured on the live service 2026-10-14: a run whose
+    files are no longer on the engine's disk produced a 150 KB "survey" ZIP
+    holding 16 GeoJSON files and **not one of its 17 GeoPackages**, and nothing
+    in the download, the response or the log said so.
     """
     zip_buffer = io.BytesIO()
 
@@ -1215,6 +1274,9 @@ def _build_package_zip(
         # pass, and the GeoJSON fallback below when the GeoJSON is absent).
         # Duplicate entries make some unzippers overwrite and others refuse.
         written: set = set()
+        bundled: list = []
+        missing: list = []
+        substituted: list = []
 
         def _write(name: str, payload: bytes) -> None:
             nonlocal files_added
@@ -1223,14 +1285,24 @@ def _build_package_zip(
             written.add(name)
             zf.writestr(name, payload)
             files_added += 1
+            bundled.append(name)
+
+        def _note_missing(name: str, reason: str) -> None:
+            missing.append({'name': name, 'reason': reason})
 
         # 1. Original GPKG / document files (skipped when an override exists)
         for fname in gpkg_files:
             if fname in extra_files:
                 continue
             data = get_download_file(project_id, fname)
-            if data is not None:
-                _write(fname, data)
+            if data is None:
+                _note_missing(
+                    fname,
+                    'not on the engine, not in the output cache, and no database '
+                    'fallback exists for a GeoPackage',
+                )
+                continue
+            _write(fname, data)
 
         # 2. GeoJSON versions (reprojected to WGS84)
         for engine_fname, zip_fname in geojson_map.items():
@@ -1247,8 +1319,18 @@ def _build_package_zip(
                 gpkg = get_download_file(project_id, gpkg_fname)
                 if gpkg is not None:
                     _write(gpkg_fname, gpkg)
+                    substituted.append(
+                        {
+                            'name': zip_fname,
+                            'reason': f'{engine_fname} was unavailable; {gpkg_fname} '
+                                      'was bundled in its place',
+                        }
+                    )
                     continue
-                logger.warning('GeoJSON not found: %s/%s', project_id, engine_fname)
+                _note_missing(
+                    zip_fname,
+                    f'neither {engine_fname} nor {gpkg_fname} could be fetched',
+                )
                 continue
             _write(zip_fname, _reproject_geojson(raw))
 
@@ -1256,18 +1338,57 @@ def _build_package_zip(
         for zip_fname, data in extra_files.items():
             _write(zip_fname, data)
 
+        # 4. The report travels with the package.
+        # A reader cannot otherwise tell a complete package from a partial one:
+        # the ZIP is valid either way, and the download authenticates as
+        # successful either way. `.txt` is not a layer — `discover_zip_layers`
+        # and every other reader skip anything that is not `.geojson`.
+        report_text = _package_report_text(label, project_id, bundled, missing, substituted)
+        written.add(PACKAGE_REPORT_NAME)
+        zf.writestr(PACKAGE_REPORT_NAME, report_text.encode('utf-8'))
+
     zip_buffer.seek(0)
 
+    # The failure is "nothing at all could be bundled" — the report entry is
+    # not a deliverable, so it does not count here.
     if files_added == 0:
         raise FileNotFoundError(
             f"No {label} files found for project '{project_id}'. "
             'The pipeline may still be running.'
         )
 
+    if missing or substituted:
+        logger.warning(
+            '%s package for %s is INCOMPLETE: %d of %d file(s) missing (%s), '
+            '%d substituted',
+            label,
+            project_id,
+            len(missing),
+            len(missing) + len(bundled),
+            ', '.join(item['name'] for item in missing[:8]) or '-',
+            len(substituted),
+        )
+    else:
+        logger.info(
+            '%s package for %s is complete: %d file(s)', label, project_id, len(bundled)
+        )
+
+    if report is not None:
+        report.update(
+            {
+                'label': label,
+                'project_id': project_id,
+                'bundled': sorted(bundled),
+                'missing': missing,
+                'substituted': substituted,
+                'complete': not missing and not substituted,
+            }
+        )
+
     return zip_buffer.getvalue()
 
 
-def generate_survey_package(project_id: str) -> bytes:
+def generate_survey_package(project_id: str, report: dict | None = None) -> bytes:
     """
     Generate the **field-survey package** zip — the compact subset a
     surveyor needs on site: polygons, PDPs, cables, chambers, final
@@ -1288,10 +1409,11 @@ def generate_survey_package(project_id: str) -> bytes:
         ordered,
         SURVEY_GEOJSON_FILES,
         'survey',
+        report=report,
     )
 
 
-def generate_design_package(project_id: str) -> bytes:
+def generate_design_package(project_id: str, report: dict | None = None) -> bytes:
     """
     Generate the **HLD design package** zip — the full deliverable for
     a design engineer: every output layer (objects, polygons, PDPs,
@@ -1354,6 +1476,7 @@ def generate_design_package(project_id: str) -> bytes:
         DESIGN_GEOJSON_FILES,
         'design',
         extra_files=extra_files,
+        report=report,
     )
 
 
