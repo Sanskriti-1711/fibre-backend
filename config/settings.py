@@ -119,19 +119,15 @@ else:
             'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.getenv('PGDATABASE', 'zeabur'),
             'USER': os.getenv('PGUSER', 'root'),
-            # No fallback, deliberately. The production credential belongs in
-            # the environment -- `.env` for a local run, the host's env for a
-            # deploy -- and a committed default is just a leaked password that
-            # also hides a misconfigured host, which would connect to this
-            # database as whoever the stale literal belongs to.
+            # From the environment only (.env locally, the host's env when
+            # deployed) -- no committed fallback. docs/DEPLOY.md, "No credential
+            # fallback, and a bounded database connect".
             'PASSWORD': os.getenv('PGPASSWORD'),
             'HOST': os.getenv('PGHOST', '91.98.18.217'),
             'PORT': os.getenv('PGPORT', '32467'),
-            # This database is remote, reached across the public internet, and
-            # psycopg's connect_timeout defaults to "wait forever". An
-            # unbounded connect pins the gunicorn worker handling it, and
-            # because the liveness probe shares that pool, it pins /healthz
-            # with it until the host gives up on the instance.
+            # Remote database: bound the connect so a stall cannot pin a worker
+            # (and the liveness probe that shares it). docs/DEPLOY.md, "No
+            # credential fallback, and a bounded database connect".
             'OPTIONS': {
                 'options': '-c search_path=business,public',
                 'connect_timeout': 5,

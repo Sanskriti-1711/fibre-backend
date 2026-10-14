@@ -114,7 +114,7 @@ Environment variables (Render → Environment):
 | `DJANGO_SECRET_KEY` | long random string | Without it, `settings.py` falls back to a committed insecure key. **Required.** |
 | `DJANGO_DEBUG` | `false` | Otherwise Django serves verbose error pages publicly. **Required.** |
 | `DJANGO_ALLOWED_HOSTS` | `<service>.onrender.com` | Replaces the permissive `*`. |
-| `PGDATABASE` / `PGUSER` / `PGPASSWORD` / `PGHOST` / `PGPORT` | the Zeabur database | Must match what the engine writes to. See section 1. |
+| `PGDATABASE` / `PGUSER` / `PGPASSWORD` / `PGHOST` / `PGPORT` | the Zeabur database | Must match what the engine writes to. See section 1. `PGPASSWORD` has **no committed fallback** — without it the container cannot connect. |
 | `FTTH_ENGINE_URL` | `https://ftth-planning.onrender.com` | Keeps HLD/LLD working on the existing engine. |
 | `EXTRA_CORS_ORIGINS` | the deployed frontend origin | e.g. `https://fe.example.com`. Comma-separated for several. |
 | `EXTRA_CSRF_TRUSTED_ORIGINS` | same origin | Required for admin/login POSTs. |
@@ -123,6 +123,21 @@ Environment variables (Render → Environment):
 Do **not** set `FTTH_DB` — leaving it unset selects the production branch of
 `config/settings.py`, which reads every connection detail from the variables
 above.
+
+### No credential fallback, and a bounded database connect
+
+`PGPASSWORD` is read from the environment and has **no default**. The repository
+is public, so a default here is a published credential — and it also hides a
+misconfigured host, which would connect to production as whoever the stale
+literal belonged to. A host that forgets the variable now fails to connect
+instead of failing silently in the wrong direction. (The literal was removed on
+2026-10-14; it is still in git history, so section 7 item 3 still applies.)
+
+The production database is **remote**, reached across the public internet, and
+psycopg's `connect_timeout` defaults to *wait forever*. `settings.py` sets it to
+**5s**. An unbounded connect pins the gunicorn worker handling it, and because
+the liveness probe shares that pool (see below), it would pin `/healthz` with it
+until the platform gave up on the instance and killed it.
 
 Set the **pre-deploy command** to:
 
@@ -214,6 +229,53 @@ curl -X POST https://<service>.onrender.com/api/users/login/ \
   -d '{"email":"a@b.c","password":"x"}'      # expect 400
 ```
 
+### The health check shares the worker pool — that is why the layout is pinned
+
+The platform's probe reaches the same gunicorn workers as every API request, and
+the free instance is **0.1 CPU / 512 MB**, so a request that costs seconds
+occupies the pool the probe has to get through. Measured against the live
+service on 2026-10-14:
+
+| Observation | Value |
+|---|---|
+| `/healthz` while idle | 0.28–0.67s |
+| A login — PBKDF2, 870,000 iterations, Django's default | **2.75–3.39s**, 14/14 attempts |
+| The database round trip inside that login | 0.31s |
+| `/healthz` with three concurrent logins in flight | **7.06s** — past the platform's 5s budget |
+| Instance memory at that moment | 80–120MB **of a 512MB limit** |
+
+The platform's own event log gives the verdict, and it is not about memory:
+
+```
+{"evicted": false, "unhealthy": "HTTP health check failed (timed out after 5 seconds)"}
+{"evicted": false, "nonZeroExit": 137}      <- the SIGKILL that follows
+```
+
+One synchronous worker — what the container was running — serialises requests, so
+the probe queued behind the logins, missed the 5s budget, and the container was
+SIGKILLed every 1–2 minutes. To a browser that looks like intermittent `502`s and
+CORS failures, because the host's error page carries no CORS header. The
+`Dockerfile` therefore pins the layout rather than accepting a default:
+
+```
+--workers 2 --worker-class gthread --threads 4 --preload --max-requests 800
+```
+
+**Threads are the substance, not extra workers.** `hashlib` releases the GIL for
+the duration of the PBKDF2 hash, so a thread in the same worker can answer the
+probe while another thread hashes (verified: 70 of ~74 timer ticks landed inside
+an 870k-iteration hash). More *synchronous* workers only add slots — they do not
+help a probe that arrives while every slot is mid-hash. The worker count is
+pinned rather than left to `$WEB_CONCURRENCY`, because the running container
+booted a single worker while this file asked for three.
+
+After deploying `ab65cc4` (2026-10-14), the same three concurrent logins leave
+`/healthz` at a worst case of **0.69s** across 9 probes, and the service logged
+**no `server_failed` events**.
+
+What this does **not** fix: a login still costs ~3s on 0.1 CPU. If logins need to
+feel fast, that is a larger instance, not a worker flag.
+
 ### Step 3 — Frontend
 
 The frontend resolves its API base URL in `fiber-fe/js/ftth-config.js`:
@@ -289,8 +351,9 @@ failure for the portal URL in tests, but it is not blocking.
 
 ## 7. Known drift (not introduced by this change)
 
-Three pre-existing issues, deliberately not fixed here because each one changes
-behaviour you may have opinions about:
+Three pre-existing issues. Item 3 was addressed on 2026-10-14; the other two stay
+deliberately untouched, because each one changes behaviour you may have opinions
+about:
 
 1. **`permits/` has models with no migration.** `makemigrations --check
    --dry-run` reports two index renames on `permitaidraft`. Confirmed on both
@@ -301,10 +364,15 @@ behaviour you may have opinions about:
    `Django>=5.1,<6.0`. Local development runs **5.1.15**; the container
    installs **5.2.17**. Deploy and development are therefore on different
    Djangos. Pin to the version you actually test on.
-3. **Production credentials are committed.** `config/settings.py` hardcodes the
-   live Zeabur database host, user and password as the fallback, and the repo is
-   public. Left untouched deliberately — the owner needs to rotate it. Until
-   then, treat that database as compromised.
+3. **A production credential is in git history.** Until 2026-10-14
+   `config/settings.py` carried the live Zeabur database password as
+   `os.getenv('PGPASSWORD', '<literal>')`, in a public repository. The literal is
+   removed — the credential now comes only from the environment, and a host that
+   forgets it fails to connect — but **removing it does not un-leak it**: the
+   value is still in git history, and the host, user and database it belongs to
+   are in this file. **Rotate that password.** Until it is rotated, treat the
+   database as compromised. `PGHOST` and `PGUSER` keep their defaults, which is
+   harmless: a hostname and a username are not secrets.
 
 Static serving for `MEDIA_ROOT` is also unhandled: `whitenoise` covers `/static/`
 only, and uploads land on the container's ephemeral disk. Photo fields and any
