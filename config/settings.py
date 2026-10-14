@@ -112,17 +112,30 @@ if os.getenv('FTTH_DB', '').lower() in ('local', 'dev', 'docker'):
     }
 else:
     # Production — cloud PostgreSQL with business + gis schemas.
-    # Env vars override these shared Zeabur DB credentials; the hardcoded
-    # fallback keeps production (and any services sharing this DB) unaffected.
+    # Every credential below comes from the environment (.env locally, the
+    # service's env when deployed); none of it is defaulted — see PGPASSWORD.
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.getenv('PGDATABASE', 'zeabur'),
             'USER': os.getenv('PGUSER', 'root'),
-            'PASSWORD': os.getenv('PGPASSWORD', 'D5o70r8Y19zhQI43FLCv2RSjuGpZm6xH'),
+            # No fallback, deliberately. The production credential belongs in
+            # the environment -- `.env` for a local run, the host's env for a
+            # deploy -- and a committed default is just a leaked password that
+            # also hides a misconfigured host, which would connect to this
+            # database as whoever the stale literal belongs to.
+            'PASSWORD': os.getenv('PGPASSWORD'),
             'HOST': os.getenv('PGHOST', '91.98.18.217'),
             'PORT': os.getenv('PGPORT', '32467'),
-            'OPTIONS': {'options': '-c search_path=business,public'},
+            # This database is remote, reached across the public internet, and
+            # psycopg's connect_timeout defaults to "wait forever". An
+            # unbounded connect pins the gunicorn worker handling it, and
+            # because the liveness probe shares that pool, it pins /healthz
+            # with it until the host gives up on the instance.
+            'OPTIONS': {
+                'options': '-c search_path=business,public',
+                'connect_timeout': 5,
+            },
         },
     }
 
