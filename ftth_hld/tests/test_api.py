@@ -281,6 +281,51 @@ class LayerGeoJSONViewTests(HldApiTestCase):
         self.assertEqual(response.status_code, 404)
         self.assertIn('Unknown layer', response.json()['detail'])
 
+    def test_a_platform_derived_layer_is_accepted(self):
+        """`trench_sections` is built ON the platform, not by the engine.
+
+        `permits.analysis.trench_sections` expands `trenches` into one row per
+        street-attributed section and persists it into the layer store as
+        `trench_sections`. It was absent from LAYER_NAME_MAP and this view
+        rejects any name that is not in it — so a layer the platform derives,
+        stores and needs (the permit matrix keys its rows on the section) could
+        never be fetched back out.
+        """
+        ftth = make_ftth_project()
+        make_hld_layer(ftth, name='trench_sections', feature_count=9)
+        response = self.client.get(
+            f'/api/ftth/hld/results/{ftth.project_id}/layers/trench_sections/'
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()['features']), 1)
+
+    def test_every_layer_the_store_holds_is_servable(self):
+        """A name the store can hold must be a name the API will accept.
+
+        The gap is silent from both sides: the import/ingest writes a row under
+        whatever name the pipeline used, and this view answers 404 for a name it
+        does not know — so a layer can be stored, counted in the results and
+        impossible to draw.
+        """
+        from ftth_hld.config import LAYER_NAME_MAP
+
+        for name in (
+            'trenches',
+            'ducts',
+            'feeder_ducts',
+            'distribution_ducts',
+            'drop_ducts',
+            'cables',
+            'feeder_cable',
+            'distribution_cable',
+            'aerial_spans',
+            'aerial_cable',
+            'aerial_drops',
+            'trench_nodes',
+            'trench_sections',
+        ):
+            self.assertIn(name, LAYER_NAME_MAP)
+
     def test_serves_persisted_layer_before_calling_the_engine(self):
         ftth = make_ftth_project()
         make_hld_layer(ftth, name='objects', feature_count=3)

@@ -125,6 +125,15 @@ LAYER_NAME_MAP = {
     'trench_nodes': ('Trench_Nodes', 'trench_nodes'),
     'brownfield': ('Existing_Infrastructure', 'brownfield'),
     'trenches': ('Final_Trenches', 'trench_layer'),
+    # Built ON the platform, not by the engine: `permits.analysis.trench_sections`
+    # expands `trenches` into one row per street-attributed section and persists
+    # it into the HLD layer store as `trench_sections` (`SECTION_LAYER`). It was
+    # absent from this map, and `LayerGeoJSONView` rejects any name that is not
+    # in it — so a layer the platform derives, stores and needs (the permits
+    # matrix keys its rows on the section) could never be fetched back out. The
+    # engine has no file for it, so `get_layer_geojson`'s disk fallback returns
+    # None and the stored row is what answers.
+    'trench_sections': ('Trench_Sections', 'trench_sections'),
     # Backward-compatible aliases
     'network': ('Network', 'network_layer'),
     'cables': ('Feeder_Cable', 'cable_layer'),
