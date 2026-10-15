@@ -651,12 +651,11 @@ class PermitPackageDownloadView(APIView):
                 status=404,
             )
         try:
-            response = FileResponse(
+            return FileResponse(
                 doc.file.open('rb'),
                 content_type='application/zip',
                 as_attachment=True,
                 filename=f'permit_package_v{doc.version}_{project_id}.zip',
             )
-            return response
         except FileNotFoundError:
             return JsonResponse({'detail': 'Package file missing on disk.'}, status=404)

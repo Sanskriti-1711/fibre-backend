@@ -18,6 +18,8 @@ requested categories. Uses the Overpass API (https://overpass-api.de).
 from __future__ import annotations
 
 import json
+import re
+import time
 import urllib.request
 
 from django.core.management.base import BaseCommand, CommandError
@@ -86,10 +88,6 @@ def _count(table: str) -> int:
     with connection.cursor() as cur:
         cur.execute(f'SELECT count(*) FROM gis."{table}"')
         return int(cur.fetchone()[0])
-
-
-import re
-import time
 
 
 def _element_props(el: dict) -> dict:
@@ -215,11 +213,12 @@ def _fetch_layer(bbox: tuple, body: str) -> list[dict]:
             try:
                 with urllib.request.urlopen(req, timeout=OVERPASS_TIMEOUT) as resp:
                     payload = json.loads(resp.read().decode('utf-8'))
-                return payload.get('elements', [])
+                return list(payload.get('elements', []) or [])
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 time.sleep(3 * (attempt + 1))
-    raise CommandError(f'Overpass request failed on all mirrors: {last_exc}') from last_exc
+    msg = f'Overpass request failed on all mirrors: {last_exc}'
+    raise CommandError(msg)
 
 
 def load_categories(bbox: tuple, categories: list[str], force: bool = False) -> dict:

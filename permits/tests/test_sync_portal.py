@@ -41,7 +41,8 @@ class _Resp:
 
     def json(self):
         if self._payload is None:
-            raise ValueError('no json')
+            msg = 'no json'
+            raise ValueError(msg)
         return self._payload
 
 
@@ -107,9 +108,11 @@ class EnablementTests(SimpleTestCase):
 class PollTests(SimpleTestCase):
     def _poll(self, status, payload, response=None, env=None):
         env = dict(PORTAL_ENV if env is None else env)
-        with mock.patch.dict(os.environ, env, clear=True):
-            with mock.patch('requests.get', return_value=response) as get:
-                result = HttpPortalAdapter().poll(_submission(status))
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch('requests.get', return_value=response) as get,
+        ):
+            result = HttpPortalAdapter().poll(_submission(status))
         return result, get
 
     def test_a_legal_remote_status_becomes_a_sync_result(self):
@@ -203,9 +206,11 @@ class PollTests(SimpleTestCase):
         self.assertIsNone(result)
 
     def test_a_network_failure_is_swallowed(self):
-        with mock.patch.dict(os.environ, PORTAL_ENV, clear=True):
-            with mock.patch('requests.get', side_effect=OSError('no route to host')):
-                result = HttpPortalAdapter().poll(_submission(PermitSubmission.STATUS_UNDER_REVIEW))
+        with (
+            mock.patch.dict(os.environ, PORTAL_ENV, clear=True),
+            mock.patch('requests.get', side_effect=OSError('no route to host')),
+        ):
+            result = HttpPortalAdapter().poll(_submission(PermitSubmission.STATUS_UNDER_REVIEW))
         self.assertIsNone(result)
 
     def test_non_json_content_type_is_treated_as_no_opinion(self):
@@ -258,9 +263,11 @@ class ConfigurableStatusMapTests(SimpleTestCase):
 
     def test_a_configured_status_drives_the_poll(self):
         env = {**PORTAL_ENV, 'PERMITS_PORTAL_STATUS_MAP': '{"freigegeben": "approved"}'}
-        with mock.patch.dict(os.environ, env, clear=True):
-            with mock.patch('requests.get', return_value=_Resp(payload={'status': 'Freigegeben'})):
-                result = HttpPortalAdapter().poll(_submission(PermitSubmission.STATUS_UNDER_REVIEW))
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch('requests.get', return_value=_Resp(payload={'status': 'Freigegeben'})),
+        ):
+            result = HttpPortalAdapter().poll(_submission(PermitSubmission.STATUS_UNDER_REVIEW))
         self.assertEqual(result.to_status, PermitSubmission.STATUS_APPROVED)
 
 
@@ -277,9 +284,11 @@ class JsonPayloadRoundTripTests(SimpleTestCase):
             }
         )
         response = _Resp(payload=json.loads(body))
-        with mock.patch.dict(os.environ, PORTAL_ENV, clear=True):
-            with mock.patch('requests.get', return_value=response):
-                result = HttpPortalAdapter().poll(_submission(PermitSubmission.STATUS_UNDER_REVIEW))
+        with (
+            mock.patch.dict(os.environ, PORTAL_ENV, clear=True),
+            mock.patch('requests.get', return_value=response),
+        ):
+            result = HttpPortalAdapter().poll(_submission(PermitSubmission.STATUS_UNDER_REVIEW))
         self.assertEqual(result.to_status, PermitSubmission.STATUS_APPROVED)
         self.assertEqual(result.reference, 'AUTH-2026-0042')
         self.assertEqual(result.expiry_date, '2027-03-31')

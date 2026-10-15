@@ -18,6 +18,7 @@ approval must never fail because the permit enrichment failed.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from django.utils import timezone
 
@@ -76,7 +77,7 @@ def _feature_survey_facts(feature_id) -> dict:
     ]
     facts['evidence_count'] = FieldEvidence.objects.filter(feature_id=feature_id).count()
     risks = list(RiskAssessment.objects.filter(feature_id=feature_id))
-    facts['risk_categories'] = sorted({r.risk_category for r in risks})
+    facts['risk_categories'] = sorted({r.category for r in risks})
     return facts
 
 
@@ -174,7 +175,7 @@ def apply_survey_evidence(ftth_project_id: str) -> dict:
     Returns a summary dict. Never raises — the caller (approval endpoint)
     must not fail because of permit enrichment.
     """
-    summary = {
+    summary: dict[str, Any] = {
         'project_id': ftth_project_id,
         'survey_features': 0,
         'permit_rows_updated': 0,

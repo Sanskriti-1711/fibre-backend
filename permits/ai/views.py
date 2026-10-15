@@ -27,8 +27,7 @@ from .drafting import draft_cover_text, draft_narrative, extract_requirements_fr
 
 
 def _get_project_or_404(project_id: str):
-    ftth = FtthProject.objects.filter(pk=project_id).first()
-    return ftth
+    return FtthProject.objects.filter(pk=project_id).first()
 
 
 class PermitAiDraftView(APIView):
@@ -348,7 +347,7 @@ class PermitAiRiskView(APIView):
                 'permit_type', 'status', 'readiness_pct', 'required', 'blocks_construction'
             )
         )
-        overview = project_risk_overview(rows)
+        overview = project_risk_overview([dict(r) for r in rows])
         PermitAiDraft.objects.create(
             project_id=project_id,
             draft_type=PermitAiDraft.DRAFT_RISK,

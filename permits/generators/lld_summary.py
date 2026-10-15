@@ -44,7 +44,7 @@ def _first_vertex(feature: dict[str, Any]) -> tuple[float, float] | None:
         return (float(coords[0]), float(coords[1]))
     if geom.get('type') in ('LineString', 'MultiLineString'):
         c0 = coords[0] if coords else []
-        if c0 and len(c0) >= 2 and isinstance(c0[0], (int, float)):
+        if c0 and len(c0) >= 2 and isinstance(c0[0], int | float):
             return (float(c0[0]), float(c0[1]))
         if c0 and isinstance(c0[0], list) and c0[0] and len(c0[0]) >= 2:
             return (float(c0[0][0]), float(c0[0][1]))
@@ -58,7 +58,7 @@ def _centroid(feature: dict[str, Any]) -> tuple[float, float] | None:
     pts: list[tuple[float, float]] = []
 
     def gather(node: Any) -> None:
-        if isinstance(node, list) and node and isinstance(node[0], (int, float)) and len(node) >= 2:
+        if isinstance(node, list) and node and isinstance(node[0], int | float) and len(node) >= 2:
             pts.append((float(node[0]), float(node[1])))
         elif isinstance(node, list):
             for n in node:

@@ -97,7 +97,7 @@ def classify(features: dict[str, Any]) -> dict[str, Any]:
     trench_type = _norm(features.get('trench_type') or features.get('TRENCH_TYPE') or '')
     reuse_source = _norm(features.get('REUSE_SOURCE') or features.get('reuse_source') or '')
     infra_status = _norm(features.get('INFRA_STATUS') or features.get('infra_status') or '')
-    verify = _norm(features.get('VERIFY_STATUS') or features.get('verify_status') or '')
+    _norm(features.get('VERIFY_STATUS') or features.get('verify_status') or '')
     env_flags = features.get('env_flags') or features.get('env') or {}
     if not isinstance(env_flags, dict):
         env_flags = {}
@@ -308,7 +308,7 @@ def store_feedback(
     }
     try:
         _LABEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(_LABEL_PATH, 'a', encoding='utf-8') as fh:
+        with _LABEL_PATH.open('a', encoding='utf-8') as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + '\n')
     except Exception:
         pass
@@ -322,7 +322,7 @@ def label_stats() -> dict[str, Any]:
     total = 0
     by_true: dict[str, int] = {}
     by_pred: dict[str, int] = {}
-    with open(_LABEL_PATH, encoding='utf-8') as fh:
+    with _LABEL_PATH.open(encoding='utf-8') as fh:
         for line in fh:
             line = line.strip()
             if not line:

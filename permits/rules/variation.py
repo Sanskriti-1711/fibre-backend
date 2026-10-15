@@ -21,6 +21,7 @@ survey approval.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from permits.models import PermitEvent, PermitMatrix
 
@@ -62,7 +63,7 @@ def create_variations(ftth_project_id: str, sf, user=None) -> dict:
     and record a ``VARIATION_REQUIRED`` event. Returns a summary dict and
     never raises — the caller must not fail because of permit bookkeeping.
     """
-    summary = {
+    summary: dict[str, Any] = {
         'project_id': ftth_project_id,
         'route_sections': [],
         'variations_created': 0,

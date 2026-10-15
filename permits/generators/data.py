@@ -92,7 +92,8 @@ def _apply_street(section: dict[str, Any], props: dict[str, Any], part: list) ->
     to part ordering. Absent attribution leaves the keys blank rather than
     inventing a street — the summary then reports "Unnamed street".
     """
-    info = _section_street_map(props).get(coord_key(*part_midpoint(part)) or '') or {}
+    mid = part_midpoint(part)
+    info = _section_street_map(props).get(coord_key(*mid) if mid is not None else '') or {}
     if not isinstance(info, dict):
         info = {}
     section['street_name'] = info.get('street_name') or props.get('street_name') or ''

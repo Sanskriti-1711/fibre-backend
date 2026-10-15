@@ -105,6 +105,8 @@ def _expected_counts(project_id: str) -> dict[str, Any]:
         ]
         crossing_groups: set[tuple[str, str]] = set()
         for pm in crossing_rows:
+            if pm.rule is None:
+                continue
             key = (
                 pm.rule.rule_id,
                 (pm.permit_group or pm.route_section or '').strip() or pm.route_section,

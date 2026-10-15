@@ -83,9 +83,10 @@ def chat_completion(
             return None
         msg = choices[0].get('message') or {}
         text = _strip(msg.get('content') or '')
-        return text or None
     except Exception:
         return None
+    else:
+        return text or None
 
 
 AI_DISCLAIMER = (

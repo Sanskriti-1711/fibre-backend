@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from django.db import connection
 
@@ -50,7 +51,7 @@ def _trench_rows(project_id: str) -> list[tuple]:
             'ORDER BY id',
             [project_id],
         )
-        return cur.fetchall()
+        return list(cur.fetchall())
 
 
 def _as_props(raw) -> dict:
@@ -154,7 +155,7 @@ def build_trench_sections(project_id: str, roads_path: Path | None = None) -> di
     persisted}``.  Safe to call repeatedly; it replaces the project's
     ``trench_sections`` layer with a fresh build.
     """
-    summary = {
+    summary: dict[str, Any] = {
         'project_id': project_id,
         'rows': 0,
         'sections': 0,
@@ -199,7 +200,7 @@ def build_trench_sections(project_id: str, roads_path: Path | None = None) -> di
             mid = part_midpoint(part)
             key = coord_key(*mid) if mid else None
             info = per_feature.get(key) if key else None
-            if info:
+            if info and key is not None:
                 street_map[key] = info
             expanded.append(
                 {
@@ -274,9 +275,9 @@ def build_trench_sections(project_id: str, roads_path: Path | None = None) -> di
         section_features.append(
             {
                 'type': 'Feature',
-                'id': '%s#%s' % (item['gid'], section_id),
+                'id': '{}#{}'.format(item['gid'], section_id),
                 'properties': {
-                    'feature_id': '%s#%s' % (item['gid'], section_id),
+                    'feature_id': '{}#{}'.format(item['gid'], section_id),
                     **out,
                 },
                 'geometry': {'type': 'LineString', 'coordinates': item['part']},

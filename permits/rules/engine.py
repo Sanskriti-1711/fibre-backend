@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import Any
 
 from django.db import connection
 
@@ -153,7 +154,7 @@ def _upsert_permit(
 
 def run_analysis(project_id: str, user=None) -> dict:
     """Run the full rule catalogue for a project. Returns a summary dict."""
-    summary = {
+    summary: dict[str, Any] = {
         'project_id': project_id,
         'rules_fired': [],
         'rows_created': 0,

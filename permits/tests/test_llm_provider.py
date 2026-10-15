@@ -65,9 +65,8 @@ class LlmConfigTests(SimpleTestCase):
 
 class ChatCompletionTests(SimpleTestCase):
     def test_no_network_call_when_unconfigured(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch('requests.post') as post:
-                self.assertIsNone(chat_completion('sys', 'user'))
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch('requests.post') as post:
+            self.assertIsNone(chat_completion('sys', 'user'))
         post.assert_not_called()
 
     def test_a_successful_reply_is_returned(self):
@@ -75,44 +74,56 @@ class ChatCompletionTests(SimpleTestCase):
             status_code=200,
             json=lambda: {'choices': [{'message': {'content': '  Draft text.  '}}]},
         )
-        with mock.patch.dict(os.environ, FULL_ENV, clear=True):
-            with mock.patch('requests.post', return_value=response) as post:
-                text = chat_completion('sys', 'user')
+        with (
+            mock.patch.dict(os.environ, FULL_ENV, clear=True),
+            mock.patch('requests.post', return_value=response) as post,
+        ):
+            text = chat_completion('sys', 'user')
         self.assertEqual(text, 'Draft text.')
         self.assertIn('Bearer sk-test', post.call_args.kwargs['headers']['Authorization'])
 
     def test_an_empty_choice_falls_back(self):
         response = mock.Mock(status_code=200, json=lambda: {'choices': []})
-        with mock.patch.dict(os.environ, FULL_ENV, clear=True):
-            with mock.patch('requests.post', return_value=response):
-                self.assertIsNone(chat_completion('sys', 'user'))
+        with (
+            mock.patch.dict(os.environ, FULL_ENV, clear=True),
+            mock.patch('requests.post', return_value=response),
+        ):
+            self.assertIsNone(chat_completion('sys', 'user'))
 
     def test_blank_content_falls_back(self):
         response = mock.Mock(
             status_code=200,
             json=lambda: {'choices': [{'message': {'content': '   '}}]},
         )
-        with mock.patch.dict(os.environ, FULL_ENV, clear=True):
-            with mock.patch('requests.post', return_value=response):
-                self.assertIsNone(chat_completion('sys', 'user'))
+        with (
+            mock.patch.dict(os.environ, FULL_ENV, clear=True),
+            mock.patch('requests.post', return_value=response),
+        ):
+            self.assertIsNone(chat_completion('sys', 'user'))
 
     def test_a_non_2xx_falls_back(self):
         response = mock.Mock(status_code=429, json=lambda: {})
-        with mock.patch.dict(os.environ, FULL_ENV, clear=True):
-            with mock.patch('requests.post', return_value=response):
-                self.assertIsNone(chat_completion('sys', 'user'))
+        with (
+            mock.patch.dict(os.environ, FULL_ENV, clear=True),
+            mock.patch('requests.post', return_value=response),
+        ):
+            self.assertIsNone(chat_completion('sys', 'user'))
 
     def test_a_network_failure_falls_back(self):
-        with mock.patch.dict(os.environ, FULL_ENV, clear=True):
-            with mock.patch('requests.post', side_effect=OSError('timed out')):
-                self.assertIsNone(chat_completion('sys', 'user'))
+        with (
+            mock.patch.dict(os.environ, FULL_ENV, clear=True),
+            mock.patch('requests.post', side_effect=OSError('timed out')),
+        ):
+            self.assertIsNone(chat_completion('sys', 'user'))
 
     def test_malformed_json_falls_back(self):
         response = mock.Mock(status_code=200)
         response.json.side_effect = ValueError('not json')
-        with mock.patch.dict(os.environ, FULL_ENV, clear=True):
-            with mock.patch('requests.post', return_value=response):
-                self.assertIsNone(chat_completion('sys', 'user'))
+        with (
+            mock.patch.dict(os.environ, FULL_ENV, clear=True),
+            mock.patch('requests.post', return_value=response),
+        ):
+            self.assertIsNone(chat_completion('sys', 'user'))
 
     def test_the_disclaimer_marks_the_output_as_advisory(self):
         self.assertIn('AI-generated', AI_DISCLAIMER)

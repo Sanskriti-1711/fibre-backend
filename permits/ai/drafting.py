@@ -116,7 +116,7 @@ def draft_narrative(
     # card, not the authority letter. The narrative only states what IS present.
     surf_part = f' Trench lengths by surface: {surf_line}.' if surf_line else ''
     total_part = (
-        f' Total trench ~{total_m:.0f} m.' if isinstance(total_m, (int, float)) and total_m else ''
+        f' Total trench ~{total_m:.0f} m.' if isinstance(total_m, int | float) and total_m else ''
     )
     deterministic = (
         f'Works for {permit_type} on {street} as part of project {project_name}. '

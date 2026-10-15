@@ -456,11 +456,14 @@ def ingest_inbound(
     sync_source so the audit trail records how the state arrived.
     """
     if to_status not in ALLOWED_TRANSITIONS:
-        raise ValueError(f'Unknown submission status: {to_status}')
+        msg = f'Unknown submission status: {to_status}'
+        raise ValueError(msg)
     if to_status not in ALLOWED_TRANSITIONS.get(submission.status, frozenset()):
-        raise ValueError(
-            f"Invalid transition {submission.status} -> {to_status} (allowed: {sorted(ALLOWED_TRANSITIONS.get(submission.status, frozenset())) or 'none'})"
+        msg = (
+            f"Invalid transition {submission.status} -> {to_status} "
+            f"(allowed: {sorted(ALLOWED_TRANSITIONS.get(submission.status, frozenset())) or 'none'})"
         )
+        raise ValueError(msg)
     return transition_submission(
         submission,
         to_status,

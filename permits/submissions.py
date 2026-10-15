@@ -70,6 +70,7 @@ def _coerce_datetime(value):
     """
     if value in (None, ''):
         return None
+    dt: datetime | None
     if isinstance(value, datetime):
         dt = value
     else:
@@ -77,7 +78,8 @@ def _coerce_datetime(value):
         if dt is None:
             parsed = parse_date(str(value))
             if parsed is None:
-                raise ValueError(f'Invalid date value: {value}')
+                msg = f'Invalid date value: {value}'
+                raise ValueError(msg)
             dt = datetime.combine(parsed, time.min)
     if timezone.is_naive(dt):
         dt = timezone.make_aware(dt, timezone.get_current_timezone())
@@ -86,7 +88,7 @@ def _coerce_datetime(value):
 
 def _latest_package_version(project_id: str) -> int | None:
     """Most recent generated package version for a project, if any."""
-    latest = (
+    return (
         PermitDocument.objects.filter(
             permit__project_id=project_id,
             name__startswith='permit_package_v',
@@ -95,7 +97,6 @@ def _latest_package_version(project_id: str) -> int | None:
         .values_list('version', flat=True)
         .first()
     )
-    return latest
 
 
 def create_submissions(
@@ -119,13 +120,16 @@ def create_submissions(
         PermitMatrix.objects.filter(permit_id__in=permit_ids).select_related('authority', 'rule')
     )
     if not rows:
-        raise ValueError('No permits found for the given ids.')
+        msg = 'No permits found for the given ids.'
+        raise ValueError(msg)
     if len(rows) != len(set(permit_ids)):
-        raise ValueError('Duplicate permit ids in the submission batch.')
+        msg = 'Duplicate permit ids in the submission batch.'
+        raise ValueError(msg)
 
     projects = {str(r.project_id) for r in rows}
     if len(projects) > 1:
-        raise ValueError('All permits in one submission batch must belong to the same project.')
+        msg = 'All permits in one submission batch must belong to the same project.'
+        raise ValueError(msg)
     project_id = next(iter(projects))
 
     not_ready = [r.permit_type for r in rows if r.status != PermitMatrix.STATUS_READY]
@@ -220,12 +224,14 @@ def transition_submission(
     Raises ValueError for invalid transitions (caller maps it to a 400).
     """
     if to_status not in ALLOWED_TRANSITIONS:
-        raise ValueError(f'Unknown submission status: {to_status}')
+        msg = f'Unknown submission status: {to_status}'
+        raise ValueError(msg)
     if to_status not in ALLOWED_TRANSITIONS.get(submission.status, frozenset()):
-        raise ValueError(
+        msg = (
             f"Invalid transition {submission.status} → {to_status} "
             f"(allowed: {sorted(ALLOWED_TRANSITIONS.get(submission.status, frozenset())) or 'none'})"
         )
+        raise ValueError(msg)
 
     actor = getattr(user, 'email', None) if user else None
     now = timezone.now()

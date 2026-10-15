@@ -14,6 +14,8 @@ project_id / permit_id are stored with the label for later stratified training.
 
 from __future__ import annotations
 
+import contextlib
+
 from django.http import JsonResponse
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -160,10 +162,8 @@ class PermitClassifyFeedbackView(APIView):
         permit_id = (data.get('permit_id') or features.get('permit_id') or '').strip() or None
         note = data.get('note')
         user_email = None
-        try:
+        with contextlib.suppress(Exception):
             user_email = getattr(request.user, 'email', None) or str(request.user)
-        except Exception:
-            pass
 
         record = store_feedback(
             features,

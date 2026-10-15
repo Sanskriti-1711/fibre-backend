@@ -101,7 +101,8 @@ class Command(BaseCommand):
             except Exception as exc:  # noqa: BLE001
                 # A step that cannot run must not silently leave the chain
                 # looking finished: say which one broke and stop.
-                raise CommandError(f'{label} failed: {type(exc).__name__}: {exc}') from exc
+                msg = f'{label} failed: {type(exc).__name__}: {exc}'
+                raise CommandError(msg) from exc
 
         self.stdout.write(self.style.SUCCESS('[bootstrap] permit inputs prepared.'))
         try:

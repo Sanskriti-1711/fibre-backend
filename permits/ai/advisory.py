@@ -17,16 +17,24 @@ from .provider import AI_DISCLAIMER, chat_completion
 # Bezirk contact/fee helpers — optional so advisory works even without the
 # bezirke module (tests / older checkouts).
 try:
-    from ..bezirke import bezirk_fee_note as _bezirk_fee_note  # type: ignore
-    from ..bezirke import bezirk_form_hint as _bezirk_form_hint  # type: ignore
-    from ..bezirke import get_bezirk as _get_bezirk  # type: ignore
+    from ..bezirke import bezirk_fee_note as _bezirk_fee_note
+    from ..bezirke import bezirk_form_hint as _bezirk_form_hint
+    from ..bezirke import get_bezirk as _get_bezirk
 
     _HAS_BEZIRKE = True
 except ImportError:  # pragma: no cover
     _HAS_BEZIRKE = False
-    _bezirk_fee_note = lambda *_a, **_kw: ''  # type: ignore
-    _bezirk_form_hint = lambda *_a, **_kw: ''  # type: ignore
-    _get_bezirk = lambda *_a, **_kw: None  # type: ignore
+
+    def _bezirk_fee_note(municipality: str, authority_code: str = '') -> str:
+        return ''
+
+    def _bezirk_form_hint(
+        municipality: str, permit_type: str = '', authority_code: str = ''
+    ) -> str:
+        return ''
+
+    def _get_bezirk(municipality: str) -> dict[str, Any] | None:
+        return None
 
 
 def _e(v: Any) -> str:

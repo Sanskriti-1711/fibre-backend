@@ -124,7 +124,8 @@ def generate_package(
     """
     run_id = lld_run_id or data.latest_lld_run_id(project_id)
     if not run_id:
-        raise ValueError('No completed LLD run found — generate the LLD first.')
+        msg = 'No completed LLD run found — generate the LLD first.'
+        raise ValueError(msg)
 
     generated: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -159,12 +160,14 @@ def generate_package(
         errors.append(f'lld_street_summary: {exc}')
 
     if not generated:
-        raise ValueError('No permit-package documents could be generated.')
+        msg = 'No permit-package documents could be generated.'
+        raise ValueError(msg)
 
     # Anchor: the first matrix row of the project (package-level documents).
     anchor = PermitMatrix.objects.filter(project_id=project_id).order_by('permit_id').first()
     if anchor is None:
-        raise ValueError('No permit matrix rows — run permit analysis first.')
+        msg = 'No permit matrix rows — run permit analysis first.'
+        raise ValueError(msg)
 
     version = _latest_package_version(project_id)
 

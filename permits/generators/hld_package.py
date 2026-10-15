@@ -20,6 +20,7 @@ from ftth_hld.models import FtthLayer
 
 from ..models import PermitDocument, PermitEvent, PermitMatrix
 from . import data, permit_forms
+from .hld_summary import generate_hld_summary
 
 
 def generate_hld_attribute_reports(project_id: str, project_name: str) -> list[dict[str, Any]]:
@@ -73,9 +74,6 @@ def generate_hld_attribute_reports(project_id: str, project_name: str) -> list[d
     return sections
 
 
-from .hld_summary import generate_hld_summary
-
-
 def _hld_layer_summary(project_id: str) -> dict[str, Any]:
     return {
         row.name: row.feature_count
@@ -112,9 +110,11 @@ def generate_hld_package(project_id: str, project_name: str) -> dict[str, Any]:
         PermitMatrix.objects.filter(project_id=project_id).select_related('authority', 'rule')
     )
     if not layers:
-        raise ValueError('No persisted HLD layers found — complete the HLD first.')
+        msg = 'No persisted HLD layers found — complete the HLD first.'
+        raise ValueError(msg)
     if not permits:
-        raise ValueError('No permit matrix rows — run permit analysis first.')
+        msg = 'No permit matrix rows — run permit analysis first.'
+        raise ValueError(msg)
 
     generated: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -177,7 +177,8 @@ def generate_hld_package(project_id: str, project_name: str) -> dict[str, Any]:
     }
     generated.append(notice)
     if not generated:
-        raise ValueError('No HLD permit documents could be generated.')
+        msg = 'No HLD permit documents could be generated.'
+        raise ValueError(msg)
 
     manifest = {
         'package_type': 'HLD_PRELIMINARY_ESTIMATE',

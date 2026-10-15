@@ -80,7 +80,7 @@ def _svg_hdd_profile(
     esc_title = _e(title)
     esc_sub = _e(subtitle)
     esc_street = _e(street or 'Unnamed section')
-    esc_muni = _e(municipality or '—')
+    _e(municipality or '—')
     esc_auth = _e(authority or '—')
     esc_route = _e(route_section)
     esc_rule = _e(rule_id)
@@ -221,6 +221,8 @@ def hdd_crossing_drawings(project_id: str, project_name: str = '') -> list[dict[
     # the application forms.
     groups: dict[tuple[str, str], list[PermitMatrix]] = {}
     for pm in crossing_rows:
+        if pm.rule is None:
+            continue
         key = (
             pm.rule.rule_id,
             (pm.permit_group or pm.route_section or '').strip() or pm.route_section,

@@ -52,7 +52,8 @@ def project_roads_file(project_id: str) -> Path | None:
 def _roads_geojson(path: Path) -> list[dict]:
     """Read any GDAL-readable roads vector into a list of feature dicts."""
     if ogr is None:
-        raise RuntimeError('GDAL (osgeo) is required to read the roads file.')
+        msg = 'GDAL (osgeo) is required to read the roads file.'
+        raise RuntimeError(msg)
     candidates = [str(path)]
     # Zip shapefile bundles open via /vsizip/.
     if path.suffix.lower() == '.zip':
