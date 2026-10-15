@@ -126,7 +126,8 @@ def _get_run(project_id: str, lld_version: str) -> LldRun:
         .first()
     )
     if run is None:
-        raise ValueError(f'LLD run {lld_version!r} not found for this project.')
+        msg = f'LLD run {lld_version!r} not found for this project.'
+        raise ValueError(msg)
     return run
 
 
@@ -153,6 +154,15 @@ def _snapshot(run: LldRun) -> dict:
     return {'layers': layers, 'features': features, 'length_m': length_m}
 
 
+def _asv_version(run: LldRun) -> str | None:
+    """Stamped version string, without forcing a join when no ASV is linked."""
+    if not run.approved_survey_version_id:
+        return None
+    # FK integrity: an id implies the row.
+    assert run.approved_survey_version is not None
+    return run.approved_survey_version.version
+
+
 def _run_meta(run: LldRun) -> dict:
     validation = run.validation or {}
     return {
@@ -160,9 +170,7 @@ def _run_meta(run: LldRun) -> dict:
         'mode': run.mode,
         'status': run.status,
         'hld_version': run.hld_version,
-        'approved_survey_version': (
-            run.approved_survey_version.version if run.approved_survey_version_id else None
-        ),
+        'approved_survey_version': _asv_version(run),
         'run_date': run.run_date.isoformat() if run.run_date else None,
         'validation_issues': validation.get('issues'),
         'validation_checked': validation.get('checked'),

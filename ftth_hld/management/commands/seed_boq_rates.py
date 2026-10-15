@@ -24,7 +24,7 @@ from django.core.management.base import BaseCommand, CommandError
 try:
     import openpyxl
 except Exception:  # pragma: no cover
-    openpyxl = None  # type: ignore
+    openpyxl = None
 
 
 class Command(BaseCommand):
@@ -38,12 +38,14 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opts):
         if openpyxl is None:
-            raise CommandError('openpyxl is not installed.')
+            msg = 'openpyxl is not installed.'
+            raise CommandError(msg)
         from ftth_hld.models import BoqRate
 
         wb = openpyxl.load_workbook(opts['xlsx'], data_only=True)
         if 'BOQ' not in wb.sheetnames:
-            raise CommandError(f"No 'BOQ' sheet in {opts['xlsx']}.")
+            msg = f"No 'BOQ' sheet in {opts['xlsx']}."
+            raise CommandError(msg)
 
         ws = wb['BOQ']
         rows = list(ws.iter_rows(values_only=True))
@@ -56,7 +58,8 @@ class Command(BaseCommand):
                 header_idx = i
                 break
         if header_idx is None:
-            raise CommandError('Could not locate the BOQ header row.')
+            msg = 'Could not locate the BOQ header row.'
+            raise CommandError(msg)
 
         # Column mapping by header text.
         header = [str(c).strip().lower() if c is not None else '' for c in rows[header_idx]]

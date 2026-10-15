@@ -213,7 +213,7 @@ class ReassignGuardTests(SimpleTestCase):
         ):
             self.assertIn(name, models)
         # The typed rows hang off the copy's features, which a re-import replaces.
-        typed = dict((model.__name__, lookup) for model, lookup in probes)
+        typed = {model.__name__: lookup for model, lookup in probes}
         self.assertIn('feature__in', typed['TrenchSurvey'])
 
     def test_a_copy_with_nothing_recorded_can_be_replaced(self):

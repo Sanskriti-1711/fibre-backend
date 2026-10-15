@@ -59,7 +59,8 @@ def _patch_cursor(rows):
     """
     cursor = _FakeCursor(rows)
     return mock.patch(
-        'ftth_hld.pipeline._db_cursor', return_value=cursor,
+        'ftth_hld.pipeline._db_cursor',
+        return_value=cursor,
     ), cursor
 
 
@@ -68,10 +69,8 @@ class DbLayerFallbackTests(SimpleTestCase):
 
     def test_a_missing_engine_file_is_rebuilt_from_the_layer_table(self):
         rows = [
-            ('{"type":"Point","coordinates":[13.36,52.44]}',
-             {'PDP_ID': 'P-1'}, 4326),
-            ('{"type":"Point","coordinates":[13.37,52.45]}',
-             '{"PDP_ID": "P-2"}', 4326),
+            ('{"type":"Point","coordinates":[13.36,52.44]}', {'PDP_ID': 'P-1'}, 4326),
+            ('{"type":"Point","coordinates":[13.37,52.45]}', '{"PDP_ID": "P-2"}', 4326),
         ]
         patcher, cursor = _patch_cursor(rows)
         with patcher:
@@ -85,7 +84,8 @@ class DbLayerFallbackTests(SimpleTestCase):
         # `crs` member, so one must be declared or the WGS84 reprojection that
         # packages apply would use the wrong source.
         self.assertEqual(
-            data['crs']['properties']['name'], 'EPSG:4326',
+            data['crs']['properties']['name'],
+            'EPSG:4326',
         )
         # A string `properties` column is parsed, not passed through as a str.
         self.assertEqual(data['features'][1]['properties'], {'PDP_ID': 'P-2'})
@@ -160,9 +160,7 @@ class DbLayerFallbackTests(SimpleTestCase):
     def test_a_failing_query_does_not_break_the_download(self):
         """A missing table must degrade to "no file", never raise."""
         with mock.patch('ftth_hld.pipeline._db_cursor', side_effect=RuntimeError('boom')):
-            self.assertIsNone(
-                pipeline._db_layer_geojson(self.PROJECT, 'Objects.geojson')
-            )
+            self.assertIsNone(pipeline._db_layer_geojson(self.PROJECT, 'Objects.geojson'))
 
     def test_the_brownfield_points_are_filtered_by_geometry(self):
         """`Existing_Infrastructure` (lines) and `..._Points` share one table.
@@ -173,9 +171,7 @@ class DbLayerFallbackTests(SimpleTestCase):
         """
         patcher, cursor = _patch_cursor([])
         with patcher:
-            pipeline._db_layer_geojson(
-                self.PROJECT, 'Existing_Infrastructure_Points.geojson'
-            )
+            pipeline._db_layer_geojson(self.PROJECT, 'Existing_Infrastructure_Points.geojson')
         sql, params = cursor.executed[0]
         self.assertIn('FROM gis."brownfield"', sql)
         self.assertIn('GeometryType(geom) IN', sql)
@@ -186,9 +182,7 @@ class DbLayerFallbackTests(SimpleTestCase):
     def test_the_brownfield_lines_keep_only_line_geometry(self):
         patcher, cursor = _patch_cursor([])
         with patcher:
-            pipeline._db_layer_geojson(
-                self.PROJECT, 'Existing_Infrastructure.geojson'
-            )
+            pipeline._db_layer_geojson(self.PROJECT, 'Existing_Infrastructure.geojson')
         sql, _ = cursor.executed[0]
         self.assertIn('GeometryType(geom) IN', sql)
         self.assertIn("'MULTILINESTRING'", sql)

@@ -20,14 +20,13 @@ zero changes are still pending review (a change sent back for correction is
 considered resolved and does not block LLD).
 """
 
+import contextlib
 import copy
 import json
 import logging
 import re
 import threading
 import time
-
-logger = logging.getLogger(__name__)
 
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
@@ -58,6 +57,8 @@ from .engine import (
 from .engine import (
     lld_status as engine_lld_status,
 )
+
+logger = logging.getLogger(__name__)
 
 HLD_VERSION = 'HLD-V1'
 ALGORITHM_VERSION = 'fiber-lld-2.4.1'
@@ -138,7 +139,7 @@ def _record_event(project, stage, event, actor=None, entity_id='', metadata=None
     """Write a StageEvent to the unified project timeline (never raises)."""
     if project is None:
         return
-    try:
+    with contextlib.suppress(Exception):
         StageEvent.objects.create(
             project=project,
             stage=stage,
@@ -147,8 +148,6 @@ def _record_event(project, stage, event, actor=None, entity_id='', metadata=None
             entity_id=entity_id or '',
             metadata=metadata or {},
         )
-    except Exception:
-        pass
 
 
 def _fc(features):
@@ -656,7 +655,10 @@ class LldRunsView(APIView):
             .order_by('-run_date')
         )
         for r in qs:
-            layers = [{'name': l.name, 'feature_count': l.feature_count} for l in r.layers.all()]
+            layers = [
+                {'name': layer.name, 'feature_count': layer.feature_count}
+                for layer in r.layers.all()
+            ]
             runs.append(
                 {
                     'project_id': r.ftth_project_id,
@@ -717,7 +719,7 @@ class ProjectOverviewView(APIView):
         layers = []
         if copy is not None:
             feature_counts = {}
-            for layer_id, layer_name, cnt in Feature.objects.filter(project=copy).values_list(
+            for layer_id, layer_name, _cnt in Feature.objects.filter(project=copy).values_list(
                 'layer_id', 'layer_name', 'id'
             ):
                 feature_counts[layer_id] = feature_counts.get(
@@ -833,12 +835,14 @@ class ProjectMembersView(APIView):
             {
                 'project_id': project_id,
                 'members': _team_members(ftth, copy),
-                'roles': [{'value': v, 'label': l} for v, l in ProjectMember.Role.choices],
+                'roles': [
+                    {'value': value, 'label': label} for value, label in ProjectMember.Role.choices
+                ],
             }
         )
 
     def post(self, request, project_id):
-        ftth = get_object_or_404(FtthProject, pk=project_id)
+        get_object_or_404(FtthProject, pk=project_id)
         copy = _survey_copy(project_id)
         if copy is None:
             return JsonResponse(
@@ -882,10 +886,11 @@ class ProjectMemberRemoveView(APIView):
     permission_classes = [IsSubadmin]
 
     def delete(self, request, project_id, member_id):
-        ftth = get_object_or_404(FtthProject, pk=project_id)
+        get_object_or_404(FtthProject, pk=project_id)
         copy = _survey_copy(project_id)
         if copy is None:
-            raise Http404('No survey copy for this project')
+            msg = 'No survey copy for this project'
+            raise Http404(msg)
         member = get_object_or_404(ProjectMember, pk=member_id, project=copy)
         email, role = member.user.email, member.role
         member.delete()
@@ -978,16 +983,16 @@ class FeatureLineageView(APIView):
         if run:
             layers = []
             final = None
-            for l in LldLayer.objects.filter(lld_run=run):
-                for f in l.geojson.get('features', []):
+            for layer in LldLayer.objects.filter(lld_run=run):
+                for f in layer.geojson.get('features', []):
                     props = f.get('properties', {}) or {}
                     if props.get('feature_id') == feature_id:
                         final = {
-                            'layer': l.name,
+                            'layer': layer.name,
                             'geometry': f.get('geometry'),
                             'attributes': props,
                         }
-                        layers.append(l.name)
+                        layers.append(layer.name)
             lineage['lld'] = {
                 'run': run.lld_version,
                 'approved_survey_version': (
@@ -1037,10 +1042,9 @@ class LldChangeActionView(APIView):
             return JsonResponse(
                 {
                     'detail': (
-                        'This change is already resolved in Approved Survey Version %s. '
+                        f'This change is already resolved in Approved Survey Version {asv.version}. '
                         'The engineer must re-edit the feature to start a new review cycle.'
-                    )
-                    % asv.version,
+                    ),
                 },
                 status=400,
             )
@@ -1519,8 +1523,8 @@ class LldVersionsView(APIView):
             'approved_survey_version', 'run_by'
         ):
             run_layers = [
-                {'name': l.name, 'feature_count': l.feature_count}
-                for l in LldLayer.objects.filter(lld_run=r)
+                {'name': layer.name, 'feature_count': layer.feature_count}
+                for layer in LldLayer.objects.filter(lld_run=r)
             ]
             runs.append(
                 {
@@ -1627,8 +1631,8 @@ class LldRunStatusView(APIView):
         if run is None:
             return JsonResponse({'detail': 'LLD run not found.'}, status=404)
         layers = [
-            {'name': l.name, 'feature_count': l.feature_count}
-            for l in LldLayer.objects.filter(lld_run=run)
+            {'name': layer.name, 'feature_count': layer.feature_count}
+            for layer in LldLayer.objects.filter(lld_run=run)
         ]
         return JsonResponse(
             {

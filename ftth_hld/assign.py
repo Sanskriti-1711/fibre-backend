@@ -190,26 +190,31 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
         engineer_ids = [engineer_ids]
     engineer_ids = list(engineer_ids)
     if not engineer_ids:
-        raise ValueError('At least one engineer_id is required')
+        msg = 'At least one engineer_id is required'
+        raise ValueError(msg)
     try:
         hld = FtthProject.objects.get(pk=ftth_project_id)
-    except FtthProject.DoesNotExist:
-        raise ValueError(f'HLD project {ftth_project_id} not found')
+    except FtthProject.DoesNotExist as err:
+        msg = f'HLD project {ftth_project_id} not found'
+        raise ValueError(msg) from err
 
     if hld.status != FtthProject.STATUS_COMPLETED:
-        raise ValueError(
+        msg = (
             f'HLD project {ftth_project_id} is not completed '
             f'(status={hld.status}); only completed runs can be assigned'
         )
+        raise ValueError(msg)
 
     engineers = []
     for eid in engineer_ids:
         try:
             eng = User.objects.get(pk=eid)
-        except User.DoesNotExist:
-            raise ValueError(f'Engineer {eid} not found')
+        except User.DoesNotExist as err:
+            msg = f'Engineer {eid} not found'
+            raise ValueError(msg) from err
         if eng.role != User.Role.ENGINEER:
-            raise ValueError(f'User {eid} is not an engineer')
+            msg = f'User {eid} is not an engineer'
+            raise ValueError(msg)
         engineers.append(eng)
     primary_engineer = engineers[0]
 
@@ -241,11 +246,12 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
             # acceptance). Measured 2026-10-13 on the live copy: accepted by the
             # engineer, and zero rows in every table an edit would write.
             if _holds_field_data(survey):
-                raise ValueError(
+                msg = (
                     f"Survey copy '{survey.name}' already holds field-survey data; "
                     're-assigning would replace the features it was recorded against. '
                     'Re-assign only before the engineer records work.'
                 )
+                raise ValueError(msg)
             survey.name = f'{hld.name or ftth_project_id}{SURVEY_SUFFIX}'
             survey.status = 'assigned'
             survey.save(update_fields=['name', 'status', 'updated_at'])
@@ -259,7 +265,7 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
         from projects.api.import_views import discover_zip_layers, import_zip_layers
 
         layers = discover_zip_layers(full_path)
-        layer_names = [l['name'] for l in layers]
+        layer_names = [layer['name'] for layer in layers]
 
         if _holds_this_import(survey, imported_from, package_hash):
             # The copy was imported from these exact bytes, so re-importing it
@@ -342,8 +348,9 @@ def accept_survey_project(project_id: str, user) -> dict:
     """
     try:
         survey = Project.objects.get(pk=project_id)
-    except Project.DoesNotExist:
-        raise ValueError(f'Survey project {project_id} not found')
+    except Project.DoesNotExist as err:
+        msg = f'Survey project {project_id} not found'
+        raise ValueError(msg) from err
 
     is_engineer = AssignmentJob.objects.filter(
         project=survey,
@@ -352,7 +359,8 @@ def accept_survey_project(project_id: str, user) -> dict:
     ).exists()
     is_admin = getattr(user, 'role', None) == User.Role.SUBADMIN
     if not (is_engineer or is_admin):
-        raise PermissionError('Only the assigned engineer can accept this project')
+        msg = 'Only the assigned engineer can accept this project'
+        raise PermissionError(msg)
 
     if survey.status == 'assigned':
         survey.status = 'active'
@@ -378,8 +386,9 @@ def submit_survey_project(project_id: str, user) -> dict:
     """
     try:
         survey = Project.objects.get(pk=project_id)
-    except Project.DoesNotExist:
-        raise ValueError(f'Survey project {project_id} not found')
+    except Project.DoesNotExist as err:
+        msg = f'Survey project {project_id} not found'
+        raise ValueError(msg) from err
 
     is_engineer = AssignmentJob.objects.filter(
         project=survey,
@@ -388,16 +397,18 @@ def submit_survey_project(project_id: str, user) -> dict:
     ).exists()
     is_admin = getattr(user, 'role', None) == User.Role.SUBADMIN
     if not (is_engineer or is_admin):
-        raise PermissionError('Only the assigned engineer can submit this project')
+        msg = 'Only the assigned engineer can submit this project'
+        raise PermissionError(msg)
 
     if survey.status in ('active', 'redo'):
         survey.status = 'submitted'
         survey.save(update_fields=['status', 'updated_at', 'last_activity_at'])
     elif survey.status != 'submitted':
-        raise ValueError(
+        msg = (
             f"Cannot submit project in status '{survey.status}'; "
             'only active (or redo) projects can be submitted'
         )
+        raise ValueError(msg)
 
     return {
         'project_id': str(survey.id),
@@ -421,15 +432,18 @@ def review_survey_project(project_id: str, user, action: str) -> dict:
     """
     try:
         survey = Project.objects.get(pk=project_id)
-    except Project.DoesNotExist:
-        raise ValueError(f'Survey project {project_id} not found')
+    except Project.DoesNotExist as err:
+        msg = f'Survey project {project_id} not found'
+        raise ValueError(msg) from err
 
     is_admin = getattr(user, 'role', None) == User.Role.SUBADMIN
     if not is_admin:
-        raise PermissionError('Only a sub-admin can review projects')
+        msg = 'Only a sub-admin can review projects'
+        raise PermissionError(msg)
 
     if not isinstance(action, str):
-        raise ValueError("Review 'action' must be a string")
+        msg = "Review 'action' must be a string"
+        raise TypeError(msg)
     action = action.strip().lower()
     transitions = {
         'start_review': (('submitted',), 'under_review'),
@@ -446,10 +460,11 @@ def review_survey_project(project_id: str, user, action: str) -> dict:
 
     allowed_from, target = transitions[action]
     if survey.status not in allowed_from:
-        raise ValueError(
+        msg = (
             f"Cannot {action} a project in status '{survey.status}'; "
             f"allowed from: {', '.join(allowed_from)}"
         )
+        raise ValueError(msg)
 
     survey.status = target
     survey.save(update_fields=['status', 'updated_at', 'last_activity_at'])

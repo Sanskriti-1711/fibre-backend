@@ -15,9 +15,11 @@ Run with:
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from unittest import mock
 
 from django.test import TestCase, skipUnlessDBFeature
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from ftth_lld.models import ApprovedSurveyVersion, LldRun
@@ -387,10 +389,18 @@ class LldApprovedVersionViewTests(LldApiTestCase):
         v1 = ApprovedSurveyVersion.objects.get(version='AS-V01')
         v1_dataset = json.dumps(v1.dataset, sort_keys=True)
 
-        # The engineer edits again after the freeze → a new cycle.
+        # The engineer edits again after the freeze → a new cycle. The view
+        # decides "edited after the freeze" by comparing timestamps, so the
+        # edit has to be strictly later than the frozen row. auto_now would
+        # normally be enough, but a coarse clock (Windows advances in ~15 ms
+        # steps) can stamp both in the same tick, which makes this test pass or
+        # fail depending on how much time the earlier tests happened to take.
         sf.survey_geometry = OTHER_LINE
         sf.survey_status = SurveyFeature.SurveyStatus.APPROVED
         sf.save()
+        SurveyFeature.objects.filter(pk=sf.pk).update(
+            updated_at=timezone.now() + timedelta(seconds=1)
+        )
 
         response = self._create()
         self.assertEqual(response.status_code, 200, response.content)
@@ -812,7 +822,7 @@ class ProjectOverviewViewTests(LldApiTestCase):
 
         body = self.client.get(f'/api/ftth/lld/projects/{self.ftth.project_id}/overview/').json()
 
-        layer = next(l for l in body['layers'] if l['layer_id'] == 'trench_layer')
+        layer = next(item for item in body['layers'] if item['layer_id'] == 'trench_layer')
         self.assertEqual(layer['feature_count'], 2)
         self.assertEqual(layer['survey_changes'], 2)
         self.assertEqual(layer['approved_changes'], 1)

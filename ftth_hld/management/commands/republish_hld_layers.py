@@ -47,13 +47,13 @@ class Command(BaseCommand):
         if not engine_layers:
             self.stdout.write(
                 self.style.ERROR(
-                    f"The engine reports no layers for {project_id} — nothing to "
+                    f'The engine reports no layers for {project_id} — nothing to '
                     'republish (is FTTH_ENGINE_URL pointing at the right engine?).'
                 )
             )
             return
 
-        self.stdout.write(f"Engine reports {len(engine_layers)} layer(s) for {project_id}:")
+        self.stdout.write(f'Engine reports {len(engine_layers)} layer(s) for {project_id}:')
         for layer in status.get('layers') or []:
             self.stdout.write(
                 f"  {layer.get('name'):<20} {layer.get('feature_count')}  "
@@ -74,9 +74,9 @@ class Command(BaseCommand):
 
         result = pipeline.republish_project_layers(project_id)
         published = result['published']
-        self.stdout.write(f"\nRepublished {len(published)} layer(s):")
+        self.stdout.write(f'\nRepublished {len(published)} layer(s):')
         for name, count in sorted(published.items()):
-            self.stdout.write(f"  {name:<20} {count}")
+            self.stdout.write(f'  {name:<20} {count}')
         removed = result['removed']
         if removed:
             self.stdout.write(
@@ -87,8 +87,8 @@ class Command(BaseCommand):
             )
         self.stdout.write(
             self.style.SUCCESS(
-                f'Done. The post-HLD chain (road class, trench sections, permit '
-                f'matrix, package) re-runs on the next status poll because the '
-                f'trench content revision changed.'
+                'Done. The post-HLD chain (road class, trench sections, permit '
+                'matrix, package) re-runs on the next status poll because the '
+                'trench content revision changed.'
             )
         )

@@ -36,7 +36,8 @@ def lld_run(project_id: str, lld_version: str, dataset: dict) -> dict:
             detail = body.get('detail') or str(body)
         except Exception:
             detail = resp.text[:500]
-        raise RuntimeError(f'LLD engine returned {resp.status_code}: {detail}')
+        msg = f'LLD engine returned {resp.status_code}: {detail}'
+        raise RuntimeError(msg)
     return resp.json()
 
 
@@ -59,7 +60,8 @@ def lld_replan(project_id: str, lld_version: str, dataset: dict) -> dict:
             detail = body.get('detail') or str(body)
         except Exception:
             detail = resp.text[:500]
-        raise RuntimeError(f'LLD replan engine returned {resp.status_code}: {detail}')
+        msg = f'LLD replan engine returned {resp.status_code}: {detail}'
+        raise RuntimeError(msg)
     return resp.json()
 
 

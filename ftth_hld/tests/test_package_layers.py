@@ -350,9 +350,7 @@ class PackageReportTests(SimpleTestCase):
 
         zf, report = self._build(download, _status('Aerial_Spans.gpkg'))
 
-        self.assertEqual(
-            [item['name'] for item in report['substituted']], ['aerial_spans.geojson']
-        )
+        self.assertEqual([item['name'] for item in report['substituted']], ['aerial_spans.geojson'])
         self.assertIn('Aerial_Spans.gpkg', report['substituted'][0]['reason'])
         self.assertIn('Aerial_Spans.gpkg', zf.namelist())
         self.assertNotIn('aerial_spans.geojson', zf.namelist())

@@ -17,6 +17,7 @@ Endpoints (all under ``/api/ftth/hld/``):
 All endpoints require JWT authentication.
 """
 
+import contextlib
 import json
 import logging
 import uuid
@@ -35,9 +36,6 @@ from .boq import (
 )
 from .config import LAYER_NAME_MAP, STAGES
 from .models import FtthLayer, FtthProject
-
-logger = logging.getLogger(__name__)
-
 from .pipeline import (
     HOST_OUTPUTS_DIR,
     EngineError,
@@ -62,6 +60,8 @@ from .pipeline import (
     suggest_places,
     sync_project_layers,
 )
+
+logger = logging.getLogger(__name__)
 
 # ======================================================================
 # POST /api/ftth/hld/run/
@@ -122,10 +122,10 @@ class RunPipelineView(APIView):
         excel_path = host_input_dir / (excel.name or 'addresses.xlsx')
         roads_path = host_input_dir / (roads.name or 'roads.gpkg')
 
-        with open(excel_path, 'wb') as f:
+        with Path(excel_path).open('wb') as f:
             for chunk in excel.chunks():
                 f.write(chunk)
-        with open(roads_path, 'wb') as f:
+        with Path(roads_path).open('wb') as f:
             for chunk in roads.chunks():
                 f.write(chunk)
 
@@ -133,7 +133,7 @@ class RunPipelineView(APIView):
         brownfield_path = None
         if brownfield:
             brownfield_path = host_input_dir / (brownfield.name or 'brownfield.zip')
-            with open(brownfield_path, 'wb') as f:
+            with Path(brownfield_path).open('wb') as f:
                 for chunk in brownfield.chunks():
                     f.write(chunk)
 
@@ -143,7 +143,7 @@ class RunPipelineView(APIView):
         for key, upload in osm_layers.items():
             if upload:
                 path = host_input_dir / (upload.name or f'{key}.zip')
-                with open(path, 'wb') as f:
+                with Path(path).open('wb') as f:
                     for chunk in upload.chunks():
                         f.write(chunk)
                 osm_paths[key] = str(path)
@@ -374,7 +374,7 @@ class RunFromAreaView(APIView):
             host_input_dir = HOST_OUTPUTS_DIR / project_id / 'inputs'
             host_input_dir.mkdir(parents=True, exist_ok=True)
             brownfield_path = host_input_dir / (brownfield.name or 'brownfield.zip')
-            with open(brownfield_path, 'wb') as f:
+            with Path(brownfield_path).open('wb') as f:
                 for chunk in brownfield.chunks():
                     f.write(chunk)
 
@@ -532,8 +532,8 @@ class PipelineStatusView(APIView):
                 'stage_name': 'Complete',
                 'messages': [],
                 'layers': [
-                    {'name': l.name, 'count': l.feature_count}
-                    for l in FtthLayer.objects.filter(ftth_project__project_id=project_id)
+                    {'name': layer.name, 'count': layer.feature_count}
+                    for layer in FtthLayer.objects.filter(ftth_project__project_id=project_id)
                 ],
                 'downloads': [],
                 'created_at': project.created_at.isoformat() if project.created_at else '',
@@ -571,10 +571,7 @@ class PipelineStatusView(APIView):
             # Persist the engine progress, but never record 100% for a run
             # that has not actually completed (guards stale DB rows).
             persisted_progress = int(status_data.get('progress', 0) or 0)
-            if not is_completed:
-                persisted_progress = min(persisted_progress, 99)
-            else:
-                persisted_progress = 100
+            persisted_progress = min(persisted_progress, 99) if not is_completed else 100
             FtthProject.objects.filter(pk=project_id).update(
                 status=engine_status,
                 progress=persisted_progress,
@@ -618,9 +615,9 @@ class PipelineStatusView(APIView):
         if status_data.get('status') == 'completed':
             try:
                 layer_names = [
-                    (l.get('name') or '').lower()
-                    for l in status_data.get('layers', [])
-                    if l.get('name')
+                    (item.get('name') or '').lower()
+                    for item in status_data.get('layers', [])
+                    if item.get('name')
                 ]
                 sync_project_layers(project_id, layer_names)
             except Exception:
@@ -775,12 +772,12 @@ class SurfaceAIPointClassifyView(APIView):
             )
         payload = request.data if isinstance(request.data, dict) else {}
         coordinates = payload.get('coordinates')
-        if not isinstance(coordinates, (list, tuple)) or len(coordinates) < 2:
+        if not isinstance(coordinates, list | tuple) or len(coordinates) < 2:
             return JsonResponse(
                 {'detail': 'coordinates must be [x, y] or a span route.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if not isinstance(coordinates[0], (list, tuple)):
+        if not isinstance(coordinates[0], list | tuple):
             try:
                 coordinates = [float(coordinates[0]), float(coordinates[1])]
             except (TypeError, ValueError):
@@ -835,7 +832,7 @@ class SurfaceAIImageryView(APIView):
             )
         payload = request.data if isinstance(request.data, dict) else {}
         coordinates = payload.get('coordinates')
-        if not isinstance(coordinates, (list, tuple)) or len(coordinates) < 2:
+        if not isinstance(coordinates, list | tuple) or len(coordinates) < 2:
             return JsonResponse(
                 {'detail': 'coordinates must be [x, y] or a span route.'},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -882,10 +879,8 @@ class LayerGeoJSONView(APIView):
             # Enrich the served features with that id (+ fclass) so the map
             # can colour segments by permit status.
             if name in ('trenches', 'trench_layer'):
-                try:
+                with contextlib.suppress(Exception):
                     geojson = _enrich_trench_layer(project_id, geojson)
-                except Exception:
-                    pass
             return JsonResponse(geojson)
 
         # 2. Otherwise fetch from the engine and persist for next time.
@@ -904,10 +899,9 @@ class LayerGeoJSONView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        try:
+        # Persistence is best-effort; still return the layer data.
+        with contextlib.suppress(Exception):
             persist_layer(project_id, name, data)
-        except Exception:
-            pass  # persistence is best-effort; still return the layer data
 
         return JsonResponse(data)
 
@@ -1186,8 +1180,9 @@ def _boq_anomalies(project_id):
             from permits.ai.provider import AI_DISCLAIMER, chat_completion
 
             lines = [
-                '- [%s] %s: %s'
-                % (a.get('severity', ''), a.get('item_name', ''), a.get('message', ''))
+                '- [{}] {}: {}'.format(
+                    a.get('severity', ''), a.get('item_name', ''), a.get('message', '')
+                )
                 for a in result['anomalies']
             ]
             note = chat_completion(

@@ -62,23 +62,23 @@ class HldAuthTests(HldApiTestCase):
     def test_every_endpoint_requires_authentication(self):
         project_id = 'a' * 32
         checks = [
-            ('get', '/api/ftth/hld/results/%s/' % project_id),
-            ('get', '/api/ftth/hld/results/%s/layers/objects/' % project_id),
-            ('get', '/api/ftth/hld/download/%s/Objects.gpkg' % project_id),
-            ('get', '/api/ftth/hld/results/%s/survey-package/' % project_id),
-            ('get', '/api/ftth/hld/results/%s/design-package/' % project_id),
-            ('get', '/api/ftth/hld/results/%s/boq/' % project_id),
-            ('get', '/api/ftth/hld/results/%s/boq/download/' % project_id),
-            ('post', '/api/ftth/hld/results/%s/boq/regenerate/' % project_id),
+            ('get', f'/api/ftth/hld/results/{project_id}/'),
+            ('get', f'/api/ftth/hld/results/{project_id}/layers/objects/'),
+            ('get', f'/api/ftth/hld/download/{project_id}/Objects.gpkg'),
+            ('get', f'/api/ftth/hld/results/{project_id}/survey-package/'),
+            ('get', f'/api/ftth/hld/results/{project_id}/design-package/'),
+            ('get', f'/api/ftth/hld/results/{project_id}/boq/'),
+            ('get', f'/api/ftth/hld/results/{project_id}/boq/download/'),
+            ('post', f'/api/ftth/hld/results/{project_id}/boq/regenerate/'),
             ('get', '/api/ftth/hld/projects/'),
-            ('delete', '/api/ftth/hld/projects/%s/' % project_id),
-            ('post', '/api/ftth/hld/projects/%s/assign/' % project_id),
-            ('get', '/api/ftth/hld/results/%s/trench-design/' % project_id),
-            ('post', '/api/ftth/hld/results/%s/trench-design/run/' % project_id),
+            ('delete', f'/api/ftth/hld/projects/{project_id}/'),
+            ('post', f'/api/ftth/hld/projects/{project_id}/assign/'),
+            ('get', f'/api/ftth/hld/results/{project_id}/trench-design/'),
+            ('post', f'/api/ftth/hld/results/{project_id}/trench-design/run/'),
             ('post', '/api/ftth/hld/run/'),
-            ('get', '/api/ftth/hld/results/%s/surface-ai-review/' % project_id),
-            ('post', '/api/ftth/hld/results/%s/surface-ai-review/classify/' % project_id),
-            ('post', '/api/ftth/hld/results/%s/surface-ai-review/imagery/' % project_id),
+            ('get', f'/api/ftth/hld/results/{project_id}/surface-ai-review/'),
+            ('post', f'/api/ftth/hld/results/{project_id}/surface-ai-review/classify/'),
+            ('post', f'/api/ftth/hld/results/{project_id}/surface-ai-review/imagery/'),
         ]
         for method, url in checks:
             with self.subTest(url=url, method=method):

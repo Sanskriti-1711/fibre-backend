@@ -169,7 +169,7 @@ def _sibling_intensity(project_id: str) -> dict:
     if n == 0:
         return {'n': 0, 'median': {}, 'mad': {}}
 
-    codes = set()
+    codes: set[str] = set()
     for q in per_project.values():
         codes.update(q.keys())
 

@@ -174,7 +174,6 @@ LAYER_STEM_GIS_TABLES = {
     'Existing_Infrastructure': 'brownfield',
     'Existing_Infrastructure_Points': 'brownfield',
     'Aerial_Spans': 'aerial_span_layer',
-    'Aerial_Cable': 'aerial_cable_layer',
     'Aerial_Drops': 'aerial_drops',
 }
 

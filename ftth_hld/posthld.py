@@ -163,9 +163,9 @@ def _missing_layers(project_id: str, layer_names=None) -> list[str]:
             from .pipeline import get_status
 
             layer_names = [
-                (l.get('name') or '').lower()
-                for l in get_status(project_id).get('layers', [])
-                if l.get('name')
+                (item.get('name') or '').lower()
+                for item in get_status(project_id).get('layers', [])
+                if item.get('name')
             ]
         except Exception:  # noqa: BLE001
             return []
@@ -226,7 +226,7 @@ def _step_road_class(project_id: str, project_name: str = '') -> str:
     summary = ensure_road_class(project_id)
     if summary.get('error'):
         raise RuntimeError(summary['error'])
-    return 'attributed %s/%s trench(es) from %s road(s)' % (
+    return 'attributed {}/{} trench(es) from {} road(s)'.format(
         summary.get('attributed'),
         summary.get('trenches'),
         summary.get('roads'),
@@ -237,7 +237,7 @@ def _step_trench_sections(project_id: str, project_name: str = '') -> str:
     from permits.analysis.trench_sections import build_trench_sections
 
     summary = build_trench_sections(project_id)
-    return '%s section(s) from %s trench row(s), %s street-attributed' % (
+    return '{} section(s) from {} trench row(s), {} street-attributed'.format(
         summary.get('sections'),
         summary.get('rows'),
         summary.get('attributed'),
@@ -248,7 +248,7 @@ def _step_permit_matrix(project_id: str, project_name: str = '') -> str:
     from permits.rules.engine import run_analysis
 
     summary = run_analysis(project_id)
-    return '%s row(s) from %s rule(s) fired' % (
+    return '{} row(s) from {} rule(s) fired'.format(
         summary.get('rows_created', 0),
         len(summary.get('rules_fired', [])),
     )
@@ -258,7 +258,7 @@ def _step_permit_package(project_id: str, project_name: str = '') -> str:
     from permits.generators.hld_package import generate_hld_package
 
     summary = generate_hld_package(project_id, project_name or project_id)
-    return 'v%s, %s file(s)' % (
+    return 'v{}, {} file(s)'.format(
         summary.get('version'),
         len(summary.get('files', [])),
     )
@@ -297,7 +297,7 @@ def run_post_hld(project_id: str, project_name: str = '', steps=None) -> dict:
         error_message='',
     )
 
-    revision = trench_content_revision(project_id)
+    trench_content_revision(project_id)
     outcomes = dict(row.steps or {})
     failures = []
     for name in steps:
@@ -310,7 +310,7 @@ def run_post_hld(project_id: str, project_name: str = '', steps=None) -> dict:
             ok, error = True, ''
         except Exception as exc:  # noqa: BLE001 - one step must not kill the chain
             ok, error = False, str(exc)
-            failures.append('%s: %s' % (name, exc))
+            failures.append(f'{name}: {exc}')
             logger.warning('post-HLD %s step %s failed: %s', project_id, name, exc)
         outcomes[name] = {
             'ok': ok,
@@ -417,7 +417,7 @@ def schedule_post_hld(project_id: str, project_name: str = '', layer_names=None)
         threading.Thread(
             target=_worker,
             args=(project_id, project_name, pending),
-            name='post-hld-%s' % project_id[:8],
+            name=f'post-hld-{project_id[:8]}',
             daemon=True,
         ).start()
         return HldPostProcess.objects.filter(pk=row.pk).first()
