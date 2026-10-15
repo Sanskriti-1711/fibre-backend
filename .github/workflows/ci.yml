@@ -182,12 +182,14 @@ jobs:
         if: failure()
         run: docker logs smoke || true
 
-  # Advisory only — these two checks flag PRE-EXISTING drift in the repo, not
-  # anything the CI change introduced. They are reported in the log so the
-  # drift stays visible, but they must not block deploys until the team
-  # decides how to resolve them. See docs/DEPLOY.md "Known drift".
+  # Advisory only — this check flags PRE-EXISTING drift in the repo, not
+  # anything the CI change introduced. It is reported in the log so the
+  # drift stays visible, but it must not block deploys until the team
+  # decides how to resolve it. See docs/DEPLOY.md "Known drift".
   #   * check --deploy  : flags the DEBUG/SECRET_KEY defaults in settings.py
-  #   * makemigrations  : permits/ has model index names with no migration
+  # (A second advisory, `makemigrations`, used to flag permits/ index names
+  # with no migration; permits 0005 reconciled those, so it now passes and
+  # the step simply proves the model/migration state stays reconciled.)
   advisory:
     name: Deploy checklist (advisory, non-blocking)
     runs-on: ubuntu-latest
