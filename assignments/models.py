@@ -47,7 +47,9 @@ class AssignmentJob(models.Model):
                 condition=models.Q(scope='feature'),
                 name='unique_feature_assignment',
             ),
-            models.CheckConstraint(
+            # ``condition`` is the Django 5 argument; django-stubs 5.0.0 still
+            # types the older ``check`` kwarg, so this is stub drift, not a bug.
+            models.CheckConstraint(  # type: ignore[call-arg]
                 condition=(
                     models.Q(scope='project', layer_id__isnull=True, feature__isnull=True)
                     | models.Q(scope='layer', layer_id__isnull=False, feature__isnull=True)
@@ -71,7 +73,7 @@ class AssignmentJob(models.Model):
         super().save(*args, **kwargs)
         self._mark_features_assigned(scope)
 
-    def _mark_features_assigned(self, scope: str) -> None:
+    def _mark_features_assigned(self, scope: str | None) -> None:
         if scope == self.SCOPE_FEATURE and self.feature_id:
             Feature.objects.filter(pk=self.feature_id).exclude(
                 status=Feature.STATUS_ASSIGNED

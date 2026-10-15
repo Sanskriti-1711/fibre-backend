@@ -1,4 +1,5 @@
 import uuid
+from typing import cast
 
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
@@ -8,15 +9,19 @@ from django.utils import timezone
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, role=None, created_by=None, **extra_fields):
         if not email:
-            raise ValueError('The Email field must be set')
+            msg = 'The Email field must be set'
+            raise ValueError(msg)
 
         email = self.normalize_email(email)
 
-        user = self.model(
-            email=email,
-            role=role or User.Role.ENGINEER,
-            created_by=created_by,
-            **extra_fields,
+        user = cast(
+            User,
+            self.model(
+                email=email,
+                role=role or User.Role.ENGINEER,
+                created_by=created_by,
+                **extra_fields,
+            ),
         )
         user.set_password(password)
         user.save(using=self._db)
@@ -27,13 +32,12 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
 
-        user = self.create_user(
+        return self.create_user(
             email=email,
             password=password,
             role=User.Role.SUBADMIN,
             **extra_fields,
         )
-        return user
 
 
 class User(AbstractBaseUser, PermissionsMixin):

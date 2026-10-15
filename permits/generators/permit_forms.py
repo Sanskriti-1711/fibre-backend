@@ -19,17 +19,26 @@ from . import data
 # Bezirk templates are optional — the forms degrade gracefully when the
 # bezirke module is unavailable (tests / older checkouts).
 try:
-    from ..bezirke import SENMVKU as _SENMVKU  # type: ignore
-    from ..bezirke import bezirk_fee_note as _bezirk_fee_note  # type: ignore
-    from ..bezirke import bezirk_header_html as _bezirk_header_html  # type: ignore
-    from ..bezirke import get_bezirk as _get_bezirk  # type: ignore
+    from ..bezirke import SENMVKU as _SENMVKU
+    from ..bezirke import bezirk_fee_note as _bezirk_fee_note
+    from ..bezirke import bezirk_header_html as _bezirk_header_html
+    from ..bezirke import get_bezirk as _get_bezirk
 
     _HAS_BEZIRKE = True
 except ImportError:  # pragma: no cover
-    _bezirk_header_html = lambda *_a, **_kw: ''  # type: ignore
-    _get_bezirk = lambda *_a, **_kw: None  # type: ignore
-    _bezirk_fee_note = lambda *_a, **_kw: ''  # type: ignore
-    _SENMVKU = {}  # type: ignore
+
+    def _bezirk_header_html(municipality: str, authority_code: str = '') -> str:
+        return ''
+
+    def _get_bezirk(municipality: str) -> dict[str, Any] | None:
+        return None
+
+    def _bezirk_fee_note(municipality: str, authority_code: str = '') -> str:
+        return ''
+
+    # The try-branch already bound this name; the fallback rebinds it only
+    # when the optional module is absent.
+    _SENMVKU: dict[str, Any] = {}  # type: ignore[no-redef]
     _HAS_BEZIRKE = False
 
 
@@ -165,7 +174,7 @@ def application_forms(project_id: str, project_name: str) -> list[dict[str, Any]
         groups.setdefault((pm.rule_id, pm.permit_group or ''), []).append(pm)
 
     forms = []
-    for (rule_id, group), members in groups.items():
+    for (_rule_id, group), members in groups.items():
         head = members[0]
         slug = (head.permit_type or 'permit').lower().replace(' ', '_')
         gslug = (group or 'unnamed').lower().replace(' ', '_')[:48] or 'unnamed'
@@ -219,7 +228,7 @@ def hld_permit_overview(project_id: str, project_name: str) -> dict[str, Any]:
             b['streets'].add(pm.permit_group)
         if pm.authority:
             b['authorities'].add(pm.authority.name)
-        rule = pm.rule or {}
+        rule: Any = pm.rule or {}
         required = list(getattr(rule, 'evidence_required', None) or [])
         for key in required:
             if not (pm.evidence or {}).get(key, {}).get('present'):

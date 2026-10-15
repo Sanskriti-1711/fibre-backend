@@ -24,6 +24,7 @@ Section numbering mirrors the original BOQ.xlsx template:
 
 from __future__ import annotations
 
+import contextlib
 import math
 from typing import Any
 
@@ -33,7 +34,7 @@ from django.utils import timezone
 try:
     from pyproj import Geod
 
-    _GEOD = Geod(ellps='WGS84')
+    _GEOD: Any = Geod(ellps='WGS84')
 except Exception:  # pragma: no cover
     _GEOD = None
 
@@ -311,11 +312,13 @@ def _geometry_length(geom: dict | None) -> float:
     if not geom or not geom.get('coordinates'):
         return 0.0
     gtype = geom.get('type', '')
-    coords = geom.get('coordinates')
+    coords = geom.get('coordinates') or []
+    if not isinstance(coords, list):
+        return 0.0
     if gtype == 'LineString':
         return _ring_length(coords)
     if gtype == 'MultiLineString':
-        return sum(_ring_length(c) for c in coords)
+        return sum(_ring_length(c) for c in coords if isinstance(c, list))
     return 0.0
 
 
@@ -361,10 +364,11 @@ def _latest_lld_run(project_id: str):
             .first()
         )
         _lld_cache[project_id] = run
-        return run
     except Exception:
         _lld_cache[project_id] = None
         return None
+    else:
+        return run
 
 
 class _CombinedLayer:
@@ -381,7 +385,7 @@ class _CombinedLayer:
             fc = layer.geojson or {}
             features.extend(fc.get('features', []) if isinstance(fc, dict) else [])
         self.geojson = {'type': 'FeatureCollection', 'features': features}
-        self.name = '+'.join(l.name for l in layers)
+        self.name = '+'.join(layer.name for layer in layers)
         self.feature_count = len(features)
 
 
@@ -415,7 +419,7 @@ def _get_layer(project_id: str, name: str):
             except Exception:
                 pass
         if matched:
-            lld_times = [t for t in (getattr(l, 'updated_at', None) for l in matched) if t]
+            lld_times = [t for t in (getattr(m, 'updated_at', None) for m in matched) if t]
             newest_lld = max(lld_times) if lld_times else None
             hld_time = getattr(hld_layer, 'updated_at', None) if hld_layer is not None else None
             if (
@@ -435,8 +439,7 @@ def _iter_features(layer):
     if layer is None:
         return
     fc = layer.geojson or {}
-    for f in fc.get('features', []) if isinstance(fc, dict) else []:
-        yield f
+    yield from fc.get('features', []) if isinstance(fc, dict) else []
 
 
 # ---------------------------------------------------------------------------
@@ -483,7 +486,7 @@ def _sum_by_attr(
     layer_name: str,
     attr: str,
     match: dict[str, str],
-    length_attr: str | None = None,
+    length_attr: str | tuple[str, ...] | None = None,
     count_all: bool = False,
     skip_reused: bool = False,
 ) -> dict[str, float]:
@@ -615,13 +618,16 @@ def reused_metres(project_id: str) -> dict[str, float]:
                 continue
             if attr == 'CABLE_TYPE':
                 key = 'cable'
+            elif match is None:
+                continue
             else:
                 val = props.get(attr)
                 if val is None:
                     val = props.get('trench_type') or props.get('USAGE_TYPE')
-                key = match.get(str(val))
-                if key is None:
+                found = match.get(str(val))
+                if found is None:
                     continue
+                key = found
             # Prefer the pipeline's per-run reused metres for grouped
             # features (REUSE_LEN_M); fall back to the whole feature.
             qty = _reuse_len_m(props)
@@ -754,29 +760,26 @@ def compute_quantities(project_id: str) -> dict[str, float]:
                         'capacity_warning': props.get('CAPACITY_WARNING') or '',
                     }
                 )
-        key = (ctype, fibers)
-        code = _cable_item_code(ctype, fibers)
-        if ctype.strip().lower() in ('drop', 'aerial') and code is None:
-            code = _cable_item_code('Drop', fibers)
-        if code is None:
+        cable_code = _cable_item_code(ctype, fibers)
+        if ctype.strip().lower() in ('drop', 'aerial') and cable_code is None:
+            cable_code = _cable_item_code('Drop', fibers)
+        if cable_code is None:
             # Unknown cable size remains visible as the most appropriate
             # generic catalogue item, while known ladder sizes keep exact rows.
             if ctype.strip().lower() in ('drop', 'aerial'):
-                code = _cable_item_code('Drop', fibers) or '4.11'
+                cable_code = _cable_item_code('Drop', fibers) or '4.11'
             else:
-                code = '4.1' if ctype.lower().startswith('feeder') else '4.6'
+                cable_code = '4.1' if ctype.lower().startswith('feeder') else '4.6'
 
         raw = props.get('LENGTH_M') or props.get('length_m')
         try:
             length = float(raw) if raw is not None else _geometry_length(f.get('geometry'))
         except (TypeError, ValueError):
             length = _geometry_length(f.get('geometry'))
-        cable_totals[code] = cable_totals.get(code, 0.0) + length
+        cable_totals[cable_code] = cable_totals.get(cable_code, 0.0) + length
         if ctype.lower().startswith('feeder'):
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 feeder_fo = max(feeder_fo, int(props.get('FIBER_COUNT') or 0))
-            except (TypeError, ValueError):
-                pass
     for code, total in cable_totals.items():
         qty[code] = qty.get(code, 0.0) + total
 
@@ -812,7 +815,9 @@ def compute_quantities(project_id: str) -> dict[str, float]:
 
     # Standard chamber catalogue: HH (6.4), DHH+MH count as their
     # equivalents; splice closures = DHH chambers hosting PDP splitters.
-    _ct = lambda f: (f.get('properties') or {}).get('CHAMBER_TYPE')
+    def _ct(f):
+        return (f.get('properties') or {}).get('CHAMBER_TYPE')
+
     n_hh = sum(1 for f in chambers if _ct(f) in ('HH', 'Handhole'))
     n_dhh = sum(1 for f in chambers if _ct(f) in ('DHH', 'Distribution Handhole'))
     n_mh = sum(1 for f in chambers if _ct(f) in ('MH', 'Manhole'))
@@ -888,13 +893,11 @@ def _count_otb_tiers(project_id: str) -> dict[str, int]:
     for f in _iter_features(polygons_layer):
         geom = f.get('geometry')
         if geom:
-            try:
+            with contextlib.suppress(Exception):
                 polys.append((f.get('properties', {}), shape(geom)))
-            except Exception:
-                pass
 
     # Match each premise point to its containing polygon.
-    counts = Counter()
+    counts: Counter[int] = Counter()
     for f in _iter_features(objects_layer):
         geom = f.get('geometry')
         if not geom or geom.get('type') != 'Point':
@@ -934,7 +937,7 @@ def build_boq_rows(quantities: dict[str, float]) -> list[dict]:
     BOQ.xlsx layout. Quantities not backed by a rate-card entry (shouldn't
     happen) are appended with a fallback name so nothing is lost.
     """
-    rates = _rate_map()
+    _rate_map()
     rows: list[dict] = []
     for rate in sorted(
         BoqRate.objects.filter(active=True), key=lambda r: _section_order(r.item_code)
@@ -1089,8 +1092,9 @@ def generate_snapshot(project_id: str, force: bool = False) -> BoqSnapshot:
     """Compute (or refresh) the BOQ/BOM snapshot for a completed HLD run."""
     try:
         project = FtthProject.objects.get(pk=project_id)
-    except FtthProject.DoesNotExist:
-        raise ValueError(f"Project '{project_id}' not found.")
+    except FtthProject.DoesNotExist as err:
+        msg = f"Project '{project_id}' not found."
+        raise ValueError(msg) from err
 
     snapshot = BoqSnapshot.objects.filter(ftth_project=project).first()
     if snapshot is not None and not force:
@@ -1110,10 +1114,8 @@ def generate_snapshot(project_id: str, force: bool = False) -> BoqSnapshot:
         # Reuse summary — metres NOT billed because they ride existing
         # infrastructure (brownfield reuse). Exposed as boq_totals["reuse"]
         # so the UI/report can show the savings.
-        try:
+        with contextlib.suppress(Exception):
             snapshot.boq_totals['reuse'] = reused_metres(project_id)
-        except Exception:
-            pass
         snapshot.regenerated_at = timezone.now()
         snapshot.save()
 
@@ -1258,15 +1260,13 @@ def _write_bom_sheet(ws, project: FtthProject | None, rows: list[dict]) -> None:
     ws.append(_BOM_HEADERS)
     _style_header_row(ws, header_row)
 
-    idx = 0
     current_group = None
-    for r in rows:
+    for idx, r in enumerate(rows, start=1):
         group = str(r.get('section', '')).strip() or 'Other'
         if group != current_group:
             ws.append([group, '', '', '', '', '', ''])
             _style_bold_row(ws, ws.max_row)
             current_group = group
-        idx += 1
         ws.append(
             [
                 idx,
@@ -1281,10 +1281,8 @@ def _write_bom_sheet(ws, project: FtthProject | None, rows: list[dict]) -> None:
 
     total = 0.0
     for r in rows:
-        try:
+        with contextlib.suppress(TypeError, ValueError):
             total += float(r.get('material_total') or 0.0)
-        except (TypeError, ValueError):
-            pass
     ws.append(['TOTAL MATERIALS', '', '', '', '', round(total, 2), ''])
     _style_bold_row(ws, ws.max_row, col=6)
 

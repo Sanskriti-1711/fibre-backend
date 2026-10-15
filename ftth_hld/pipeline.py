@@ -10,6 +10,7 @@ This keeps the Django app clean and allows future services (Survey,
 LLD, etc.) to reuse the same FastAPI pipeline gateway.
 """
 
+import contextlib
 import io
 import json
 import logging
@@ -54,12 +55,15 @@ def _engine_url(path: str) -> str:
     return f'{_ENGINE}{path}'
 
 
-def _read_status(project_id):
+def _read_status(project_id: str) -> dict | None:
     """Read locally-cached status JSON. Returns None if missing."""
     path = HOST_OUTPUTS_DIR / project_id / 'status.json'
     if path.exists():
         try:
-            return json.loads(path.read_text())
+            data = json.loads(path.read_text())
+            if isinstance(data, dict):
+                return data
+            logger.warning('Unexpected status.json shape for %s', project_id)
         except Exception as exc:
             logger.warning('Corrupt status.json for %s: %s', project_id, exc)
     return None
@@ -81,11 +85,11 @@ def _write_status(data):
 def run_pipeline(
     excel_path: str,
     roads_path: str,
-    project_id: str = None,
+    project_id: str | None = None,
     name: str = '',
     poly_method: int = 3,
-    brownfield_path: str = None,
-    osm_layer_paths: dict = None,
+    brownfield_path: str | None = None,
+    osm_layer_paths: dict | None = None,
 ) -> dict:
     """
     Upload files to the FastAPI engine and start a pipeline run.
@@ -104,7 +108,11 @@ def run_pipeline(
     """
     url = _engine_url('/ftth/hld/run')
 
-    with open(excel_path, 'rb') as ef, open(roads_path, 'rb') as rf:
+    with (
+        Path(excel_path).open('rb') as ef,
+        Path(roads_path).open('rb') as rf,
+        contextlib.ExitStack() as stack,
+    ):
         files = {
             'excel': (
                 Path(excel_path).name,
@@ -116,14 +124,16 @@ def run_pipeline(
         if brownfield_path:
             files['brownfield'] = (
                 Path(brownfield_path).name,
-                open(brownfield_path, 'rb'),
+                stack.enter_context(Path(brownfield_path).open('rb')),
                 'application/octet-stream',
             )
-        _osm_open = []
         for key, path in (osm_layer_paths or {}).items():
             if path:
-                files[key] = (Path(path).name, open(path, 'rb'), 'application/octet-stream')
-                _osm_open.append(key)
+                files[key] = (
+                    Path(path).name,
+                    stack.enter_context(Path(path).open('rb')),
+                    'application/octet-stream',
+                )
         data = {'poly_method': str(poly_method)}
         if name:
             data['name'] = name
@@ -131,10 +141,6 @@ def run_pipeline(
             data['project_id'] = project_id
 
         resp = requests.post(url, files=files, data=data, timeout=120)
-        if 'brownfield' in files:
-            files['brownfield'][1].close()
-        for key in _osm_open:
-            files[key][1].close()
 
     if resp.status_code not in (200, 201, 202):
         detail = 'Unknown error'
@@ -143,9 +149,10 @@ def run_pipeline(
             detail = body.get('detail') or body.get('message') or str(body)
         except Exception:
             detail = resp.text[:500]
-        raise RuntimeError(f'Engine returned {resp.status_code}: {detail}')
+        msg = f'Engine returned {resp.status_code}: {detail}'
+        raise RuntimeError(msg)
 
-    result = resp.json()
+    result: dict = resp.json()
 
     # Cache the initial status locally
     _write_status(result)
@@ -239,7 +246,7 @@ def resolve_area(
         raise EngineError(502, f'Engine unreachable: {exc}') from exc
     if resp.status_code != 200:
         raise EngineError(resp.status_code, _engine_detail(resp))
-    return resp.json()
+    return dict(resp.json())
 
 
 def get_area_fetch(area: str = '', bbox: str = '') -> dict:
@@ -260,7 +267,7 @@ def get_area_fetch(area: str = '', bbox: str = '') -> dict:
         return {'state': 'unavailable', 'label': 'Could not reach the engine', 'fetching': False}
     if resp.status_code != 200:
         return {'state': 'unavailable', 'label': 'Could not reach the engine', 'fetching': False}
-    return resp.json()
+    return dict(resp.json())
 
 
 def get_input_layer(
@@ -291,7 +298,7 @@ def get_input_layer(
         raise EngineError(502, f'Engine unreachable: {exc}') from exc
     if resp.status_code != 200:
         raise EngineError(resp.status_code, _engine_detail(resp))
-    return resp.json()
+    return dict(resp.json())
 
 
 def run_from_area(
@@ -303,7 +310,7 @@ def run_from_area(
     city: str = '',
     postcode: str = '',
     area_name: str = '',
-    brownfield_path: str = None,
+    brownfield_path: str | None = None,
 ) -> dict:
     """Start a full HLD run from an area.
 
@@ -325,7 +332,7 @@ def run_from_area(
         payload['name'] = name
     try:
         if brownfield_path:
-            with open(brownfield_path, 'rb') as bf:
+            with Path(brownfield_path).open('rb') as bf:
                 files = {
                     'brownfield': (
                         Path(brownfield_path).name,
@@ -345,7 +352,7 @@ def run_from_area(
         raise EngineError(502, f'Engine unreachable: {exc}') from exc
     if resp.status_code not in (200, 201, 202):
         raise EngineError(resp.status_code, _engine_detail(resp))
-    result = resp.json()
+    result: dict = resp.json()
     _write_status(result)
     return result
 
@@ -355,7 +362,7 @@ def osm_status() -> dict:
     try:
         resp = requests.get(_engine_url('/ftth/hld/osm-status'), timeout=15)
         if resp.status_code == 200:
-            return resp.json()
+            return dict(resp.json())
     except requests.RequestException as exc:
         logger.warning('Engine unreachable for osm-status: %s', exc)
     return {'loaded': False, 'unavailable': True}
@@ -371,7 +378,7 @@ def list_countries() -> list[dict]:
     try:
         resp = requests.get(_engine_url('/ftth/hld/countries'), timeout=15)
         if resp.status_code == 200:
-            return resp.json().get('countries') or []
+            return list(resp.json().get('countries') or [])
     except requests.RequestException as exc:
         logger.warning('Engine unreachable for countries: %s', exc)
     return []
@@ -384,13 +391,13 @@ def suggest_places(q: str, country: str = '', limit: int = 8) -> dict:
     failure is reported as ``reason: unavailable`` instead of a 502 that would
     break the page they are still filling in.
     """
-    params = {'q': q, 'limit': int(limit)}
+    params: dict = {'q': q, 'limit': int(limit)}
     if country:
         params['country'] = country
     try:
         resp = requests.get(_engine_url('/ftth/hld/places'), params=params, timeout=30)
         if resp.status_code == 200:
-            return resp.json()
+            return dict(resp.json())
         return {'query': q, 'places': [], 'reason': 'engine_error', 'detail': _engine_detail(resp)}
     except requests.RequestException as exc:
         logger.warning('Engine unreachable for places: %s', exc)
@@ -409,7 +416,7 @@ def get_status(project_id: str) -> dict:
     try:
         resp = requests.get(url, timeout=10)
         if resp.status_code == 200:
-            data = resp.json()
+            data: dict = resp.json()
             _write_status(data)  # refresh local cache
             return data
     except requests.RequestException as exc:
@@ -477,7 +484,7 @@ def get_trench_design(project_id: str, include_layers: bool = True) -> dict | No
         if resp.status_code != 200:
             logger.warning('Engine design payload %s -> HTTP %s', project_id, resp.status_code)
             return None
-        data = resp.json()
+        data: dict = resp.json()
     except (requests.RequestException, ValueError) as exc:
         logger.warning('Engine unreachable for design %s: %s', project_id, exc)
         return None
@@ -516,7 +523,7 @@ def run_trench_design(project_id: str, force: bool = False) -> dict | None:
             timeout=60,
         )
         if resp.status_code in (200, 202):
-            return resp.json()
+            return dict(resp.json())
         logger.warning('Engine design run %s -> HTTP %s', project_id, resp.status_code)
     except requests.RequestException as exc:
         logger.warning('Engine unreachable to start design %s: %s', project_id, exc)
@@ -609,7 +616,9 @@ def sync_project_layers(project_id: str, layer_names=None, force: bool = False) 
     if layer_names is None:
         status_data = get_status(project_id)
         layer_names = [
-            (l.get('name') or '').lower() for l in status_data.get('layers', []) if l.get('name')
+            (item.get('name') or '').lower()
+            for item in status_data.get('layers', [])
+            if item.get('name')
         ]
     counts = {}
     for name in layer_names:
@@ -700,7 +709,7 @@ def get_surface_ai_review(project_id: str) -> dict | None:
     try:
         resp = requests.get(url, timeout=30)
         if resp.status_code == 200:
-            return resp.json()
+            return dict(resp.json())
     except (requests.RequestException, ValueError) as exc:
         logger.warning('Could not load surface AI review for %s: %s', project_id, exc)
     return None
@@ -765,7 +774,7 @@ def classify_surface_at_point(
     if resp.status_code != 200:
         raise EngineError(resp.status_code, _engine_detail(resp))
     try:
-        return resp.json()
+        return dict(resp.json())
     except ValueError as exc:
         raise EngineError(502, 'The engine returned an unreadable surface review.') from exc
 
@@ -794,7 +803,7 @@ def preview_surface_imagery(project_id: str, payload: dict) -> dict:
     if resp.status_code != 200:
         raise EngineError(resp.status_code, _engine_detail(resp))
     try:
-        return resp.json()
+        return dict(resp.json())
     except ValueError as exc:
         raise EngineError(502, 'The engine returned an unreadable imagery preview.') from exc
 
@@ -1062,8 +1071,8 @@ def _reproject_geojson(geojson_bytes: bytes) -> bytes:
 
     try:
         data = json.loads(geojson_bytes)
-    except json.JSONDecodeError as exc:
-        logger.error('Invalid GeoJSON for reprojection: %s', exc)
+    except json.JSONDecodeError:
+        logger.exception('Invalid GeoJSON for reprojection')
         return geojson_bytes  # pass through unchanged
 
     source_crs = _detect_crs(data)
@@ -1208,9 +1217,7 @@ def _package_report_text(
         '',
     ]
     if missing:
-        lines.append(
-            'These files are part of the package contract and could not be fetched:'
-        )
+        lines.append('These files are part of the package contract and could not be fetched:')
         lines.extend(f'  {item["name"]} — {item["reason"]}' for item in missing)
         lines.append('')
     if substituted:
@@ -1220,9 +1227,8 @@ def _package_report_text(
     if missing or substituted:
         lines.extend(
             [
-                'THIS PACKAGE IS INCOMPLETE. It carries the files listed above, '
-                'and no others.',
-                'A run\'s output files live on the engine that executed it; when '
+                'THIS PACKAGE IS INCOMPLETE. It carries the files listed above, ' 'and no others.',
+                "A run's output files live on the engine that executed it; when "
                 'that disk is gone, a',
                 'layer can still be served as GeoJSON from the shared database, '
                 'which a GeoPackage cannot.',
@@ -1239,7 +1245,7 @@ def _build_package_zip(
     gpkg_files: list,
     geojson_map: dict,
     label: str,
-    extra_files: dict | None = None,
+    extra_files: dict[str, bytes] | None = None,
     report: dict | None = None,
 ) -> bytes:
     """
@@ -1323,7 +1329,7 @@ def _build_package_zip(
                         {
                             'name': zip_fname,
                             'reason': f'{engine_fname} was unavailable; {gpkg_fname} '
-                                      'was bundled in its place',
+                            'was bundled in its place',
                         }
                     )
                     continue
@@ -1352,15 +1358,15 @@ def _build_package_zip(
     # The failure is "nothing at all could be bundled" — the report entry is
     # not a deliverable, so it does not count here.
     if files_added == 0:
-        raise FileNotFoundError(
+        msg = (
             f"No {label} files found for project '{project_id}'. "
             'The pipeline may still be running.'
         )
+        raise FileNotFoundError(msg)
 
     if missing or substituted:
         logger.warning(
-            '%s package for %s is INCOMPLETE: %d of %d file(s) missing (%s), '
-            '%d substituted',
+            '%s package for %s is INCOMPLETE: %d of %d file(s) missing (%s), ' '%d substituted',
             label,
             project_id,
             len(missing),
@@ -1369,9 +1375,7 @@ def _build_package_zip(
             len(substituted),
         )
     else:
-        logger.info(
-            '%s package for %s is complete: %d file(s)', label, project_id, len(bundled)
-        )
+        logger.info('%s package for %s is complete: %d file(s)', label, project_id, len(bundled))
 
     if report is not None:
         report.update(
@@ -1490,8 +1494,11 @@ def delete_project(project_id: str) -> dict:
 
     try:
         resp = requests.delete(url, timeout=30)
+    except requests.RequestException as exc:
+        return {'deleted': False, 'detail': f'Engine unreachable: {exc}'}
+    else:
         if resp.status_code == 200:
-            return resp.json()
+            return dict(resp.json())
         detail = 'Unknown error'
         try:
             body = resp.json()
@@ -1499,8 +1506,6 @@ def delete_project(project_id: str) -> dict:
         except Exception:
             detail = resp.text[:500]
         return {'deleted': False, 'detail': f'Engine returned {resp.status_code}: {detail}'}
-    except requests.RequestException as exc:
-        return {'deleted': False, 'detail': f'Engine unreachable: {exc}'}
 
 
 def list_projects() -> list[dict]:
@@ -1509,7 +1514,7 @@ def list_projects() -> list[dict]:
     try:
         resp = requests.get(url, timeout=10)
         if resp.status_code == 200:
-            return resp.json()
+            return list(resp.json())
     except requests.RequestException as exc:
         logger.warning('Engine unreachable for project list: %s', exc)
     return []
