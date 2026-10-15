@@ -1,6 +1,8 @@
-import os
+from datetime import timedelta
+from pathlib import Path
 
 import requests
+from django.utils.timezone import now
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -172,8 +174,8 @@ class ProjectDetailAPIView(APIView):
             if session.stored_file_path:
                 try:
                     file_path = session.stored_file_path
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
+                    if Path(file_path).exists():
+                        Path(file_path).unlink()
                 except OSError:
                     pass  # Continue even if file deletion fails
 
@@ -181,11 +183,6 @@ class ProjectDetailAPIView(APIView):
         # on_delete=CASCADE, so deleting the project will cascade delete everything
         project.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-from datetime import timedelta
-
-from django.utils.timezone import now
 
 
 class LatestProjectUpdatesAPIView(APIView):

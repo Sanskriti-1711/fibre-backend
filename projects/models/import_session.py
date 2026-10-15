@@ -1,4 +1,3 @@
-# projects/models/import_session.py
 import uuid
 
 from django.db import models

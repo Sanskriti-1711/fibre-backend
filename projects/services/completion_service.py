@@ -147,7 +147,7 @@ class CompletionService:
         )
 
     @staticmethod
-    def validate_layer_weights(project: Project, weights: dict[str, float]) -> tuple[bool, str]:
+    def validate_layer_weights(_project: Project, weights: dict[str, float]) -> tuple[bool, str]:
         """
         Validate that layer weights sum to 100%.
 

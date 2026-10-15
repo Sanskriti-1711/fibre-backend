@@ -1,6 +1,7 @@
+import contextlib
 import json
-import os
 import zipfile
+from pathlib import Path
 
 import requests
 from django.conf import settings
@@ -22,8 +23,7 @@ def _is_zip_file(filename):
 
 def _get_extension(filename):
     """Get the file extension from a filename."""
-    _, ext = os.path.splitext(filename.lower())
-    return ext
+    return Path(filename.lower()).suffix
 
 
 def discover_zip_layers(file_path):
@@ -37,7 +37,7 @@ def discover_zip_layers(file_path):
         for info in zf.infolist():
             if not info.filename.lower().endswith('.geojson'):
                 continue
-            layer_name = os.path.splitext(os.path.basename(info.filename))[0]
+            layer_name = Path(info.filename).stem
             feature_count = 0
             try:
                 content = zf.read(info.filename).decode('utf-8')
@@ -80,7 +80,7 @@ def import_zip_layers(project, file_path, selected_layers):
     finished rows in one go, exactly as before.
     """
     features_created = 0
-    pending = []
+    pending: list[Feature] = []
 
     def _flush():
         if pending:
@@ -92,7 +92,7 @@ def import_zip_layers(project, file_path, selected_layers):
         for info in zf.infolist():
             if not info.filename.lower().endswith('.geojson'):
                 continue
-            layer_name = os.path.splitext(os.path.basename(info.filename))[0]
+            layer_name = Path(info.filename).stem
             if selected_lower and layer_name.lower() not in selected_lower:
                 continue
             try:
@@ -110,7 +110,7 @@ def import_zip_layers(project, file_path, selected_layers):
                 if isinstance(first_props, dict):
                     field_schema = [
                         {'key': k, 'label': k.replace('_', ' ').title(), 'type': 'text'}
-                        for k in first_props.keys()
+                        for k in first_props
                     ]
 
             for feature_payload in features:
@@ -165,15 +165,15 @@ class GpkgUploadView(APIView):
 
         ext = _get_extension(file_obj.name)
         filename = f'{project_id}{ext}'
-        file_path = os.path.join('imports', filename)
+        file_path = str(Path('imports') / filename)
 
         # Ensure directory exists
-        full_path = os.path.join(settings.MEDIA_ROOT, file_path)
-        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        full_path = Path(settings.MEDIA_ROOT) / file_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Save file
         saved_path = default_storage.save(file_path, file_obj)
-        absolute_path = os.path.join(settings.MEDIA_ROOT, saved_path)
+        absolute_path = str(Path(settings.MEDIA_ROOT) / saved_path)
 
         # Create or update ImportSession
         import_session, _ = ImportSession.objects.update_or_create(
@@ -220,7 +220,7 @@ class GpkgDiscoverView(APIView):
             )
 
         file_path = import_session.stored_file_path
-        if not os.path.exists(file_path):
+        if not Path(file_path).exists():
             return Response({'detail': 'Uploaded file not found'}, status=status.HTTP_404_NOT_FOUND)
 
         original_filename = import_session.original_filename or ''
@@ -246,7 +246,7 @@ class GpkgDiscoverView(APIView):
             )
         # ── GPKG discover: call microservice ────────────────────────────
         try:
-            with open(file_path, 'rb') as f:
+            with Path(file_path).open('rb') as f:
                 response = requests.post(
                     f'{MICROSERVICE_BASE_URL}/import/gpkg/discover',
                     files={'file': (f'{project_id}.gpkg', f)},
@@ -301,7 +301,7 @@ class GpkgImportView(APIView):
             )
 
         file_path = import_session.stored_file_path
-        if not os.path.exists(file_path):
+        if not Path(file_path).exists():
             return Response({'detail': 'Uploaded file not found'}, status=status.HTTP_404_NOT_FOUND)
 
         original_filename = import_session.original_filename or ''
@@ -343,7 +343,7 @@ class GpkgImportView(APIView):
 
         # ── GPKG import: call microservice ──────────────────────────────
         try:
-            with open(file_path, 'rb') as f:
+            with Path(file_path).open('rb') as f:
                 response = requests.post(
                     f'{MICROSERVICE_BASE_URL}/import/gpkg',
                     files={'file': (f'{project_id}.gpkg', f)},
@@ -356,10 +356,8 @@ class GpkgImportView(APIView):
             error_detail = f'Error importing layers: {str(e)}'
             if e.response is not None:
                 error_detail += f' | Status: {e.response.status_code}'
-                try:
+                with contextlib.suppress(Exception):
                     error_detail += f' | Response: {e.response.text}'
-                except:
-                    pass
             return Response({'detail': error_detail}, status=status.HTTP_502_BAD_GATEWAY)
 
         import_session.status = 'imported'

@@ -12,10 +12,9 @@ class Migration(migrations.Migration):
         # The ``project`` column is dropped below, so the composite index that
         # leads with it has to go first. SQLite rebuilds the whole table for a
         # RemoveField and re-creates every index from the model state, so an
-        # index on a column that no longer exists makes the rebuild fail with
-        # "FieldDoesNotExist: NewSurveyChange has no field named 'project'"
-        # (PostgreSQL never hit this — RemoveField there is a plain
-        # ALTER TABLE ... DROP COLUMN, so nothing is rebuilt.)
+        # index on a column that no longer exists makes the rebuild fail
+        # (PostgreSQL never hits this — RemoveField there is a plain column
+        # drop, so nothing is rebuilt).
         migrations.RemoveIndex(
             model_name='surveychange',
             name='survey_chan_project_ef5ccb_idx',

@@ -38,7 +38,7 @@ class ProjectLayerWeightsAPIView(APIView):
         ]
 
         total_defined = sum(weights_data.values())
-        undefined_count = len([l for l in all_layers if not l['has_weight']])
+        undefined_count = len([layer for layer in all_layers if not layer['has_weight']])
 
         return Response(
             {

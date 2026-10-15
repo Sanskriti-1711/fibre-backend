@@ -83,7 +83,8 @@ class FeatureUpdateSerializer(serializers.ModelSerializer):
         if value is None:
             return value
         if not isinstance(value, dict):
-            raise serializers.ValidationError('Geometry must be a JSON object')
+            msg = 'Geometry must be a JSON object'
+            raise serializers.ValidationError(msg)
         # Basic GeoJSON geometry validation
         geom_type = value.get('type')
         if geom_type not in (
@@ -95,10 +96,12 @@ class FeatureUpdateSerializer(serializers.ModelSerializer):
             'MultiPolygon',
             'GeometryCollection',
         ):
-            raise serializers.ValidationError(f'Invalid GeoJSON geometry type: {geom_type}')
+            msg = f'Invalid GeoJSON geometry type: {geom_type}'
+            raise serializers.ValidationError(msg)
         coordinates = value.get('coordinates')
-        if not isinstance(coordinates, (list, tuple)):
-            raise serializers.ValidationError('Geometry must contain a coordinates array')
+        if not isinstance(coordinates, list | tuple):
+            msg = 'Geometry must contain a coordinates array'
+            raise serializers.ValidationError(msg)
         return value
 
     def update(self, instance, validated_data):
