@@ -10,7 +10,10 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
     feature = serializers.PrimaryKeyRelatedField(
         queryset=Feature.objects.all(), required=False, allow_null=True
     )
-    assignee = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
+    # Typed as the base Field: the detail serializer refines this into an
+    # embedded object via SerializerMethodField (a Field subclass), which a
+    # narrower declaration would reject as an incompatible override.
+    assignee: serializers.Field = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
 
     class Meta:
         model = AssignmentJob

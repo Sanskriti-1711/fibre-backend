@@ -65,7 +65,7 @@ class ProjectListCreateAPIView(APIView):
         kind = request.GET.get('kind', 'survey').lower()
         stage = request.GET.get('stage', '').lower()
 
-        survey = ProjectSerializer(qs, many=True).data
+        survey: list = [dict(item) for item in ProjectSerializer(qs, many=True).data]
 
         # Attach the engineers assigned to each survey copy (project-scope
         # AssignmentJob), mirroring the shape HLD rows get from
@@ -80,7 +80,7 @@ class ProjectListCreateAPIView(APIView):
                 scope=AssignmentJob.SCOPE_PROJECT,
                 assignee__isnull=False,
             ).select_related('assignee')
-            by_project = {}
+            by_project: dict[str, list] = {}
             for job in jobs:
                 by_project.setdefault(str(job.project_id), []).append(job)
             for item in survey:

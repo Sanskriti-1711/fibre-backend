@@ -770,7 +770,7 @@ class SurveyFeatureUpsertAPIView(APIView):
 
         if serializer.is_valid():
             # Conditionally bump version + transition status (matches PATCH logic)
-            extra = {}
+            extra: dict[str, object] = {}
             if sf:
                 data = request.data
                 if 'survey_geometry' in data or 'survey_attributes' in data:

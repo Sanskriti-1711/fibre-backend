@@ -27,6 +27,7 @@ import logging
 import re
 import threading
 import time
+from typing import Any
 
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
@@ -63,7 +64,7 @@ logger = logging.getLogger(__name__)
 HLD_VERSION = 'HLD-V1'
 ALGORITHM_VERSION = 'fiber-lld-2.4.1'
 
-_STATUS_MAP = {
+_STATUS_MAP: dict[str, str] = {
     SurveyFeature.SurveyStatus.NEW: 'pending_review',
     SurveyFeature.SurveyStatus.MODIFIED: 'pending_review',
     SurveyFeature.SurveyStatus.REMOVED: 'pending_review',
@@ -294,7 +295,7 @@ def _anomaly_counts(changes):
 
 def _survey_feature_collection(survey_copy):
     """Survey dataset: HLD baseline as edited by engineers + new features."""
-    by_hld = {}
+    by_hld: dict[str, list] = {}
     for sf in (
         SurveyFeature.objects.filter(project=survey_copy)
         .select_related('engineer')
@@ -718,7 +719,7 @@ class ProjectOverviewView(APIView):
         # ── Layers ────────────────────────────────────────────────────
         layers = []
         if copy is not None:
-            feature_counts = {}
+            feature_counts: dict[str, dict[str, Any]] = {}
             for layer_id, layer_name, _cnt in Feature.objects.filter(project=copy).values_list(
                 'layer_id', 'layer_name', 'id'
             ):
@@ -727,7 +728,7 @@ class ProjectOverviewView(APIView):
                 )
                 feature_counts[layer_id]['count'] += 1
 
-            sf_counts = {}
+            sf_counts: dict[str, dict[str, Any]] = {}
             for layer_id, status in SurveyFeature.objects.filter(project=copy).values_list(
                 'layer_id', 'survey_status'
             ):
@@ -1179,13 +1180,14 @@ class LldApprovedVersionView(APIView):
         missing_reroute_baseline = []
         for feature in dataset.get('features', []):
             props = feature.get('properties') or {}
-            if not props.get('approved') or not props.get('change_id'):
+            change_id = props.get('change_id')
+            if not props.get('approved') or not change_id:
                 continue
             original = props.get('original_geometry')
             current = feature.get('geometry')
             if original and current and original != current:
                 continue
-            sf = SurveyFeature.objects.filter(pk=props.get('change_id'), project=copy).first()
+            sf = SurveyFeature.objects.filter(pk=str(change_id), project=copy).first()
             if (
                 sf
                 and sf.original_geometry

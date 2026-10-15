@@ -89,7 +89,9 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='assignmentrule',
-            constraint=models.CheckConstraint(
+            # ``condition`` is the Django 5 argument; django-stubs 5.0.0 still
+            # types the older ``check`` kwarg, so this is stub drift, not a bug.
+            constraint=models.CheckConstraint(  # type: ignore[call-arg]
                 condition=(
                     models.Q(scope='project', layer_id__isnull=True, feature__isnull=True)
                     | models.Q(scope='layer', layer_id__isnull=False, feature__isnull=True)

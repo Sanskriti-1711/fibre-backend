@@ -186,7 +186,7 @@ class ReassignGuardTests(SimpleTestCase):
 
     @staticmethod
     def _probes(*recorded: bool):
-        probes = []
+        probes: list = []
         for flag in recorded:
             model = mock.Mock()
             model.objects.filter.return_value.exists.return_value = flag

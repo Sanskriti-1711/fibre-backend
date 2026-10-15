@@ -74,7 +74,7 @@ class AssignmentJobSummaryAPIView(APIView):
         assignments = assignments.order_by('scope', 'layer_id', 'created_at')
 
         serializer = AssignmentJobDetailSerializer(assignments, many=True)
-        grouped = {'project': [], 'layer': [], 'feature': []}
+        grouped: dict[str, list] = {'project': [], 'layer': [], 'feature': []}
         for record in serializer.data:
             grouped[record['scope']].append(record)
 

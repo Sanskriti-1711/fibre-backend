@@ -188,7 +188,12 @@ def extract_requirements_from_text(raw_text: str) -> dict[str, Any]:
     heuristic = [label for kw, label in keywords.items() if kw in low]
     # De-duplicate while preserving order.
     seen: set[str] = set()
-    heuristic = [x for x in heuristic if not (x in seen or seen.add(x))]
+    deduped: list[str] = []
+    for x in heuristic:
+        if x not in seen:
+            seen.add(x)
+            deduped.append(x)
+    heuristic = deduped
 
     # Try LLM extraction (structured, validated).
     system = (

@@ -77,6 +77,7 @@ class DbLayerFallbackTests(SimpleTestCase):
             payload = pipeline._db_layer_geojson(self.PROJECT, 'PDPs.geojson')
 
         self.assertIsNotNone(payload, 'the layer must be served from the database')
+        assert payload is not None
         data = json.loads(payload)
         self.assertEqual(data['type'], 'FeatureCollection')
         self.assertEqual(len(data['features']), 2)
@@ -154,6 +155,7 @@ class DbLayerFallbackTests(SimpleTestCase):
         patcher, _ = _patch_cursor(rows)
         with patcher:
             payload = pipeline._db_layer_geojson(self.PROJECT, 'Chambers.geojson')
+        assert payload is not None
         data = json.loads(payload)
         self.assertEqual(len(data['features']), 1)
 
@@ -219,16 +221,16 @@ class DbLayerFallbackTests(SimpleTestCase):
             self.assertIn('Aerial_Spans.gpkg', files)
             self.assertIn('Aerial_Cable.gpkg', files)
             self.assertIn('Aerial_Drops.gpkg', files)
-        for files in (SURVEY_GEOJSON_FILES, DESIGN_GEOJSON_FILES):
-            self.assertIn('Aerial_Spans.geojson', files)
-            self.assertIn('Aerial_Cable.geojson', files)
-            self.assertIn('Aerial_Drops.geojson', files)
+        for geojson_files in (SURVEY_GEOJSON_FILES, DESIGN_GEOJSON_FILES):
+            self.assertIn('Aerial_Spans.geojson', geojson_files)
+            self.assertIn('Aerial_Cable.geojson', geojson_files)
+            self.assertIn('Aerial_Drops.geojson', geojson_files)
 
     def test_the_brownfield_regions_ship_in_both_packages(self):
         """Existing infrastructure — both its linework and its points."""
         for files in (SURVEY_PACKAGE_FILES, DESIGN_PACKAGE_FILES):
             self.assertIn('Existing_Infrastructure.gpkg', files)
             self.assertIn('Existing_Infrastructure_Points.gpkg', files)
-        for files in (SURVEY_GEOJSON_FILES, DESIGN_GEOJSON_FILES):
-            self.assertIn('Existing_Infrastructure.geojson', files)
-            self.assertIn('Existing_Infrastructure_Points.geojson', files)
+        for geojson_files in (SURVEY_GEOJSON_FILES, DESIGN_GEOJSON_FILES):
+            self.assertIn('Existing_Infrastructure.geojson', geojson_files)
+            self.assertIn('Existing_Infrastructure_Points.geojson', geojson_files)

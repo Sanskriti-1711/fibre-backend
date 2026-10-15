@@ -1,3 +1,5 @@
+from typing import Any
+
 import requests
 from django.db.models import Count, Max, Q
 from rest_framework import status
@@ -71,7 +73,7 @@ class ProjectMapDataAPIView(APIView):
         features_qs = Feature.objects.filter(project=project).order_by('layer_name', 'created_at')
 
         layers = []
-        geojson = {}
+        geojson: dict[str, dict[str, Any]] = {}
         all_features = []
         seen_layers = set()
 
@@ -191,6 +193,7 @@ class ProjectLayerDetailAPIView(APIView):
             )
 
         first_feature = layer_features.first()
+        assert first_feature is not None
 
         aggregations = layer_features.aggregate(
             feature_count=Count('id'),

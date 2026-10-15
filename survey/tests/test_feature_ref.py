@@ -173,7 +173,9 @@ class FeatureRefTestCase(TestCase):
         self.assertEqual(second.status_code, 200, second.data)
         rows = SurveyStatus.objects.filter(survey_feature=self.survey_feature)
         self.assertEqual(rows.count(), 1)
-        self.assertEqual(rows.first().status, 'completed')
+        row = rows.first()
+        assert row is not None
+        self.assertEqual(row.status, 'completed')
         self.assertEqual(second.data['feature'], str(self.survey_feature.id))
 
     # ── the imported-feature path is unchanged ────────────────────────────

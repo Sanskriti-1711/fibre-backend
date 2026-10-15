@@ -49,18 +49,23 @@ class LlmConfigTests(SimpleTestCase):
         with mock.patch.dict(os.environ, FULL_ENV, clear=True):
             cfg = get_llm_config()
         self.assertIsInstance(cfg, LlmConfig)
+        assert cfg is not None
         self.assertEqual(cfg.url, FULL_ENV['PERMITS_LLM_URL'])
         self.assertEqual(cfg.api_key, 'sk-test')
 
     def test_the_default_model_is_named(self):
         with mock.patch.dict(os.environ, FULL_ENV, clear=True):
-            self.assertEqual(get_llm_config().model, 'gpt-4o-mini')
+            cfg = get_llm_config()
+            assert cfg is not None
+            self.assertEqual(cfg.model, 'gpt-4o-mini')
 
     def test_the_model_can_be_overridden(self):
         with mock.patch.dict(
             os.environ, {**FULL_ENV, 'PERMITS_LLM_MODEL': 'gemini-2.5-flash'}, clear=True
         ):
-            self.assertEqual(get_llm_config().model, 'gemini-2.5-flash')
+            cfg = get_llm_config()
+            assert cfg is not None
+            self.assertEqual(cfg.model, 'gemini-2.5-flash')
 
 
 class ChatCompletionTests(SimpleTestCase):

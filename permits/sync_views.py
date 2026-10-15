@@ -155,7 +155,9 @@ class PermitSubmissionCsvSyncView(APIView):
                 status=400,
             )
         sync_source = (
-            request.GET.get('sync_source') or data.get('sync_source') or 'portal'
+            request.GET.get('sync_source')
+            or (data.get('sync_source') if isinstance(data, dict) else None)
+            or 'portal'
         ).strip().lower() or 'portal'
         result = ingest_csv(text, sync_source=sync_source)
         status = 207 if result['errors'] else 200

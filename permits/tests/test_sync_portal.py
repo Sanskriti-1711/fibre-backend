@@ -268,6 +268,7 @@ class ConfigurableStatusMapTests(SimpleTestCase):
             mock.patch('requests.get', return_value=_Resp(payload={'status': 'Freigegeben'})),
         ):
             result = HttpPortalAdapter().poll(_submission(PermitSubmission.STATUS_UNDER_REVIEW))
+            assert result is not None
         self.assertEqual(result.to_status, PermitSubmission.STATUS_APPROVED)
 
 
@@ -289,6 +290,7 @@ class JsonPayloadRoundTripTests(SimpleTestCase):
             mock.patch('requests.get', return_value=response),
         ):
             result = HttpPortalAdapter().poll(_submission(PermitSubmission.STATUS_UNDER_REVIEW))
+            assert result is not None
         self.assertEqual(result.to_status, PermitSubmission.STATUS_APPROVED)
         self.assertEqual(result.reference, 'AUTH-2026-0042')
         self.assertEqual(result.expiry_date, '2027-03-31')

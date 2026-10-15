@@ -38,7 +38,7 @@ def lld_run(project_id: str, lld_version: str, dataset: dict) -> dict:
             detail = resp.text[:500]
         msg = f'LLD engine returned {resp.status_code}: {detail}'
         raise RuntimeError(msg)
-    return resp.json()
+    return dict(resp.json())
 
 
 def lld_replan(project_id: str, lld_version: str, dataset: dict) -> dict:
@@ -62,7 +62,7 @@ def lld_replan(project_id: str, lld_version: str, dataset: dict) -> dict:
             detail = resp.text[:500]
         msg = f'LLD replan engine returned {resp.status_code}: {detail}'
         raise RuntimeError(msg)
-    return resp.json()
+    return dict(resp.json())
 
 
 def lld_status(project_id: str, lld_version: str) -> dict | None:
@@ -71,7 +71,7 @@ def lld_status(project_id: str, lld_version: str) -> dict | None:
     try:
         resp = requests.get(url, timeout=10)
         if resp.status_code == 200:
-            return resp.json()
+            return dict(resp.json())
     except requests.RequestException as exc:
         logger.warning('Engine unreachable for LLD status %s/%s: %s', project_id, lld_version, exc)
     return None
