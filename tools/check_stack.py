@@ -97,7 +97,8 @@ def _request(
     except urllib.error.HTTPError as e:
         return e.code, dict(e.headers or {}), e.read(200_000).decode('utf-8', 'replace')
     except Exception as e:  # noqa: BLE001 - a network failure is a result
-        raise ConnectionError(f'{type(e).__name__}: {e}') from e
+        msg = f'{type(e).__name__}: {e}'
+        raise ConnectionError(msg) from e
 
 
 def check_frontend() -> Result:
@@ -221,7 +222,7 @@ def engine_health_result(payload: dict, ms: float) -> Result:
     """
     parts: list[str] = []
     up = payload.get('uptime_seconds')
-    if isinstance(up, (int, float)):
+    if isinstance(up, int | float):
         parts.append(f'up {up / 86400:.1f}d')
 
     qgis = payload.get('qgis_process')

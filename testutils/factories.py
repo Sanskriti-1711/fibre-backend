@@ -9,6 +9,9 @@ Approved Survey Version, an LLD run.
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
+
+from django.db.models import Max
 
 from ftth_hld.models import FtthLayer, FtthProject
 from ftth_lld.models import ApprovedSurveyVersion, LldLayer, LldRun
@@ -153,7 +156,17 @@ def make_lld_run(
     validation: dict | None = None,
     run_by: User | None = None,
 ) -> LldRun:
-    return LldRun.objects.create(
+    """An LLD run for ``ftth``, stamped strictly after the project's newest run.
+
+    ``run_date`` is ``auto_now_add``, so three runs created back to back get the
+    same timestamp on any machine whose clock advances in coarse steps (Windows
+    ticks at ~15 ms). "The two most recent completed runs" is then decided by
+    nothing at all -- ``order_by('-run_date')`` returns them in whatever order
+    the database finds them -- and the ordering tests pass or fail by accident.
+    Runs are therefore stamped one second apart, which is what creating them in
+    sequence is supposed to mean.
+    """
+    run = LldRun.objects.create(
         ftth_project=ftth,
         lld_version=version,
         hld_version='HLD-V1',
@@ -164,6 +177,15 @@ def make_lld_run(
         validation=validation if validation is not None else {},
         run_by=run_by,
     )
+    newest = (
+        LldRun.objects.filter(ftth_project=ftth)
+        .exclude(pk=run.pk)
+        .aggregate(newest=Max('run_date'))['newest']
+    )
+    if newest is not None and newest >= run.run_date:
+        LldRun.objects.filter(pk=run.pk).update(run_date=newest + timedelta(seconds=1))
+        run.refresh_from_db(fields=['run_date'])
+    return run
 
 
 def make_lld_layer(

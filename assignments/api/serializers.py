@@ -34,25 +34,30 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
         feature = attrs.get('feature') or getattr(instance, 'feature', None)
 
         if not scope:
-            raise serializers.ValidationError('Scope is required')
+            msg = 'Scope is required'
+            raise serializers.ValidationError(msg)
 
         if scope == AssignmentJob.SCOPE_PROJECT:
             attrs['layer_id'] = None
             attrs['feature'] = None
         elif scope == AssignmentJob.SCOPE_LAYER:
             if not layer_id:
-                raise serializers.ValidationError('Layer ID is required for layer scope')
+                msg = 'Layer ID is required for layer scope'
+                raise serializers.ValidationError(msg)
             attrs['feature'] = None
         elif scope == AssignmentJob.SCOPE_FEATURE:
             if not feature:
-                raise serializers.ValidationError('Feature is required for feature scope')
+                msg = 'Feature is required for feature scope'
+                raise serializers.ValidationError(msg)
             attrs['project'] = feature.project
             attrs['layer_id'] = feature.layer_id
         else:
-            raise serializers.ValidationError('Invalid scope')
+            msg = 'Invalid scope'
+            raise serializers.ValidationError(msg)
 
         if project and feature and feature.project_id != project.id:
-            raise serializers.ValidationError('Feature must belong to the project')
+            msg = 'Feature must belong to the project'
+            raise serializers.ValidationError(msg)
 
         return attrs
 

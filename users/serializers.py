@@ -26,7 +26,8 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     def validate_role(self, value):
         if value not in (User.Role.SUBADMIN, User.Role.ENGINEER):
-            raise serializers.ValidationError('Invalid role')
+            msg = 'Invalid role'
+            raise serializers.ValidationError(msg)
         return value
 
     def create(self, validated_data):
@@ -55,9 +56,11 @@ class LoginSerializer(serializers.Serializer):
 
         user = authenticate(self.context.get('request'), username=email, password=password)
         if not user:
-            raise serializers.ValidationError('Invalid credentials')
+            msg = 'Invalid credentials'
+            raise serializers.ValidationError(msg)
         if not user.is_active:
-            raise serializers.ValidationError('User is inactive')
+            msg = 'User is inactive'
+            raise serializers.ValidationError(msg)
 
         attrs['user'] = user
         return attrs

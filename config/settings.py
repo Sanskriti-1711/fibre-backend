@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -99,7 +100,8 @@ if os.getenv('FTTH_DB', '').lower() in ('local', 'dev', 'docker'):
     # The Docker postgis service runs on localhost:5432 with database "ftth".
     # Django creates its tables in the "business" schema (search_path order).
     # The FastAPI engine uses the "gis" schema for spatial tables.
-    DATABASES = {
+    # PASSWORD may legitimately be None (no password) — hence Any values.
+    DATABASES: dict[str, Any] = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.getenv('PGDATABASE', 'ftth'),

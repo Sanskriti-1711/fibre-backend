@@ -21,7 +21,7 @@ PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
 
 # Disable HTTPS requirement for JWT in dev
 SIMPLE_JWT['AUTH_HEADER_TYPES'] = ('Bearer',)  # noqa: F405
-SIMPLE_JWT['USER_AUTHENTICATION_RULE'] = (
+SIMPLE_JWT['USER_AUTHENTICATION_RULE'] = (  # noqa: F405
     'rest_framework_simplejwt.authentication.default_user_authentication_rule'
 )
 

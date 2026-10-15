@@ -623,7 +623,7 @@ class FeatureSubmitAPIView(APIView):
         )
 
         if features.count() != len(feature_ids):
-            found_ids = set(str(f.id) for f in features)
+            found_ids = {str(f.id) for f in features}
             missing = set(feature_ids) - found_ids
             return Response(
                 {'detail': f'Features not found or not assigned: {missing}'},

@@ -57,16 +57,18 @@ class Command(BaseCommand):
         from users.models import User
 
         if not settings.DEBUG and not opts['force']:
-            raise CommandError(
+            msg = (
                 'Refusing to seed a known password while DEBUG is False. '
                 'Use --force if this is a throwaway database.'
             )
+            raise CommandError(msg)
 
         email = User.objects.normalize_email(opts['email']).strip()
         password = opts['password']
 
         if not email or not password:
-            raise CommandError('--email and --password must both be non-empty.')
+            msg = '--email and --password must both be non-empty.'
+            raise CommandError(msg)
 
         existing = User.objects.filter(email__iexact=email).first()
         if existing is not None:
