@@ -1,6 +1,9 @@
 """Serializers for the survey app."""
 
+from django.core.exceptions import ValidationError
 from rest_framework import serializers
+
+from projects.models import Feature
 
 from .models import (
     ExistingAsset,
@@ -15,6 +18,73 @@ from .models import (
     SyncQueueItem,
     TrenchSurvey,
 )
+
+
+def route_feature_ref(raw):
+    """Map a posted ``feature`` id onto the column that owns it.
+
+    Returns ``{'feature': raw}`` for a project feature, ``{'survey_feature':
+    raw}`` for a survey feature, ``{}`` for nothing, and ``{'feature': raw}``
+    for an id in neither table so normal field validation reports it.
+    """
+    if not raw:
+        return {}
+    for model, field_name in ((Feature, 'feature'), (SurveyFeature, 'survey_feature')):
+        try:
+            if model.objects.filter(pk=raw).exists():
+                return {field_name: raw}
+        except (ValidationError, ValueError, TypeError):
+            continue
+    return {'feature': raw}
+
+
+class FeatureRefSerializerMixin:
+    """Accept a ``feature`` id from either side of the HLD/survey split.
+
+    The app posts whichever id it is holding. An imported package feature has a
+    ``projects.Feature`` uuid, but a feature the engineer creates on site exists
+    only as a ``survey.SurveyFeature`` row. Posting that id to a
+    ``projects.Feature`` foreign key was rejected with ``Invalid pk ... - object
+    does not exist`` (HTTP 400), so every hazard, risk, trench classification,
+    existing-asset check and evidence record written against a newly added
+    feature was refused -- the app could only show a generic failure toast.
+
+    On write the id is routed to the column that owns it. On read ``feature``
+    echoes back whichever id was stored, so the app's
+    ``record.feature === featureId`` look-ups keep working on both sides.
+    """
+
+    @staticmethod
+    def _pk_exists(model, raw):
+        try:
+            return model.objects.filter(pk=raw).exists()
+        except (ValidationError, ValueError, TypeError):
+            return False
+
+    @classmethod
+    def route_feature_id(cls, raw):
+        """See :func:`route_feature_ref`; kept on the class for callers that
+        already hold a serializer (views doing their own create-or-update)."""
+        return route_feature_ref(raw)
+
+    def to_internal_value(self, data):
+        if hasattr(data, 'get') and data.get('feature'):
+            routed = route_feature_ref(data['feature'])
+            if 'survey_feature' in routed:
+                data = data.copy() if hasattr(data, 'copy') else dict(data)
+                data['feature'] = None
+                data['survey_feature'] = routed['survey_feature']
+        # Mixin super() resolves through the ModelSerializer MRO at runtime;
+        # mypy cannot see past the plain-object mixin base.
+        return super().to_internal_value(data)  # type: ignore[misc]
+
+    def to_representation(self, instance):
+        # Same MRO note as above: serializers.Serializer provides this.
+        data = super().to_representation(instance)  # type: ignore[misc]
+        if instance.survey_feature_id and not instance.feature_id:
+            data['feature'] = str(instance.survey_feature_id)
+        return data
+
 
 # ── GPS ────────────────────────────────────────────────────────────────────
 
@@ -46,7 +116,7 @@ class GPSTraceSerializer(serializers.ModelSerializer):
 # ── Trench ─────────────────────────────────────────────────────────────────
 
 
-class TrenchSurveySerializer(serializers.ModelSerializer):
+class TrenchSurveySerializer(FeatureRefSerializerMixin, serializers.ModelSerializer):
     engineer_name = serializers.CharField(source='engineer.full_name', read_only=True)
 
     class Meta:
@@ -56,6 +126,7 @@ class TrenchSurveySerializer(serializers.ModelSerializer):
             'engineer',
             'engineer_name',
             'feature',
+            'survey_feature',
             'trench_type',
             'construction_method',
             'depth_mm',
@@ -75,7 +146,7 @@ class TrenchSurveySerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'engineer']
 
 
-class ExistingAssetSerializer(serializers.ModelSerializer):
+class ExistingAssetSerializer(FeatureRefSerializerMixin, serializers.ModelSerializer):
     engineer_name = serializers.CharField(source='engineer.full_name', read_only=True)
 
     class Meta:
@@ -85,6 +156,7 @@ class ExistingAssetSerializer(serializers.ModelSerializer):
             'engineer',
             'engineer_name',
             'feature',
+            'survey_feature',
             'asset_type',
             'condition',
             'latitude',
@@ -98,7 +170,7 @@ class ExistingAssetSerializer(serializers.ModelSerializer):
 # ── CRM / Risk ─────────────────────────────────────────────────────────────
 
 
-class RiskAssessmentSerializer(serializers.ModelSerializer):
+class RiskAssessmentSerializer(FeatureRefSerializerMixin, serializers.ModelSerializer):
     engineer_name = serializers.CharField(source='engineer.full_name', read_only=True)
 
     class Meta:
@@ -108,6 +180,7 @@ class RiskAssessmentSerializer(serializers.ModelSerializer):
             'engineer',
             'engineer_name',
             'feature',
+            'survey_feature',
             'trench_survey',
             'category',
             'severity',
@@ -121,7 +194,7 @@ class RiskAssessmentSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'engineer']
 
 
-class HazardSerializer(serializers.ModelSerializer):
+class HazardSerializer(FeatureRefSerializerMixin, serializers.ModelSerializer):
     engineer_name = serializers.CharField(source='engineer.full_name', read_only=True)
 
     class Meta:
@@ -131,6 +204,7 @@ class HazardSerializer(serializers.ModelSerializer):
             'engineer',
             'engineer_name',
             'feature',
+            'survey_feature',
             'hazard_type',
             'mitigation_template',
             'notes',
@@ -143,7 +217,7 @@ class HazardSerializer(serializers.ModelSerializer):
 # ── Evidence ───────────────────────────────────────────────────────────────
 
 
-class FieldEvidenceSerializer(serializers.ModelSerializer):
+class FieldEvidenceSerializer(FeatureRefSerializerMixin, serializers.ModelSerializer):
     engineer_name = serializers.CharField(source='engineer.full_name', read_only=True)
 
     class Meta:
@@ -153,6 +227,7 @@ class FieldEvidenceSerializer(serializers.ModelSerializer):
             'engineer',
             'engineer_name',
             'feature',
+            'survey_feature',
             'evidence_type',
             'file',
             'description',
@@ -189,7 +264,7 @@ class SurveyEditLogSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'engineer']
 
 
-class SurveyStatusSerializer(serializers.ModelSerializer):
+class SurveyStatusSerializer(FeatureRefSerializerMixin, serializers.ModelSerializer):
     engineer_name = serializers.CharField(source='engineer.full_name', read_only=True)
 
     class Meta:
@@ -199,6 +274,7 @@ class SurveyStatusSerializer(serializers.ModelSerializer):
             'engineer',
             'engineer_name',
             'feature',
+            'survey_feature',
             'status',
             'notes',
             'created_at',

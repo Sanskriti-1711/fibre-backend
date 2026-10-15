@@ -1,5 +1,6 @@
 """API views for the survey app — with pagination and filtering."""
 
+import contextlib
 from datetime import datetime
 
 from django.db.models import Q
@@ -35,6 +36,7 @@ from .serializers import (
     SurveyStatusSerializer,
     SyncQueueItemSerializer,
     TrenchSurveySerializer,
+    route_feature_ref,
 )
 
 # Project statuses that mean "sent for review / approved" — if the engineer
@@ -131,15 +133,11 @@ def _apply_date_filter(qs, request, date_field='created_at'):
     date_from = request.GET.get('date_from')
     date_to = request.GET.get('date_to')
     if date_from:
-        try:
+        with contextlib.suppress(ValueError, TypeError):
             qs = qs.filter(**{f'{date_field}__gte': datetime.fromisoformat(date_from)})
-        except (ValueError, TypeError):
-            pass
     if date_to:
-        try:
+        with contextlib.suppress(ValueError, TypeError):
             qs = qs.filter(**{f'{date_field}__lte': datetime.fromisoformat(date_to)})
-        except (ValueError, TypeError):
-            pass
     return qs
 
 
@@ -231,7 +229,7 @@ class TrenchSurveyListCreateAPIView(APIView):
         trench_type = request.GET.get('trench_type')
         surface_type = request.GET.get('surface_type')
         if feature_id:
-            qs = qs.filter(feature_id=feature_id)
+            qs = qs.filter(**route_feature_ref(feature_id))
         if trench_type:
             qs = qs.filter(trench_type=trench_type)
         if surface_type:
@@ -310,7 +308,7 @@ class RiskAssessmentListCreateAPIView(APIView):
         severity = request.GET.get('severity')
         risk_status = request.GET.get('status')
         if feature_id:
-            qs = qs.filter(feature_id=feature_id)
+            qs = qs.filter(**route_feature_ref(feature_id))
         if category:
             qs = qs.filter(category=category)
         if severity:
@@ -358,8 +356,11 @@ class HazardListCreateAPIView(APIView):
     def get(self, request):
         engineer = _get_engineer(request)
         qs = Hazard.objects.filter(engineer=engineer)
+        feature_id = request.GET.get('feature')
         hazard_type = request.GET.get('hazard_type')
         is_active = request.GET.get('is_active')
+        if feature_id:
+            qs = qs.filter(**route_feature_ref(feature_id))
         if hazard_type:
             qs = qs.filter(hazard_type=hazard_type)
         if is_active is not None:
@@ -391,7 +392,7 @@ class FieldEvidenceListCreateAPIView(APIView):
         if evidence_type:
             qs = qs.filter(evidence_type=evidence_type)
         if feature_id:
-            qs = qs.filter(feature_id=feature_id)
+            qs = qs.filter(**route_feature_ref(feature_id))
         qs = _apply_date_filter(qs, request, 'captured_at')
         return _paginate(request, qs, FieldEvidenceSerializer)
 
@@ -411,12 +412,12 @@ class SurveyEditLogListAPIView(APIView):
     """GET /api/survey/changes/ — list changes for a feature"""
 
     def get(self, request):
-        engineer = _get_engineer(request)
+        _get_engineer(request)
         qs = _survey_scope(request, SurveyEditLog.objects.all())
         feature_id = request.GET.get('feature')
         field_name = request.GET.get('field_name')
         if feature_id:
-            qs = qs.filter(feature_id=feature_id)
+            qs = qs.filter(**route_feature_ref(feature_id))
         if field_name:
             qs = qs.filter(field_name__icontains=field_name)
         qs = _apply_date_filter(qs, request)
@@ -436,11 +437,11 @@ class SurveyStatusAPIView(APIView):
     POST /api/survey/status/ — create/update status"""
 
     def get(self, request):
-        engineer = _get_engineer(request)
+        _get_engineer(request)
         feature_id = request.GET.get('feature')
         status_filter = request.GET.get('status')
         if feature_id:
-            qs = SurveyStatus.objects.filter(feature_id=feature_id)
+            qs = SurveyStatus.objects.filter(**route_feature_ref(feature_id))
         else:
             qs = _survey_scope(request, SurveyStatus.objects.all())
         if status_filter:
@@ -451,25 +452,24 @@ class SurveyStatusAPIView(APIView):
     def post(self, request):
         engineer = _get_engineer(request)
         feature_id = request.data.get('feature')
-        if feature_id:
-            # Create or update while preserving original engineer on update
-            try:
-                obj = SurveyStatus.objects.get(feature_id=feature_id)
-                if request.data.get('status'):
-                    obj.status = request.data['status']
-                if request.data.get('notes') is not None:
-                    obj.notes = request.data['notes']
-                obj.save()
-            except SurveyStatus.DoesNotExist:
-                obj = SurveyStatus.objects.create(
-                    feature_id=feature_id,
-                    engineer=engineer,
-                    status=request.data.get('status', 'visited'),
-                    notes=request.data.get('notes', ''),
-                )
-            serializer = SurveyStatusSerializer(obj)
+        if not feature_id:
+            return Response({'error': 'feature is required'}, status=status.HTTP_400_BAD_REQUEST)
+        # One status row per feature, whichever id the caller holds. This used
+        # to write feature_id straight into the projects.Feature column, so a
+        # status update on a feature the engineer added on site either missed
+        # the existing row or failed the foreign key outright -- while the
+        # serializer that knows how to route the id was never consulted.
+        ref = SurveyStatusSerializer.route_feature_id(feature_id)
+        obj = SurveyStatus.objects.filter(**ref).first()
+        serializer = (
+            SurveyStatusSerializer(obj, data=request.data, partial=True)
+            if obj is not None
+            else SurveyStatusSerializer(data=request.data)
+        )
+        if serializer.is_valid():
+            serializer.save(engineer=engineer)
             return Response(serializer.data)
-        return Response({'error': 'feature is required'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 # ── Sync Queue ─────────────────────────────────────────────────────────────
@@ -545,7 +545,8 @@ def _process_sync_item(item):
     }
 
     if item.item_type not in handler_map:
-        raise ValueError(f'Unknown sync item type: {item.item_type}')
+        msg = f'Unknown sync item type: {item.item_type}'
+        raise ValueError(msg)
 
     serializer_cls, model_cls = handler_map[item.item_type]
     serializer = serializer_cls(data=item.payload)
@@ -650,7 +651,7 @@ class SurveyFeatureListCreateAPIView(APIView):
     POST /api/survey/survey-features/ — create or update a survey feature"""
 
     def get(self, request):
-        engineer = _get_engineer(request)
+        _get_engineer(request)
         qs = _survey_scope(request, SurveyFeature.objects.all())
         project_id = request.GET.get('project')
         project_status = request.GET.get('project_status')

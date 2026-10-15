@@ -11,7 +11,7 @@ Rules are ordered most-specific first; the first match per field wins.
 from __future__ import annotations
 
 # Tag → field suggestions. Values match the TrenchSurvey choice enums.
-_TAG_RULES = [
+_TAG_RULES: list[tuple[set[str], dict[str, object], float]] = [
     # A photo showing a road implies a road crossing on trench work.
     ({'road'}, {'road_crossing': True, 'traffic_sensitive': True}, 0.8),
     # Rail / water tags imply the corresponding crossings.

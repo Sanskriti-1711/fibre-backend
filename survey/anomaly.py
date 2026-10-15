@@ -202,8 +202,8 @@ def _rule_construction(sf, surf_fam, surf_raw) -> dict | None:
             'surface_vs_construction',
             SEVERITY_ERROR,
             1.0,
-            'HDD span reports a %s surface — a drill always crosses under the '
-            'carriageway, so this must be road restoration.' % surf_raw,
+            f'HDD span reports a {surf_raw} surface — a drill always crosses under the '
+            'carriageway, so this must be road restoration.',
             expected='Asphalt',
             found=surf_raw,
         )
@@ -212,8 +212,8 @@ def _rule_construction(sf, surf_fam, surf_raw) -> dict | None:
             'surface_vs_construction',
             SEVERITY_ERROR,
             1.0,
-            'Garden drop reports a %s surface — an off-network drop leg is not '
-            'on pavement or road.' % surf_raw,
+            f'Garden drop reports a {surf_raw} surface — an off-network drop leg is not '
+            'on pavement or road.',
             expected='Garden',
             found=surf_raw,
         )
@@ -236,9 +236,8 @@ def _rule_reinstate(sf, surf_fam, surf_raw) -> dict | None:
         'surface_vs_reinstate',
         SEVERITY_ERROR,
         1.0,
-        '%s surface reinstated as %s — the two fields contradict each other.'
-        % (surf_raw, rein_raw),
-        expected=('%s reinstatement' % surf_fam),
+        f'{surf_raw} surface reinstated as {rein_raw} — the two fields contradict each other.',
+        expected=(f'{surf_fam} reinstatement'),
         found=rein_raw,
     )
 
@@ -263,8 +262,8 @@ def _rule_road_class(sf, surf_fam, surf_raw) -> dict | None:
             'surface_vs_road_class',
             SEVERITY_WARN,
             1.0,
-            "Surface '%s' on a %s — a pedestrian way cannot carry road "
-            'restoration.' % (surf_raw, rcls),
+            f"Surface '{surf_raw}' on a {rcls} — a pedestrian way cannot carry road "
+            'restoration.',
             expected='Footway',
             found=surf_raw,
             road_class=rcls,
@@ -274,8 +273,8 @@ def _rule_road_class(sf, surf_fam, surf_raw) -> dict | None:
             'surface_vs_road_class',
             SEVERITY_WARN,
             0.5,
-            'Garden surface on a %s — the trench claims to be off-road while '
-            'the route runs along a mapped street.' % rcls,
+            f'Garden surface on a {rcls} — the trench claims to be off-road while '
+            'the route runs along a mapped street.',
             expected='Asphalt or Footway',
             found=surf_raw,
             road_class=rcls,
@@ -288,8 +287,8 @@ def _rule_road_class(sf, surf_fam, surf_raw) -> dict | None:
                 'surface_vs_road_class',
                 SEVERITY_WARN,
                 0.5,
-                'Footway surface on a %s — expected on the kerb band, but check '
-                'the trench is not in the carriageway.' % rcls,
+                f'Footway surface on a {rcls} — expected on the kerb band, but check '
+                'the trench is not in the carriageway.',
                 expected='Asphalt',
                 found=surf_raw,
                 road_class=rcls,
@@ -297,7 +296,7 @@ def _rule_road_class(sf, surf_fam, surf_raw) -> dict | None:
     return None
 
 
-def _rule_neighbours(sf, surf_fam, siblings_fams: list[str]) -> dict | None:
+def _rule_neighbours(sf, surf_fam, siblings_fams: list[str | None]) -> dict | None:
     """A span whose surface disagrees with the surveyed majority on its street."""
     if surf_fam is None:
         return None

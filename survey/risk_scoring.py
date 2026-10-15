@@ -218,9 +218,10 @@ def _geoms_equal(a, b) -> bool:
     try:
         ra = json_round_coords(a)
         rb = json_round_coords(b)
-        return ra == rb
     except Exception:
         return False
+    else:
+        return bool(ra == rb)
 
 
 def json_round_coords(geom):
@@ -230,7 +231,7 @@ def json_round_coords(geom):
     def _round(x):
         if isinstance(x, float):
             return round(x, 6)
-        if isinstance(x, (list, tuple)):
+        if isinstance(x, list | tuple):
             return [_round(i) for i in x]
         return x
 

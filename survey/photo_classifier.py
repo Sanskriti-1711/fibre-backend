@@ -120,13 +120,13 @@ def _ml_tags(file_or_bytes) -> list[str]:
 
 
 def _read_bytes(f) -> bytes:
-    if isinstance(f, (bytes, bytearray)):
+    if isinstance(f, bytes | bytearray):
         return bytes(f)
     pos = f.tell() if hasattr(f, 'tell') else 0
     data = f.read()
     if hasattr(f, 'seek'):
         f.seek(pos)
-    return data
+    return bytes(data)
 
 
 # ── Heuristic backend ──────────────────────────────────────────────────────

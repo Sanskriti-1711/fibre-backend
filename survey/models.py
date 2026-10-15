@@ -113,6 +113,20 @@ class TrenchSurvey(models.Model):
         'projects.Feature',
         on_delete=models.CASCADE,
         related_name='trench_surveys',
+        null=True,
+        blank=True,
+    )
+    # The app writes whichever id it holds: an imported package feature has a
+    # projects.Feature uuid, while a feature the engineer created on site exists
+    # only as a SurveyFeature. This FK used to be the only way in, so every
+    # classification recorded against a new feature was refused with
+    # "Invalid pk ... object does not exist" (HTTP 400).
+    survey_feature = models.ForeignKey(
+        'SurveyFeature',
+        on_delete=models.CASCADE,
+        related_name='trench_surveys',
+        null=True,
+        blank=True,
     )
     trench_type = models.CharField(
         max_length=50, choices=TrenchType.choices, default=TrenchType.NEW_TRENCH
@@ -174,6 +188,13 @@ class ExistingAsset(models.Model):
     )
     feature = models.ForeignKey(
         'projects.Feature',
+        on_delete=models.CASCADE,
+        related_name='existing_assets',
+        null=True,
+        blank=True,
+    )
+    survey_feature = models.ForeignKey(
+        'SurveyFeature',
         on_delete=models.CASCADE,
         related_name='existing_assets',
         null=True,
@@ -252,6 +273,13 @@ class RiskAssessment(models.Model):
         blank=True,
         related_name='risk_assessments',
     )
+    survey_feature = models.ForeignKey(
+        'SurveyFeature',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='risk_assessments',
+    )
     trench_survey = models.ForeignKey(
         TrenchSurvey,
         on_delete=models.SET_NULL,
@@ -322,6 +350,13 @@ class Hazard(models.Model):
         blank=True,
         related_name='hazards',
     )
+    survey_feature = models.ForeignKey(
+        'SurveyFeature',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='hazards',
+    )
     hazard_type = models.CharField(max_length=30, choices=HazardType.choices)
     mitigation_template = models.CharField(
         max_length=20, choices=MitigationTemplate.choices, null=True, blank=True
@@ -362,6 +397,13 @@ class FieldEvidence(models.Model):
     feature = models.ForeignKey(
         'projects.Feature',
         on_delete=models.SET_NULL,
+        related_name='field_evidence',
+        null=True,
+        blank=True,
+    )
+    survey_feature = models.ForeignKey(
+        'SurveyFeature',
+        on_delete=models.CASCADE,
         related_name='field_evidence',
         null=True,
         blank=True,
@@ -446,6 +488,15 @@ class SurveyStatus(models.Model):
         'projects.Feature',
         on_delete=models.CASCADE,
         related_name='survey_status',
+        null=True,
+        blank=True,
+    )
+    survey_feature = models.OneToOneField(
+        'SurveyFeature',
+        on_delete=models.CASCADE,
+        related_name='status_record',
+        null=True,
+        blank=True,
     )
     status = models.CharField(
         max_length=20, choices=StatusChoice.choices, default=StatusChoice.NOT_STARTED
