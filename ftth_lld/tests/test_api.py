@@ -19,7 +19,7 @@ from datetime import timedelta
 from unittest import mock
 
 from django.db import connection
-from django.test import TestCase, skipUnlessDBFeature
+from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -99,7 +99,6 @@ class LldAuthTests(LldApiTestCase):
 
 
 class LldProjectsViewTests(LldApiTestCase):
-    @skipUnlessDBFeature('supports_distinct_on_fields')
     def test_readiness_is_pending_zero_and_no_corrections(self):
         """Readiness drives the Run LLD button, so its arithmetic matters."""
         pending = make_survey_feature(
@@ -126,7 +125,6 @@ class LldProjectsViewTests(LldApiTestCase):
         self.assertEqual(block['pending'], 0)
         self.assertTrue(block['ready'])
 
-    @skipUnlessDBFeature('supports_distinct_on_fields')
     def test_a_correction_outstanding_blocks_running_lld(self):
         """needs_correction is NOT a resolved state — it must keep LLD blocked."""
         make_survey_feature(self.copy, self.engineer, status=SurveyFeature.SurveyStatus.APPROVED)
@@ -141,7 +139,6 @@ class LldProjectsViewTests(LldApiTestCase):
         self.assertEqual(block['needs_correction'], 1)
         self.assertFalse(block['ready'])
 
-    @skipUnlessDBFeature('supports_distinct_on_fields')
     def test_projects_without_changes_are_omitted(self):
         make_ftth_project(name='No survey copy at all')
         orphan = make_ftth_project(name='Copy but no changes')
@@ -776,7 +773,6 @@ class LldVersionsDiffViewTests(LldApiTestCase):
 
 
 class LldProjectsRiskTests(LldApiTestCase):
-    @skipUnlessDBFeature('supports_distinct_on_fields')
     def test_changes_are_sorted_by_risk_and_carry_their_band(self):
         # High risk: a feeder geometry reroute captured on a clean GPS fix.
         high = make_survey_feature(
