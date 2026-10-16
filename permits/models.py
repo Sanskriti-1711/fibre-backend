@@ -488,3 +488,74 @@ class PermitAiDraft(models.Model):
 
     def __str__(self):
         return f"{self.draft_type} {self.permit_type or '—'} ({self.project_id})"
+
+
+class PermitNotification(models.Model):
+    """Delivery log for permit review emails (permits/notifications.py).
+
+    Email is fire-and-forget by nature — an SMTP failure inside a submission
+    request must not roll back the submission — so without a row here a
+    bounced or refused message would be invisible. One row is written per
+    send attempt (or per suppressed reminder), which gives two things:
+
+    * a visible answer to "did the reviewer actually get told?" — ``GET
+      api/ftth/permits/notifications/`` — including the transport error when
+      the answer is no;
+    * a dedupe key for the renewal digest, so a nightly
+      ``check_permit_expiries --email`` cron tells you about a 30-day bucket
+      once instead of every night until the permit expires.
+
+    ``dedupe_key`` is empty for one-off events (a submission or a manual
+    review action is worth an email every time it happens) and set for
+    reminders, where the same fact repeated nightly is noise.
+
+    ``submission_id`` is a plain UUID rather than a ForeignKey on purpose. This
+    is an append-only record of *what was sent*: it must survive the submission
+    it describes, which an FK's ``SET_NULL`` would erase, and it must never be
+    able to fail a write for referring to a row that has since gone.
+    """
+
+    KIND_SUBMISSION = 'submission'
+    KIND_STATUS_CHANGE = 'status_change'
+    KIND_EXPIRY_REMINDER = 'expiry_reminder'
+
+    KIND_CHOICES = [
+        (KIND_SUBMISSION, 'Sent for approval'),
+        (KIND_STATUS_CHANGE, 'Review status changed'),
+        (KIND_EXPIRY_REMINDER, 'Renewal reminder'),
+    ]
+
+    STATUS_SENT = 'sent'
+    STATUS_FAILED = 'failed'
+    STATUS_SKIPPED = 'skipped'  # nothing to send to — no recipient configured
+
+    STATUS_CHOICES = [
+        (STATUS_SENT, 'Sent'),
+        (STATUS_FAILED, 'Failed'),
+        (STATUS_SKIPPED, 'Skipped (not configured)'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    kind = models.CharField(max_length=32, choices=KIND_CHOICES)
+    # Set on reminders only — see the class docstring.
+    dedupe_key = models.CharField(max_length=160, blank=True, default='', db_index=True)
+    # Nullable: a reminder can be about a PermitMatrix row with no submission.
+    submission_id = models.UUIDField(null=True, blank=True, db_index=True)
+    project_id = models.CharField(max_length=64, blank=True, default='')  # denormalised for listing
+    recipients = models.CharField(max_length=512, blank=True, default='')
+    subject = models.CharField(max_length=512, blank=True, default='')
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_SENT)
+    # Transport error text when status=failed; '' otherwise.
+    error = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'ftth_permit_notifications'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['kind', 'created_at']),
+            models.Index(fields=['submission_id', 'kind']),
+        ]
+
+    def __str__(self):
+        return f'{self.kind} → {self.recipients or "(none)"} [{self.status}]'

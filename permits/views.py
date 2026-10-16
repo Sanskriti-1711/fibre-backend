@@ -9,6 +9,11 @@ Endpoints (all under ``/api/ftth/permits/``, JWT-authenticated):
 * ``POST /projects/<pid>/package/``         — generate the permit package
 * ``GET  /projects/<pid>/package/``         — list generated package documents
 * ``GET  /projects/<pid>/package/download/``— download the package zip
+
+Submitting permits and moving a submission through review also email the
+reviewer (``permits.notifications``); both POST responses carry a
+``notification`` block so the caller can tell the operator which mailbox was
+told, or that nothing was configured to tell.
 """
 
 from django.db import models as dj_models
@@ -18,9 +23,16 @@ from rest_framework.views import APIView
 
 from ftth_hld.models import FtthProject
 
+from . import notifications
 from .generators.hld_package import generate_hld_package
 from .generators.package import generate_package
-from .models import PermitDocument, PermitEvent, PermitMatrix, PermitSubmission
+from .models import (
+    PermitDocument,
+    PermitEvent,
+    PermitMatrix,
+    PermitNotification,
+    PermitSubmission,
+)
 from .rules.engine import project_summary, run_analysis
 from .submissions import create_submissions, transition_submission
 
@@ -175,6 +187,30 @@ def _serialize_submission(sub: PermitSubmission) -> dict:
     }
 
 
+def _notification_info(submissions) -> dict:
+    """What the review email did for these submissions, for the API caller.
+
+    The send happens on commit, so by the time a response is built it has
+    normally already gone out; anything queued by an enclosing transaction (a
+    test, or ATOMIC_REQUESTS) simply shows up in the log on the next read.
+    """
+    ids = [s.id for s in submissions]
+    rows = list(PermitNotification.objects.filter(submission_id__in=ids).order_by('created_at'))
+    return {
+        'recipients': notifications.notify_recipients(),
+        'sent': any(r.status == PermitNotification.STATUS_SENT for r in rows),
+        'errors': [r.error for r in rows if r.status == PermitNotification.STATUS_FAILED],
+        'events': [
+            {
+                'kind': r.kind,
+                'status': r.status,
+                'at': r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
+    }
+
+
 class PermitSubmissionListView(APIView):
     """Phase-3 submissions — the application records sent to authorities.
 
@@ -221,6 +257,7 @@ class PermitSubmissionListView(APIView):
             {
                 'created': len(submissions),
                 'submissions': [_serialize_submission(s) for s in submissions],
+                'notification': _notification_info(submissions),
             },
             status=201,
         )
@@ -282,7 +319,9 @@ class PermitSubmissionTransitionView(APIView):
         except ValueError as exc:
             return JsonResponse({'detail': str(exc)}, status=400)
         sub.refresh_from_db()
-        return JsonResponse(_serialize_submission(sub))
+        payload = _serialize_submission(sub)
+        payload['notification'] = _notification_info([sub])
+        return JsonResponse(payload)
 
 
 class PermitAllView(APIView):

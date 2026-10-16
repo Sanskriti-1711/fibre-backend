@@ -262,3 +262,52 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
+
+
+# ---------------------------------------------------------------------------
+# Email — permit review notifications (permits/notifications.py)
+# ---------------------------------------------------------------------------
+# Degrades rather than fails, like every other permit integration (see
+# `.env.example`): with no credentials the messages are printed to the console
+# instead of reaching for the network, and with no PERMIT_NOTIFY_EMAIL nobody
+# is emailed at all. Local development therefore needs nothing configured; a
+# deployed host sets EMAIL_HOST_USER + EMAIL_HOST_PASSWORD — a Gmail *app
+# password*, since Gmail rejects the account password for SMTP — plus
+# PERMIT_NOTIFY_EMAIL and PERMITS_PUBLIC_BASE_URL.
+_EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'true').lower() == 'true'
+EMAIL_HOST_USER = _EMAIL_HOST_USER
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+# A stalled SMTP handshake must not pin a worker (same reasoning as the bounded
+# database connect above).
+EMAIL_TIMEOUT = int(os.getenv('EMAIL_TIMEOUT', '20'))
+# Gmail refuses a From that is not the authenticated account (or a verified
+# alias), so the authenticated address is the default sender.
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', _EMAIL_HOST_USER or 'ftth-permits@localhost')
+# smtp only once a credential exists — an unconfigured host prints instead of
+# failing on a rejected connection.
+EMAIL_BACKEND = os.getenv(
+    'EMAIL_BACKEND',
+    'django.core.mail.backends.smtp.EmailBackend'
+    if _EMAIL_HOST_USER
+    else 'django.core.mail.backends.console.EmailBackend',
+)
+
+# Who gets the permit review notifications (comma-separated for more than one
+# reviewer). Empty = the whole notification layer is inert.
+PERMIT_NOTIFY_EMAIL = os.getenv('PERMIT_NOTIFY_EMAIL', '')
+# Absolute, publicly reachable base URL of THIS backend — the one-click
+# Approve/Reject links in an email are opened from a mail client, which cannot
+# resolve 127.0.0.1. Empty falls back to http://localhost:8000 under DEBUG; a
+# deployed host that leaves it empty gets tracker links instead of buttons.
+PERMITS_PUBLIC_BASE_URL = os.getenv('PERMITS_PUBLIC_BASE_URL', '')
+# The planner UI, linked from every notification email. The public Pages host
+# is committed here for the same reason it is in CORS_ALLOWED_ORIGINS: a link
+# that only works when a host env var is set correctly is a broken link.
+PERMITS_TRACKER_URL = os.getenv(
+    'PERMITS_TRACKER_URL', 'https://fibre-fe-98f8e0.gitlab.io/ftth-permits.html'
+)
+# How long an emailed Approve/Reject link stays usable (default 14 days).
+PERMIT_ACTION_TOKEN_MAX_AGE = int(os.getenv('PERMIT_ACTION_TOKEN_MAX_AGE', str(60 * 60 * 24 * 14)))

@@ -21,6 +21,7 @@ from .classify_views import (
     PermitClassifyView,
 )
 from .expiry_views import PermitExpiryView
+from .notification_views import PermitNotificationFeedView, PermitSubmissionActionView
 from .qa_views import PermitQaView
 from .sync_views import (
     PermitSubmissionCsvSyncView,
@@ -50,6 +51,20 @@ urlpatterns = [
         'ftth/permits/submissions/',
         PermitSubmissionListView.as_view(),
         name='ftth-permits-submissions',
+    ),
+    # Emailed Approve/Reject — public and token-gated on purpose: a mail client
+    # has no session to present. Declared before the <uuid:…> detail route, like
+    # submissions/sync/ below. See permits/notification_views.py.
+    path(
+        'ftth/permits/submissions/action/',
+        PermitSubmissionActionView.as_view(),
+        name='ftth-permits-submission-action',
+    ),
+    # Delivery log for those emails — JWT-protected like every other read.
+    path(
+        'ftth/permits/notifications/',
+        PermitNotificationFeedView.as_view(),
+        name='ftth-permits-notifications',
     ),
     path(
         'ftth/permits/submissions/<uuid:submission_id>/',

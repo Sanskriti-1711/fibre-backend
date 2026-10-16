@@ -30,12 +30,29 @@ from __future__ import annotations
 import logging
 from datetime import datetime, time
 
+from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
+from . import notifications
 from .models import PermitDocument, PermitEvent, PermitMatrix, PermitSubmission
 
 logger = logging.getLogger(__name__)
+
+# Statuses worth an email: the two decisions a reviewer has to act on, plus the
+# re-submission that follows a rejection. An acknowledgment (under_review) or a
+# closure is bookkeeping and would only add noise.
+NOTIFY_ON_STATUS = frozenset(
+    {
+        PermitSubmission.STATUS_APPROVED,
+        PermitSubmission.STATUS_REJECTED,
+        PermitSubmission.STATUS_SUBMITTED,
+    }
+)
+
+# Recorded as the rejection reason when the rejection arrives from an email
+# link, which has nowhere to type one. Editable in the tracker afterwards.
+EMAIL_REJECTION_NOTE = 'Rejected from the notification email link.'
 
 # Valid state machine edges. A rejection re-enters at SUBMITTED (new
 # revision); a closed submission is terminal.
@@ -106,6 +123,7 @@ def create_submissions(
     notes: str = '',
     package_version: int | None = None,
     sync_source: str = 'manual',
+    notify: bool = True,
 ) -> list[PermitSubmission]:
     """Turn READY permit rows into one submission per application group.
 
@@ -201,6 +219,17 @@ def create_submissions(
             project_id,
             len(group),
         )
+
+    # Tell the reviewer the applications are waiting. Queued on the transaction,
+    # so a rolled-back batch emails nobody, and grouped into ONE message for the
+    # whole batch rather than one per authority.
+    if notify and submissions:
+        notifications.queue_submission_created(
+            submissions,
+            reference=reference,
+            actor=getattr(user, 'email', None) if user else None,
+            package_version=package_version,
+        )
     return submissions
 
 
@@ -213,6 +242,8 @@ def transition_submission(
     conditions: str | None = None,
     expiry_date=None,
     sync_source: str = 'manual',
+    actor_email: str | None = None,
+    notify: bool = True,
 ) -> PermitSubmission:
     """Move a submission through the review state machine.
 
@@ -222,7 +253,12 @@ def transition_submission(
     +1, submission date refreshed, approval fields cleared.
 
     Raises ValueError for invalid transitions (caller maps it to a 400).
+
+    ``actor_email`` names the actor when there is no ``User`` — an emailed
+    Approve/Reject link acts without a session, and the audit entry should still
+    say who it was.
     """
+    from_status = submission.status
     if to_status not in ALLOWED_TRANSITIONS:
         msg = f'Unknown submission status: {to_status}'
         raise ValueError(msg)
@@ -233,7 +269,7 @@ def transition_submission(
         )
         raise ValueError(msg)
 
-    actor = getattr(user, 'email', None) if user else None
+    actor = getattr(user, 'email', None) if user else (actor_email or None)
     now = timezone.now()
     rows = list(submission.permit_rows.all())
     event = _EVENT_FOR_STATUS.get(to_status, 'STATUS_UPDATE')
@@ -334,4 +370,86 @@ def transition_submission(
         sync_source,
         actor or 'system',
     )
+
+    if notify and to_status in NOTIFY_ON_STATUS:
+        notifications.queue_status_change(
+            submission,
+            from_status=from_status,
+            to_status=to_status,
+            actor=actor,
+            reason=(notes or '').strip(),
+            sync_source=sync_source,
+        )
     return submission
+
+
+def status_path(from_status: str, to_status: str, max_hops: int = 3) -> list[str]:
+    """Shortest chain of legal transitions from one status to another.
+
+    ``ALLOWED_TRANSITIONS`` is the only authority on what may follow what, so a
+    request for a status the workflow cannot reach in one step is walked along
+    the legal edges instead of widening the state machine. Approving straight
+    from SUBMITTED is the case that matters: the email link asks for APPROVED,
+    the machine requires the acknowledgment first, so the action applies
+    SUBMITTED → UNDER_REVIEW → APPROVED and the audit trail reads exactly as if
+    a planner had clicked the two buttons in order.
+
+    Returns [] when ``from_status`` already is the target, and [] when there is
+    no path at all (a closed submission, say) — the caller tells those apart by
+    looking at the current status.
+    """
+    if from_status == to_status:
+        return []
+    queue: list[tuple[str, list[str]]] = [(from_status, [])]
+    seen = {from_status}
+    while queue:
+        current, path = queue.pop(0)
+        for nxt in sorted(ALLOWED_TRANSITIONS.get(current, frozenset())):
+            if nxt == to_status:
+                return [*path, nxt]
+            if nxt not in seen and len(path) + 1 < max_hops:
+                seen.add(nxt)
+                queue.append((nxt, [*path, nxt]))
+    return []
+
+
+def apply_review_action(
+    submission: PermitSubmission,
+    action: str,
+    *,
+    actor_email: str | None = None,
+    sync_source: str = 'email',
+) -> tuple[str, list[str]]:
+    """Apply an emailed Approve/Reject link. Returns (target status, steps).
+
+    Reuses ``transition_submission`` for every edge, so an emailed decision is
+    indistinguishable from a clicked one in the state machine and the audit
+    trail apart from the honest ``sync_source='email'``.
+
+    Raises ValueError when the submission cannot reach the requested status.
+    """
+    if action not in notifications.ACTION_STATUSES:
+        msg = f'Unknown review action: {action}'
+        raise ValueError(msg)
+    target = notifications.ACTION_STATUSES[action]
+    if submission.status == target:
+        return target, []
+    path = status_path(submission.status, target)
+    if not path:
+        msg = (
+            f'This application is {submission.status} — it cannot be moved to {target}. '
+            f'Open it in the tracker.'
+        )
+        raise ValueError(msg)
+    with transaction.atomic():
+        for step in path:
+            transition_submission(
+                submission,
+                step,
+                user=None,
+                actor_email=actor_email,
+                notes=EMAIL_REJECTION_NOTE if step == PermitSubmission.STATUS_REJECTED else None,
+                sync_source=sync_source,
+            )
+    submission.refresh_from_db()
+    return target, path
