@@ -547,7 +547,7 @@ class LldProjectsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from django.db.models import Count, OuterRef, Subquery
+        from django.db.models import OuterRef, Subquery
 
         # Bulk-fetch approved survey versions so we don't do one query per
         # project inside the loop.
@@ -561,6 +561,12 @@ class LldProjectsView(APIView):
         # uses — so the whole local suite failed to run. A correlated subquery
         # returns the same rows on both backends, which is worth more here than
         # the marginal planning win of DISTINCT ON.
+        #
+        # `.only(...)` is not a micro-optimisation here: `dataset` is the frozen
+        # survey snapshot and is the largest column in the table. The payload
+        # only ever reads `version`, and pulling the snapshots instead cost
+        # ~1.5 s for two rows on the production database — for a response that
+        # is 28 KB in total.
         latest_version_for_project = ApprovedSurveyVersion.objects.filter(
             ftth_project=OuterRef('ftth_project')
         ).order_by('-created_at')
@@ -568,23 +574,57 @@ class LldProjectsView(APIView):
             a.ftth_project_id: a
             for a in ApprovedSurveyVersion.objects.filter(
                 pk__in=Subquery(latest_version_for_project.values('pk')[:1])
-            )
+            ).only('id', 'ftth_project_id', 'version')
         }
 
+        # One query for every survey copy, instead of `_survey_copy()` once per
+        # HLD run. Each of those was a round trip to a database that is a
+        # network hop away, and it selected the whole `projects` row — 23 of
+        # them, ~0.9 s of the endpoint's 2.6 s before this change. Only the two
+        # columns the loop below reads are selected now.
+        ftth_runs = list(
+            FtthProject.objects.only('project_id', 'name', 'created_at').order_by('-created_at')
+        )
+        copies = {
+            copy.source_ftth_project_id: copy
+            for copy in Project.objects.filter(
+                source_ftth_project_id__in=[f.project_id for f in ftth_runs]
+            ).only('id', 'source_ftth_project_id')
+        }
+
+        # Every change in every copy this response could render, in one read,
+        # grouped by project. The change rows are needed in full — the payload
+        # carries their geometries and attribute diffs — so the status counters
+        # are taken from them rather than from `count()` plus a
+        # `values().annotate()`, and `approval_records__reviewer` is prefetched
+        # because the payload also carries each change's decision history.
+        # Reading per project instead cost three queries each: two counters and
+        # the rows, then one query per change for its records and one more per
+        # reviewer. The endpoint's cost therefore grew with the number of runs
+        # and changes on the dashboard.
+        changes_by_copy: dict = {}
+        for sf in (
+            SurveyFeature.objects.filter(project__in=list(copies.values()))
+            .select_related('engineer')
+            .prefetch_related('approval_records__reviewer')
+            .iterator(chunk_size=500)
+        ):
+            changes_by_copy.setdefault(sf.project_id, []).append(sf)
+
         projects = []
-        for ftth in FtthProject.objects.all().order_by('-created_at'):
-            copy = _survey_copy(ftth.project_id)
+        for ftth in ftth_runs:
+            copy = copies.get(ftth.project_id)
             if copy is None:
                 continue
 
-            # DB-level status counts (single query, no Python loop over
-            # SurveyFeature rows just to count statuses).
-            sf_qs = SurveyFeature.objects.filter(project=copy)
-            total = sf_qs.count()
+            sfs = changes_by_copy.get(copy.id, [])
+            total = len(sfs)
             if total == 0:
                 continue
-            counts = sf_qs.values('survey_status').annotate(n=Count('id'))
-            c = {row['survey_status']: row['n'] for row in counts}
+
+            c: dict[str, int] = {}
+            for sf in sfs:
+                c[sf.survey_status] = c.get(sf.survey_status, 0) + 1
             pending = (
                 c.get(SurveyFeature.SurveyStatus.PENDING_REVIEW, 0)
                 + c.get(SurveyFeature.SurveyStatus.NEW, 0)
@@ -598,7 +638,6 @@ class LldProjectsView(APIView):
             rejected = c.get(SurveyFeature.SurveyStatus.REJECTED, 0)
 
             asv = asv_map.get(ftth.project_id)
-            sfs = list(sf_qs.select_related('engineer').iterator(chunk_size=500))
             # Tier-1 A5 — risk-rank this project's queue (severity × likelihood
             # × LLD impact); deterministic rules, no model involved.
             from survey.risk_scoring import score_changes

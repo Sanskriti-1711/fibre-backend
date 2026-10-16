@@ -18,7 +18,9 @@ import json
 from datetime import timedelta
 from unittest import mock
 
+from django.db import connection
 from django.test import TestCase, skipUnlessDBFeature
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -147,6 +149,89 @@ class LldProjectsViewTests(LldApiTestCase):
 
         body = self.client.get('/api/ftth/lld/projects/').json()
         self.assertEqual(body['projects'], [])
+
+
+class LldProjectsQueryCostTests(LldApiTestCase):
+    """What the queue costs to build must not grow with the queue.
+
+    This endpoint is rendered on every dashboard load, and against the live
+    database it answered in 12.6-13.2 s for 23 HLD runs -- right at the
+    dashboard's own 12 s budget, which is why the panel read "Survey approval
+    queue unreachable" while the request went on to succeed. Three N+1s were
+    removed: `_survey_copy()` once per HLD run, the status counters (two
+    queries per project) where the change rows are fetched anyway, and the
+    approval records/reviewers read per change. The approved versions'
+    `dataset` snapshots are no longer fetched either -- nothing in the payload
+    reads them, and two of those rows cost ~1.5 s.
+
+    The assertions are the property, not a magic number: the count for a small
+    queue and for a large one must be identical, and it must stay small. The
+    payload is unchanged by all of it, which the existing readiness and risk
+    tests above already pin.
+    """
+
+    def _seed(self, projects, changes):
+        for index in range(projects):
+            ftth = make_ftth_project(name=f'Run {index}', created_by=self.planner)
+            copy = make_survey_copy(ftth)
+            for _ in range(changes):
+                feature = make_survey_feature(
+                    copy, self.engineer, status=SurveyFeature.SurveyStatus.MODIFIED
+                )
+                ApprovalRecord.objects.create(
+                    survey_feature=feature,
+                    decision='approved',
+                    comment='ok',
+                    reviewer=self.planner,
+                )
+
+    def _queries(self, projects, changes):
+        self._seed(projects, changes)
+        with CaptureQueriesContext(connection) as captured:
+            response = self.client.get('/api/ftth/lld/projects/')
+        self.assertEqual(response.status_code, 200)
+        return len(captured)
+
+    def test_the_cost_does_not_grow_with_the_size_of_the_queue(self):
+        small = self._queries(projects=1, changes=1)
+        large = self._queries(projects=6, changes=5)
+        self.assertEqual(
+            small,
+            large,
+            'the queue must not cost a query per project or per change',
+        )
+        self.assertLessEqual(large, 8, 'the queue is a fixed, small number of queries')
+
+    def test_the_counters_and_the_audit_trail_survive_the_bulk_read(self):
+        """The bulk read is the same data: counters, approvals and risk bands."""
+        change = make_survey_feature(
+            self.copy, self.engineer, status=SurveyFeature.SurveyStatus.MODIFIED
+        )
+        make_survey_feature(self.copy, self.engineer, status=SurveyFeature.SurveyStatus.APPROVED)
+        ApprovalRecord.objects.create(
+            survey_feature=change,
+            decision='needs_correction',
+            comment='redo the joint',
+            reviewer=self.planner,
+        )
+
+        body = self.client.get('/api/ftth/lld/projects/').json()
+        block = next(p for p in body['projects'] if p['project_id'] == self.ftth.project_id)
+
+        self.assertEqual(block['total'], 2)
+        self.assertEqual(block['pending'], 1)
+        self.assertEqual(block['approved'], 1)
+        self.assertEqual(block['needs_correction'], 0)
+        self.assertFalse(block['ready'])
+        self.assertEqual(block['risk_bands']['critical'] + block['risk_bands']['low'], 2)
+
+        history = next(c for c in block['changes'] if c['change_id'] == str(change.id))[
+            'approval_history'
+        ]
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]['decision'], 'needs_correction')
+        self.assertEqual(history[0]['comment'], 'redo the joint')
+        self.assertEqual(history[0]['reviewer'], self.planner.full_name or self.planner.email)
 
 
 # ======================================================================
