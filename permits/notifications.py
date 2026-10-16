@@ -466,10 +466,13 @@ def _submission_block_text(index: int, event: QueuedEvent) -> list[str]:
 def _compose_submission_email(group: list[QueuedEvent]) -> tuple[str, str, str]:
     first = group[0].submission
     count = len(group)
-    project = first.project.name if first.project_id else '—'
-    subject = (
-        f'[Permits] {count} application{"s" if count != 1 else ""} sent for approval — {project}'
-    )
+    # A project name is optional on FtthProject, so the suffix is added only
+    # when there is a name to add — otherwise the subject ends in a bare dash.
+    project = (first.project.name or '').strip() if first.project_id else ''
+    subject = f'[Permits] {count} application{"s" if count != 1 else ""} sent for approval'
+    if project:
+        subject += f' — {project}'
+    project_label = project or '—'
     reference = group[0].payload.get('reference') or ''
     package_version = first.package_version
     actor = group[0].payload.get('actor') or '—'
@@ -477,7 +480,7 @@ def _compose_submission_email(group: list[QueuedEvent]) -> tuple[str, str, str]:
     head = [
         f'{count} permit application{"s have" if count != 1 else " has"} been sent for approval.',
         '',
-        f'Project   : {project}',
+        f'Project   : {project_label}',
         f'Reference : {reference or "—"}',
         f'Package   : {f"v{package_version}" if package_version else "—"}',
         f'Submitted : {_timestamp(first.submission_date)}',
@@ -519,7 +522,7 @@ def _compose_submission_email(group: list[QueuedEvent]) -> tuple[str, str, str]:
             + '</div>'
         )
     meta = (
-        f'Project {escape(project)} · reference {escape(reference) or "—"} · '
+        f'Project {escape(project_label)} · reference {escape(reference) or "—"} · '
         f'package {f"v{package_version}" if package_version else "—"} · '
         f'submitted {escape(_timestamp(first.submission_date))} by {escape(str(actor))}'
     )

@@ -124,6 +124,16 @@ class SubmissionNotificationTests(PermitNotificationTestCase):
         self.assertIn('Kantstraße', message.body)
         self.assertIn('planner@example.com', message.body)  # who submitted
 
+    def test_a_nameless_project_leaves_no_dangling_dash(self):
+        """Project.name is optional, and the subject carries it verbatim."""
+        self.project.name = ''
+        self.project.save(update_fields=['name'])
+
+        self.submit()
+
+        self.assertEqual(self.outbox()[0].subject, '[Permits] 1 application sent for approval')
+        self.assertIn('Project   : —', self.outbox()[0].body)
+
     def test_the_batch_is_one_email_not_one_per_submission(self):
         """A submission batch is one decision, so it is one message."""
         extra = self._row('Kantstraße', 'sec-9')
