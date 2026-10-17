@@ -18,6 +18,7 @@ and the renewal digest announces each bucket once.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from datetime import timedelta
 from io import StringIO
@@ -724,7 +725,161 @@ class NotificationFeedTests(PermitNotificationTestCase):
         self.assertEqual(row['recipients'], [REVIEWER])
 
     def test_a_bad_limit_is_a_400(self):
-        self.assertEqual(self.client.get(FEED_URL, {'limit': 'lots'}).status_code, 400)
+        self.assertEqual(
+            self.client.get(FEED_URL, {'limit': 'lots'}).status_code, 400
+        )  # A mailbox that would actually work, which the diagnostic has to call clean.
+
+
+# The test runner forces the locmem backend, and the command is right to report
+# a locmem backend as "nothing would be delivered", so the SMTP backend is
+# named explicitly here and the send itself is captured below.
+DIAGNOSTIC_SETTINGS = {
+    **MAIL_SETTINGS,
+    'EMAIL_BACKEND': 'django.core.mail.backends.smtp.EmailBackend',
+    'EMAIL_HOST': 'smtp.gmail.com',
+    'EMAIL_PORT': 587,
+    'EMAIL_USE_TLS': True,
+    'EMAIL_HOST_USER': REVIEWER,
+    'EMAIL_HOST_PASSWORD': 'abcdefghijklmnop',  # app-password shaped, not real
+}
+
+
+def _capture_send(message, **kwargs):
+    """Stand in for a transport: keep the message where the asserts can read it.
+
+    Patched with ``autospec=True``, so ``message`` is the instance the command
+    built, with its recipients and alternatives intact.
+    """
+    mail.outbox.append(message)
+    return 1
+
+
+@override_settings(**DIAGNOSTIC_SETTINGS)
+class MailboxDiagnosticTests(PermitNotificationTestCase):
+    """`check_permit_email` has to name the misconfiguration, not just fail."""
+
+    def run_command(self, *args):
+        out = StringIO()
+        with self.assertRaises(SystemExit) as exit_info:
+            call_command('check_permit_email', *args, stdout=out)
+        return exit_info.exception.code, out.getvalue()
+
+    def run_clean(self, *args):
+        out = StringIO()
+        with mock.patch.object(
+            notifications.EmailMultiAlternatives,
+            'send',
+            autospec=True,
+            side_effect=_capture_send,
+        ):
+            call_command('check_permit_email', *args, stdout=out)
+        return out.getvalue()
+
+    def test_a_good_configuration_exits_zero(self):
+        output = self.run_clean()
+
+        self.assertIn(REVIEWER, output)
+        self.assertIn('No configuration problems found.', output)
+
+    def test_a_missing_recipient_is_a_problem(self):
+        with override_settings(PERMIT_NOTIFY_EMAIL=''):
+            code, output = self.run_command()
+
+        self.assertEqual(code, 3)
+        self.assertIn('PERMIT_NOTIFY_EMAIL is empty', output)
+
+    def test_an_empty_password_is_named_not_left_as_a_silent_nothing(self):
+        with override_settings(EMAIL_HOST_PASSWORD=''):
+            code, output = self.run_command()
+
+        self.assertEqual(code, 3)
+        self.assertIn('530 Authentication Required', output)
+
+    def test_an_account_password_is_flagged_as_the_wrong_credential(self):
+        # A warning, not a problem: it is the wrong shape for Gmail and will very
+        # likely be refused, but only the server can say so for certain.
+        with override_settings(EMAIL_HOST_PASSWORD='Sanskriti7'):
+            output = self.run_clean()
+
+        self.assertIn('[WARNING]', output)
+        self.assertIn('app password', output)
+        self.assertIn('myaccount.google.com/apppasswords', output)
+
+    def test_a_sixteen_character_app_password_is_not_flagged(self):
+        output = self.run_clean()
+
+        self.assertNotIn('myaccount.google.com/apppasswords', output)
+
+    def test_a_from_that_is_not_the_login_is_flagged(self):
+        # Gmail refuses this outright, so it is a problem rather than a warning.
+        with override_settings(DEFAULT_FROM_EMAIL='someone-else@example.com'):
+            code, output = self.run_command()
+
+        self.assertEqual(code, 3)
+        self.assertIn('differs from EMAIL_HOST_USER', output)
+
+    def test_a_console_backend_says_nothing_would_be_delivered(self):
+        with override_settings(EMAIL_BACKEND='django.core.mail.backends.console.EmailBackend'):
+            code, output = self.run_command()
+
+        self.assertEqual(code, 3)
+        self.assertIn('not delivered', output)
+
+    def test_a_missing_login_is_a_problem(self):
+        with override_settings(EMAIL_HOST_USER=''):
+            code, output = self.run_command()
+
+        self.assertEqual(code, 3)
+        self.assertIn('EMAIL_HOST_USER is empty', output)
+
+    def test_no_public_base_url_is_a_warning_not_a_problem(self):
+        with override_settings(PERMITS_PUBLIC_BASE_URL='', DEBUG=False):
+            output = self.run_clean('--json')
+
+        self.assertIn('one-click', output)
+
+    def test_send_delivers_a_test_message(self):
+        output = self.run_clean('--send')
+
+        self.assertEqual(len(self.outbox()), 1)
+        self.assertEqual(self.outbox()[0].to, [REVIEWER])
+        self.assertEqual(self.outbox()[0].from_email, REVIEWER)
+        self.assertIn('Test message sent to ' + REVIEWER, output)
+        self.assertIn('text/html', self.outbox()[0].alternatives[0][1])
+        # Nothing about the review flow is written: this tests the mailbox.
+        self.assertEqual(PermitNotification.objects.count(), 0)
+        self.assertEqual(PermitSubmission.objects.count(), 0)
+
+    def test_send_reports_the_transports_own_refusal(self):
+        with mock.patch.object(
+            notifications.EmailMultiAlternatives, 'send', side_effect=OSError('535 refused')
+        ):
+            code, output = self.run_command('--send')
+
+        self.assertEqual(code, 2)
+        self.assertIn('Test message FAILED', output)
+        self.assertIn('535 refused', output)
+
+    def test_to_overrides_the_recipient_for_the_test(self):
+        self.run_clean('--send', '--to', 'someone@else.test')
+
+        self.assertEqual(self.outbox()[0].to, ['someone@else.test'])
+
+    def test_send_with_nobody_to_tell_does_not_pretend_to_deliver(self):
+        with override_settings(PERMIT_NOTIFY_EMAIL=''):
+            code, output = self.run_command('--send')
+
+        self.assertEqual(code, 3)
+        self.assertEqual(self.outbox(), [])
+        self.assertIn('Test message NOT sent', output)
+
+    def test_json_is_machine_readable(self):
+        payload = json.loads(self.run_clean('--json'))
+
+        self.assertEqual(payload['recipients'], [REVIEWER])
+        self.assertTrue(payload['password_set'])
+        self.assertEqual(payload['backend'], DIAGNOSTIC_SETTINGS['EMAIL_BACKEND'])
+        self.assertIn('findings', payload)
 
 
 class UnconfiguredEnvironmentTests(PermitNotificationTestCase):
