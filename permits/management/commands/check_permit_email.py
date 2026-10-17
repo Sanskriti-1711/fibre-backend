@@ -134,11 +134,19 @@ class Command(BaseCommand):
             if password and not _looks_like_app_password(password):
                 findings.append(
                     {
-                        'level': WARNING,
-                        'detail': 'Gmail refuses an account password for SMTP. Create an app '
-                        'password at https://myaccount.google.com/apppasswords (2-step '
-                        'verification must be on) — it is 16 characters, usually shown in four '
-                        'groups of four, and it is the only value that works here.',
+                        # A problem, not a warning. Google issues app passwords as 16
+                        # lowercase letters and nothing else, so on smtp.gmail.com a
+                        # credential of any other shape cannot authenticate — verified
+                        # live: a 12-character account password reaches Gmail and is
+                        # refused (`SMTPServerDisconnected: Connection unexpectedly
+                        # closed`). Grading that a warning would let a preflight exit 0
+                        # on a mailbox that provably cannot send.
+                        'level': PROBLEM,
+                        'detail': 'Gmail refuses an account password for SMTP, and its app '
+                        'passwords are 16 lowercase letters — this value is not that shape. '
+                        'Create one at https://myaccount.google.com/apppasswords (2-step '
+                        'verification must be on); it is usually shown in four groups of '
+                        'four, and it is the only value that works here.',
                     }
                 )
             if sender and user and sender.lower() != user.lower():

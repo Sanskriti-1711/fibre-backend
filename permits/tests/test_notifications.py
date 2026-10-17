@@ -796,12 +796,16 @@ class MailboxDiagnosticTests(PermitNotificationTestCase):
         self.assertIn('530 Authentication Required', output)
 
     def test_an_account_password_is_flagged_as_the_wrong_credential(self):
-        # A warning, not a problem: it is the wrong shape for Gmail and will very
-        # likely be refused, but only the server can say so for certain.
+        # A problem, not a warning, and the exit code is the point: Google issues
+        # app passwords as 16 lowercase letters and nothing else, so on
+        # smtp.gmail.com a credential of another shape cannot authenticate (a
+        # 12-character account password was refused live). Grading it a warning
+        # would let a preflight exit 0 on a mailbox that provably cannot send.
         with override_settings(EMAIL_HOST_PASSWORD='Sanskriti7'):
-            output = self.run_clean()
+            code, output = self.run_command()
 
-        self.assertIn('[WARNING]', output)
+        self.assertEqual(code, 3)
+        self.assertIn('[PROBLEM]', output)
         self.assertIn('app password', output)
         self.assertIn('myaccount.google.com/apppasswords', output)
 
