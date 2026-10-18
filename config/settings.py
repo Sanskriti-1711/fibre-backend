@@ -232,6 +232,18 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r'^https://[a-z0-9-]+\.zeabur\.app$',
 ]
 
+# A package download is a 200 with a valid ZIP even when half its contract is
+# missing, so the X-Package-* response headers are the only warning the reader
+# gets.  The browser can only read them if they are exposed: without this list
+# a cross-origin fetch sees an empty header set and the UI stays silent about
+# the same gap the archive reports in PACKAGE_REPORT.txt.
+CORS_EXPOSE_HEADERS = [
+    'X-Package-Complete',
+    'X-Package-Bundled',
+    'X-Package-Missing',
+    'X-Package-Missing-Names',
+]
+
 CSRF_TRUSTED_ORIGINS = [
     # Same origin as above: a cross-origin POST from the Pages UI is rejected
     # by CSRF before it reaches a view unless it is trusted here too.

@@ -444,6 +444,42 @@ class PackageViewTests(HldApiTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response['Content-Type'], 'application/zip')
 
+    def test_a_partial_package_says_so_in_headers_the_browser_can_read(self):
+        """The UI can only warn about a partial ZIP if CORS exposes the gap.
+
+        A package missing half its contract is still a 200 with a valid
+        archive; the X-Package-* headers are the only warning the download
+        gives, and a cross-origin fetch sees none of them unless they are
+        listed in CORS_EXPOSE_HEADERS.
+        """
+        ftth = make_ftth_project()
+
+        def build(project_id, report):
+            report.update(
+                {
+                    'label': 'survey',
+                    'project_id': project_id,
+                    'bundled': ['objects.geojson'],
+                    'missing': [{'name': 'Objects.gpkg', 'reason': 'gone'}],
+                    'substituted': [],
+                    'complete': False,
+                }
+            )
+            return b'PK\x03\x04zip'
+
+        with mock.patch('ftth_hld.api.generate_survey_package', side_effect=build):
+            response = self.client.get(
+                f'/api/ftth/hld/results/{ftth.project_id}/survey-package/',
+                HTTP_ORIGIN='https://fibre-fe-98f8e0.gitlab.io',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['X-Package-Complete'], 'false')
+        self.assertEqual(response['X-Package-Missing'], '1')
+        exposed = response.get('Access-Control-Expose-Headers', '')
+        self.assertIn('X-Package-Complete', exposed)
+        self.assertIn('X-Package-Missing-Names', exposed)
+
     def test_missing_design_package_files_returns_404(self):
         ftth = make_ftth_project()
         with mock.patch(
@@ -540,6 +576,68 @@ class ProjectListTests(HldApiTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), payload)
         builder.assert_called_once_with(5)
+
+
+class ProjectPayloadLayersTests(TestCase):
+    """The Layers column must not be blank for a run whose layers exist.
+
+    The engine's project list is the only source the payload used, and it
+    carries no layer inventory (it knows only the runs still in its memory).
+    Measured 2026-10-18: the list returned ``layers: []`` for a run whose
+    /results/<id>/ returned 14 layers / 22,888 features, so HLD Outputs showed
+    "—" on every row.
+    """
+
+    def _payloads(self, engine_rows):
+        from ftth_hld.pipeline import ftth_project_payloads
+
+        with mock.patch('ftth_hld.pipeline.list_projects', return_value=engine_rows):
+            return ftth_project_payloads()
+
+    def test_layers_come_from_the_database_when_the_engine_list_has_none(self):
+        ftth = make_ftth_project()
+        make_hld_layer(ftth, name='objects', feature_count=2626)
+        make_hld_layer(ftth, name='ducts', feature_count=8959)
+
+        payloads = self._payloads([])
+
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(
+            payloads[0]['layers'],
+            [{'name': 'ducts', 'count': 8959}, {'name': 'objects', 'count': 2626}],
+        )
+
+    def test_engine_layers_still_win_when_the_engine_reports_them(self):
+        ftth = make_ftth_project()
+        make_hld_layer(ftth, name='objects', feature_count=2626)
+
+        payloads = self._payloads(
+            [{'project_id': ftth.project_id, 'layers': [{'name': 'objects', 'count': 1}]}]
+        )
+
+        self.assertEqual(payloads[0]['layers'], [{'name': 'objects', 'count': 1}])
+
+    def test_one_layer_query_serves_every_row(self):
+        """A 25-row list must not run a layer query per row."""
+        for _ in range(4):
+            ftth = make_ftth_project()
+            make_hld_layer(ftth, name='objects', feature_count=1)
+
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from ftth_hld.pipeline import ftth_project_payloads
+
+        with (
+            mock.patch('ftth_hld.pipeline.list_projects', return_value=[]),
+            CaptureQueriesContext(connection) as queries,
+        ):
+            payloads = ftth_project_payloads()
+
+        layer_queries = [q for q in queries.captured_queries if 'ftth_hld_layers' in q['sql']]
+        self.assertEqual(len(layer_queries), 1, layer_queries)
+        self.assertEqual(len(payloads), 4)
+        self.assertTrue(all(p['layers'] for p in payloads))
 
 
 class DeleteProjectViewTests(HldApiTestCase):

@@ -311,7 +311,6 @@ SURVEY_GEOJSON_FILES = {
     'Aerial_Drops.geojson': 'aerial_drops.geojson',
     'Aerial_Spans.geojson': 'aerial_spans.geojson',
     'Aerial_Cable.geojson': 'aerial_cable.geojson',
-    'Trench_Nodes.geojson': 'trench_nodes.geojson',
     'Final_Trenches.geojson': 'final_trenches.geojson',
     'Feeder_Ducts.geojson': 'feeder_ducts.geojson',
     'Distribution_Ducts.geojson': 'distribution_ducts.geojson',
@@ -337,8 +336,9 @@ DESIGN_PACKAGE_FILES = [
     'Aerial_Drops.gpkg',
     'Aerial_Spans.gpkg',
     'Aerial_Cable.gpkg',
-    'Trench_Nodes.gpkg',
-    'Pseudo_HH.gpkg',
+    # Trench_Nodes and Pseudo_HH are intermediates (each node is realised by a
+    # chamber, which is the published layer); neither is a layer HLD Outputs
+    # displays, so neither is in the curated list either.
     'Feeder_Cable.gpkg',
     'Distribution_Cable.gpkg',
     'Feeder_Ducts.gpkg',
@@ -371,11 +371,44 @@ DESIGN_GEOJSON_FILES = {
     'Aerial_Drops.geojson': 'aerial_drops.geojson',
     'Aerial_Spans.geojson': 'aerial_spans.geojson',
     'Aerial_Cable.geojson': 'aerial_cable.geojson',
-    'Trench_Nodes.geojson': 'trench_nodes.geojson',
     'Chambers.geojson': 'chambers.geojson',
     'Poles.geojson': 'poles.geojson',
     'Existing_Infrastructure.geojson': 'existing_infrastructure.geojson',
     'Existing_Infrastructure_Points.geojson': 'existing_infrastructure_points.geojson',
+}
+
+# ======================================================================
+# LAYERS THE RESULTS MAP DISPLAYS → THE FILES THAT BACK THEM.
+# ======================================================================
+# The results map draws one layer per name the engine publishes in its
+# ``layers`` list (``ONECLICK_OUTPUTS`` on the engine side). A package is
+# opened in QGIS, where those grouped names do not exist — so a package has
+# to carry the FILES, but only the files that back a displayed layer. A run
+# also writes intermediates that are never published (the per-tier trench
+# publications, Pseudo_HH, Served_Premises, Tangent_Crossings, Trench_Nodes);
+# bundling them handed the reader layers the platform itself does not show.
+# `test_package_layers` pins every packaged file to an entry here so a new
+# output cannot silently arrive as an extra layer.
+DISPLAYED_LAYER_FILES = {
+    'objects': ('Objects',),
+    'polygons': ('Polygons',),
+    'pdps': ('PDPs',),
+    'mfg': ('MFG',),
+    'mfg_service_areas': ('MFG_Service_Areas',),
+    # One published trench layer; its features carry Open Cut / Garden / HDD.
+    'trenches': ('Final_Trenches',),
+    'cables': ('Feeder_Cable', 'Distribution_Cable'),
+    'ducts': ('Feeder_Ducts', 'Distribution_Ducts', 'Drop_Ducts'),
+    'coupleurs': ('Coupleurs',),
+    'chambers': ('Chambers',),
+    'poles': ('Poles',),
+    'aerial_drops': ('Aerial_Drops',),
+    'aerial_spans': ('Aerial_Spans',),
+    'aerial_cable': ('Aerial_Cable',),
+    'brownfield': ('Existing_Infrastructure', 'Existing_Infrastructure_Points'),
+    # Aliases: stored runs published under these names before the rename.
+    'trench_layer': ('Final_Trenches',),
+    'aerial_drop_trenches': ('Aerial_Spans',),
 }
 
 # Fallback CRS when the GeoJSON has no ``crs`` field.

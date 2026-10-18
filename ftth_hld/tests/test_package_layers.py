@@ -18,11 +18,20 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from django.test import SimpleTestCase
 
 from ftth_hld import pipeline
+from ftth_hld.config import (
+    DESIGN_GEOJSON_FILES,
+    DESIGN_PACKAGE_FILES,
+    DISPLAYED_LAYER_FILES,
+    SURVEY_GEOJSON_FILES,
+    SURVEY_PACKAGE_FILES,
+)
 
 
 def _feature_collection(count: int = 1) -> bytes:
@@ -359,3 +368,204 @@ class PackageReportTests(SimpleTestCase):
     def test_nothing_fetchable_is_still_an_error(self):
         with self.assertRaises(FileNotFoundError):
             self._build(lambda _p, _n: None, _status())
+
+
+class ConsecutiveMissCarryoverTests(SimpleTestCase):
+    """A few absent layers must not strip the NEXT package's GeoPackages.
+
+    The write-off counter is CONSECUTIVE 404s and the GeoJSON pass runs after
+    the GeoPackages, so a build whose only gaps were its last few GeoJSONs
+    ended with the engine written off for ENGINE_MISS_COOLDOWN. Measured on the
+    live engine 2026-10-18: a run missing 3 GeoJSONs produced a 50-file design
+    package, and the request right after it produced 19 files with no
+    GeoPackage at all, from the same engine that still had every .gpkg.
+    """
+
+    PROJECT = 'f' * 32
+
+    def setUp(self):
+        pipeline._ENGINE_FILE_MISSES.clear()
+        self.addCleanup(pipeline._ENGINE_FILE_MISSES.clear)
+
+    def _build(self, asked):
+        def fake_get(url, *args, **kwargs):
+            asked.append(url)
+            if url.endswith('/Objects.gpkg'):
+                return SimpleNamespace(status_code=200, content=b'gpkg-bytes')
+            return SimpleNamespace(status_code=404, content=b'')
+
+        status = _status('Objects.gpkg')
+        with (
+            mock.patch.object(pipeline.requests, 'get', side_effect=fake_get),
+            mock.patch.object(pipeline, '_db_layer_geojson', return_value=None),
+            mock.patch.object(pipeline, 'get_status', return_value=status),
+            mock.patch.object(pipeline, '_read_status', return_value=status),
+        ):
+            return pipeline._build_package_zip(
+                self.PROJECT,
+                ['Objects.gpkg'],
+                {
+                    'Gone_A.geojson': 'gone_a.geojson',
+                    'Gone_B.geojson': 'gone_b.geojson',
+                    'Gone_C.geojson': 'gone_c.geojson',
+                },
+                'design',
+            )
+
+    def test_the_next_build_asks_the_engine_for_its_geopackage_again(self):
+        asked: list[str] = []
+
+        self._build(asked)
+        first_build = len(asked)
+        # The first build ends on its absent layers, which is what wrote the
+        # engine off for the old carry-over to poison the next request.
+        self.assertEqual(
+            pipeline._ENGINE_FILE_MISSES.get(self.PROJECT, (0, 0))[0], pipeline.ENGINE_MISS_LIMIT
+        )
+
+        self._build(asked)
+
+        second_build = asked[first_build:]
+        self.assertTrue(
+            [u for u in second_build if u.endswith('/Objects.gpkg')],
+            'the second build must fetch the GeoPackage from the engine, not write it off',
+        )
+
+    def test_the_second_build_still_carries_the_geopackage(self):
+        self._build([])
+        blob = self._build([])
+
+        self.assertIn('Objects.gpkg', zipfile.ZipFile(io.BytesIO(blob)).namelist())
+
+
+class DisplayedLayerContractTests(SimpleTestCase):
+    """Every layer a package can carry is one the results map displays."""
+
+    def test_every_curated_package_file_maps_to_a_displayed_layer(self):
+        allowed = {stem.lower() for stems in DISPLAYED_LAYER_FILES.values() for stem in stems}
+        packaged = (
+            list(DESIGN_PACKAGE_FILES)
+            + list(SURVEY_PACKAGE_FILES)
+            + list(DESIGN_GEOJSON_FILES)
+            + list(SURVEY_GEOJSON_FILES)
+        )
+        for name in packaged:
+            if name.lower().endswith(('.gpkg', '.geojson')):
+                self.assertIn(Path(name).stem.lower(), allowed, f'{name} backs no displayed layer')
+
+
+class DisplayedLayerFilterTests(SimpleTestCase):
+    """Packages carry the files behind the displayed layers, nothing more.
+
+    Measured 2026-10-18 on run 6d0bb6f…: the results map displayed 14 layers
+    while the design package carried 26. Pseudo_HH, Served_Premises,
+    Tangent_Crossings, Trench_Nodes and the per-tier trench publications were
+    layers the platform itself never shows.
+    """
+
+    PROJECT = 'e' * 32
+
+    LAYERS = [
+        {'name': 'objects', 'count': 1},
+        {'name': 'mfg_service_areas', 'count': 1},
+        {'name': 'trenches', 'count': 1},
+        {'name': 'cables', 'count': 2},
+        {'name': 'ducts', 'count': 3},
+        {'name': 'aerial_spans', 'count': 1},
+    ]
+
+    DOWNLOADS = [
+        # Displayed layers (and their files).
+        'Objects.gpkg',
+        'Objects.geojson',
+        'MFG_Service_Areas.gpkg',
+        'Final_Trenches.gpkg',
+        'Final_Trenches.geojson',
+        'Feeder_Cable.gpkg',
+        'Distribution_Cable.gpkg',
+        'Feeder_Ducts.gpkg',
+        'Distribution_Ducts.gpkg',
+        'Drop_Ducts.gpkg',
+        'Aerial_Spans.gpkg',
+        'Aerial_Spans.geojson',
+        # Intermediates the platform never publishes as layers.
+        'Pseudo_HH.gpkg',
+        'Pseudo_HH.geojson',
+        'Served_Premises.gpkg',
+        'Tangent_Crossings.geojson',
+        'Trench_Nodes.gpkg',
+        'Distribution_Trench.gpkg',
+        'Distribution_Trench.geojson',
+        'Garden_Trench.gpkg',
+    ]
+
+    EXTRAS = (
+        'Pseudo_HH.gpkg',
+        'Pseudo_HH.geojson',
+        'Served_Premises.gpkg',
+        'Tangent_Crossings.geojson',
+        'Trench_Nodes.gpkg',
+        'Distribution_Trench.gpkg',
+        'distribution_trench.geojson',
+        'Garden_Trench.gpkg',
+    )
+
+    def _status(self, layers=None):
+        return {
+            'layers': self.LAYERS if layers is None else layers,
+            'downloads': [{'name': name} for name in self.DOWNLOADS],
+        }
+
+    def _entries(self, kind='design', layers=None):
+        def download(_project_id, name):
+            return b'gpkg-bytes' if name.endswith('.gpkg') else _feature_collection(1)
+
+        status = self._status(layers)
+        with (
+            mock.patch.object(pipeline, 'get_status', return_value=status),
+            mock.patch.object(pipeline, '_read_status', return_value=status),
+            mock.patch.object(pipeline, 'get_download_file', side_effect=download),
+            mock.patch('ftth_hld.boq.render_boq_xlsx', return_value=b'xlsx-bytes'),
+        ):
+            build = (
+                pipeline.generate_survey_package
+                if kind == 'survey'
+                else pipeline.generate_design_package
+            )
+            blob = build(self.PROJECT)
+        return zipfile.ZipFile(io.BytesIO(blob)).namelist()
+
+    def test_the_design_package_drops_undisplayed_layers(self):
+        entries = self._entries('design')
+
+        for extra in self.EXTRAS:
+            self.assertNotIn(extra, entries, f'{extra} is not a displayed layer')
+        for wanted in (
+            'Objects.gpkg',
+            'Final_Trenches.gpkg',
+            'Feeder_Cable.gpkg',
+            'Distribution_Ducts.gpkg',
+            'aerial_spans.geojson',
+        ):
+            self.assertIn(wanted, entries)
+
+    def test_the_survey_package_drops_undisplayed_layers(self):
+        entries = self._entries('survey')
+
+        for extra in self.EXTRAS:
+            self.assertNotIn(extra, entries, f'{extra} is not a displayed layer')
+        self.assertIn('Objects.gpkg', entries)
+        self.assertIn('objects.geojson', entries)
+
+    def test_a_run_with_no_published_layers_keeps_its_package_whole(self):
+        """No layer list means no knowledge — never strip the deliverable."""
+        entries = self._entries('design', layers=[])
+
+        self.assertIn('Pseudo_HH.gpkg', entries)
+        self.assertIn('Trench_Nodes.gpkg', entries)
+
+    def test_a_published_layer_with_no_mapping_keeps_the_package_whole(self):
+        entries = self._entries('design', layers=[{'name': 'brand_new_layer'}])
+
+        self.assertIn('Pseudo_HH.gpkg', entries)
+        self.assertIn('Objects.gpkg', entries)

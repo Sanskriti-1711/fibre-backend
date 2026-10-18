@@ -28,6 +28,7 @@ from .config import (
     DEFAULT_SOURCE_CRS,
     DESIGN_GEOJSON_FILES,
     DESIGN_PACKAGE_FILES,
+    DISPLAYED_LAYER_FILES,
     FTTH_ENGINE_URL,
     LAYER_STEM_GEOMETRY,
     LAYER_STEM_GIS_TABLES,
@@ -1139,7 +1140,7 @@ def _reproject_geometry(geom: dict, transformer) -> None:
             _reproject_geometry(sub, transformer)
 
 
-def _engine_deliverable_names(project_id: str) -> list:
+def _engine_deliverable_names(project_id: str, status: dict | None = None) -> list:
     """
     Filenames the engine reports for a project, minus the raw source inputs.
 
@@ -1155,7 +1156,7 @@ def _engine_deliverable_names(project_id: str) -> list:
     from the list that predated its last layers — one project's aerial chain
     and poles were missing from both packages while their files sat on disk.
     """
-    status = get_status(project_id) or {}
+    status = status if status is not None else (get_status(project_id) or {})
     names = []
     for dl in status.get('downloads') or []:
         n = dl.get('name') if isinstance(dl, dict) else str(dl)
@@ -1192,6 +1193,76 @@ def _engine_deliverable_names(project_id: str) -> list:
             seen.add(n)
             ordered.append(n)
     return ordered
+
+
+_LAYER_FILE_EXTS = ('.gpkg', '.geojson')
+
+
+def _displayed_layer_stems(status: dict | None) -> set[str] | None:
+    """File stems behind the layers the results map displays, or None.
+
+    The names are the engine's published ``layers`` list — the same list the
+    results map draws — mapped through ``DISPLAYED_LAYER_FILES``. ``None``
+    means the run did not say what it publishes (or publishes something this
+    map has no rule for), and the caller must then leave the package alone:
+    stripping only the names it recognises would silently drop a brand-new
+    layer instead of packaging it.
+    """
+    stems: set[str] = set()
+    unknown: list[str] = []
+    for layer in (status or {}).get('layers') or []:
+        name = layer.get('name') if isinstance(layer, dict) else layer
+        if not name:
+            continue
+        files = DISPLAYED_LAYER_FILES.get(str(name).lower())
+        if files is None:
+            unknown.append(str(name))
+            continue
+        stems.update(stem.lower() for stem in files)
+    if unknown:
+        logger.info(
+            'Published layer(s) with no package mapping: %s; keeping the package as built.',
+            ', '.join(sorted(unknown)[:8]),
+        )
+        return None
+    return stems or None
+
+
+def _restrict_to_displayed(filenames, stems: set[str] | None, project_id: str, label: str) -> list:
+    """Drop layer files that back no layer the results map displays.
+
+    A run writes intermediates the platform never publishes (the per-tier
+    trench files, Pseudo_HH, Served_Premises, Tangent_Crossings, Trench_Nodes).
+    They were bundled because the engine's ``downloads`` list mentions them, so
+    a package carried layers HLD Outputs does not show. Documents (``.json``,
+    ``.xlsx``) are not layers and stay.
+    """
+    names = list(filenames)
+    if stems is None:
+        return names
+    kept: list = []
+    dropped: list[str] = []
+    for name in names:
+        if name.lower().endswith(_LAYER_FILE_EXTS) and Path(name).stem.lower() not in stems:
+            dropped.append(name)
+            continue
+        kept.append(name)
+    if dropped:
+        logger.info(
+            '%s package for %s: dropped %d layer file(s) the results map does not display (%s)',
+            label,
+            project_id,
+            len(dropped),
+            ', '.join(dropped[:8]),
+        )
+    return kept
+
+
+def _restrict_map_to_displayed(mapping: dict, stems: set[str] | None) -> dict:
+    """The GeoJSON map, limited to the displayed layers (when known)."""
+    if stems is None:
+        return dict(mapping)
+    return {k: v for k, v in mapping.items() if Path(k).stem.lower() in stems}
 
 
 # The entry every package carries, naming what it could not bundle. Not a
@@ -1270,6 +1341,17 @@ def _build_package_zip(
     holding 16 GeoJSON files and **not one of its 17 GeoPackages**, and nothing
     in the download, the response or the log said so.
     """
+    # A gap inside one package must not poison the next one. The miss counter
+    # is CONSECUTIVE 404s and the GeoJSON pass runs last, so a build whose only
+    # gaps are its final few layers ended with the engine written off -- and
+    # the next build then skipped the engine from its first GeoPackage.
+    # Measured 2026-10-18 against the live engine: a run missing 3 GeoJSONs
+    # produced a 50-file design package, and the request right after it (same
+    # files on disk, same engine) produced 19 files with no GeoPackage at all.
+    # Strikes are kept inside one build, where they save the round trips they
+    # were meant to; the next build asks again.
+    _ENGINE_FILE_MISSES.pop(project_id, None)
+
     zip_buffer = io.BytesIO()
 
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -1403,15 +1485,22 @@ def generate_survey_package(project_id: str, report: dict | None = None) -> byte
     EPSG:4326 (WGS84)** so the mobile app can render them on MapLibre
     without needing a GPKG reader or client-side reprojection.
 
+    Only the files that back a layer the results map displays are bundled:
+    the run's intermediates (Pseudo_HH, Served_Premises, Tangent_Crossings,
+    Trench_Nodes, the per-tier trench publications) are not layers the
+    platform shows, so they are not layers the crew receives.
+
     Returns the raw zip bytes.
     """
     # Driven by the engine's own layer list so a layer the run produced is
     # never missing from the pack (the curated list is the offline fallback).
-    ordered = _engine_deliverable_names(project_id) or list(SURVEY_PACKAGE_FILES)
+    status = get_status(project_id) or {}
+    ordered = _engine_deliverable_names(project_id, status) or list(SURVEY_PACKAGE_FILES)
+    stems = _displayed_layer_stems(status)
     return _build_package_zip(
         project_id,
-        ordered,
-        SURVEY_GEOJSON_FILES,
+        _restrict_to_displayed(ordered, stems, project_id, 'survey'),
+        _restrict_map_to_displayed(SURVEY_GEOJSON_FILES, stems),
         'survey',
         report=report,
     )
@@ -1429,7 +1518,8 @@ def generate_design_package(project_id: str, report: dict | None = None) -> byte
     the curated ``DESIGN_PACKAGE_FILES`` list when the engine has not
     reported any downloads (e.g. engine unreachable). Raw inputs
     (address Excel, road network, brownfield source files) are excluded
-    from the deliverable.
+    from the deliverable, and so is any file that backs no layer the
+    results map displays (see ``DISPLAYED_LAYER_FILES``).
 
     Returns the raw zip bytes.
     """
@@ -1462,6 +1552,8 @@ def generate_design_package(project_id: str, report: dict | None = None) -> byte
 
     if not ordered:
         ordered = list(DESIGN_PACKAGE_FILES)
+    stems = _displayed_layer_stems(status)
+    ordered = _restrict_to_displayed(ordered, stems, project_id, 'design')
     # Inject the database-computed BOQ/BOM over the engine's hardcoded
     # template files (see ftth_hld/boq.py — quantities come from the
     # persisted HLD layers, priced by the BoqRate card).
@@ -1477,7 +1569,7 @@ def generate_design_package(project_id: str, report: dict | None = None) -> byte
     return _build_package_zip(
         project_id,
         ordered,
-        DESIGN_GEOJSON_FILES,
+        _restrict_map_to_displayed(DESIGN_GEOJSON_FILES, stems),
         'design',
         extra_files=extra_files,
         report=report,
@@ -1547,11 +1639,33 @@ def ftth_project_payloads(limit: int = 50) -> list[dict]:
     except Exception:
         pass
 
+    # The engine's project list carries no layer inventory -- it only knows the
+    # runs still in its memory -- so taking ``layers`` from it alone left the
+    # HLD Outputs Layers column showing "—" on every row, including completed
+    # runs whose 14 layers are persisted (measured 2026-10-18: the list returned
+    # ``layers: []`` while /results/<id>/ returned 14 layers / 22,888 features
+    # for the same run). Read the persisted rows as the fallback: they are what
+    # the results map already draws from, so the list cannot contradict it.
+    projects = list(FtthProject.objects.all().order_by('-updated_at', '-created_at')[:limit])
+
+    from .models import FtthLayer
+
+    db_layers: dict[str, list] = {}
+    try:
+        for row in FtthLayer.objects.filter(
+            ftth_project__project_id__in=[p.project_id for p in projects]
+        ).values('ftth_project__project_id', 'name', 'feature_count'):
+            db_layers.setdefault(row['ftth_project__project_id'], []).append(
+                {'name': row['name'], 'count': row['feature_count']}
+            )
+    except Exception:  # pragma: no cover - a list must not fail on enrichment
+        db_layers = {}
+
     data = []
     # Most-recently-active first: updated_at moves on every re-run/poll,
     # so a re-run of an old project surfaces at the top instead of its
     # original creation-date position (fall back to created_at when equal).
-    for p in FtthProject.objects.all().order_by('-updated_at', '-created_at')[:limit]:
+    for p in projects:
         enriched = engine_data.get(p.project_id, {})
         copy = survey_copies.get(p.project_id)
         engineer = p.assigned_engineer
@@ -1586,7 +1700,7 @@ def ftth_project_payloads(limit: int = 50) -> list[dict]:
                 'created_at': p.created_at.isoformat(),
                 'updated_at': p.updated_at.isoformat(),
                 'downloads': enriched.get('downloads', []),
-                'layers': enriched.get('layers', []),
+                'layers': enriched.get('layers') or db_layers.get(p.project_id, []),
                 'assigned_engineer': (
                     {
                         'id': str(engineer.id),
