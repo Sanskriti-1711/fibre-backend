@@ -61,7 +61,7 @@ class Command(BaseCommand):
         parser.add_argument('--json', action='store_true', help='Emit JSON instead of text')
 
     def handle(self, *args, **options):
-        recipients = self._recipients(options.get('to'))
+        recipients = self._recipients(options.get('to') or '')
         report = self._report(recipients)
         delivery = None
         if options.get('send'):

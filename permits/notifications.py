@@ -394,7 +394,8 @@ def _timestamp(value) -> str:
 
 def _line(submission: PermitSubmission) -> str:
     """One human-readable identity for a submission."""
-    authority = submission.authority.name if submission.authority_id else 'no authority'
+    authority_obj = submission.authority
+    authority = authority_obj.name if authority_obj is not None else 'no authority'
     return f'{submission.label or submission.permit_type} — {authority}'
 
 
@@ -542,7 +543,7 @@ _STATUS_PHRASES = {
 
 def _compose_status_email(group: list[QueuedEvent]) -> tuple[str, str, str]:
     first = group[0]
-    first_status = first.payload.get('to_status')
+    first_status = str(first.payload.get('to_status') or '')
     first_phrase = _STATUS_PHRASES.get(first_status, first_status or 'updated')
     subject = f'[Permits] {first_phrase.capitalize()} — {_line(first.submission)}'
     if len(group) > 1:
@@ -552,7 +553,8 @@ def _compose_status_email(group: list[QueuedEvent]) -> tuple[str, str, str]:
     blocks = []
     for index, event in enumerate(group, start=1):
         submission = event.submission
-        phrase = _STATUS_PHRASES.get(event.payload.get('to_status'), event.payload.get('to_status'))
+        to_status = str(event.payload.get('to_status') or '')
+        phrase = _STATUS_PHRASES.get(to_status, to_status or 'updated')
         body.append(f'{index}. {phrase.capitalize()} — {_line(submission)}')
         facts = [f'{_sections(submission)} street section(s) · submission {submission.id}']
         if submission.reference:
@@ -726,6 +728,12 @@ def _expiry_line(row: dict) -> str:
     )
 
 
+def _days_until(row: tuple[str, str, dict]) -> int:
+    """Sort key for the expiry digest: rows without a count sort last."""
+    value = row[2].get('days_until')
+    return value if isinstance(value, int) else 9999
+
+
 def _compose_expiry_email(
     rows: list[tuple[str, str, dict]], *, threshold_days: int, now
 ) -> tuple[str, str, str]:
@@ -735,10 +743,7 @@ def _compose_expiry_email(
     if expired:
         subject = f'[Permits] {expired} permit(s) EXPIRED + {len(rows) - expired} expiring'
 
-    ordered = sorted(
-        rows,
-        key=lambda r: r[2].get('days_until') if r[2].get('days_until') is not None else 9999,
-    )
+    ordered = sorted(rows, key=_days_until)
     lines = [
         f'{len(rows)} permit row(s) need attention (threshold {threshold_days} days, as of {_timestamp(now)}).',
         '',

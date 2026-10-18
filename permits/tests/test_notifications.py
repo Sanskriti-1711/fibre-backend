@@ -465,6 +465,7 @@ class OneClickViewTests(PermitNotificationTestCase):
         self.client.post(ACTION_URL, {'token': self.token})
 
         event = PermitEvent.objects.filter(event='APPROVED').first()
+        assert event is not None
         self.assertEqual(event.detail['by'], REVIEWER)
         self.assertEqual(event.detail['sync_source'], 'email')
 
@@ -475,6 +476,7 @@ class OneClickViewTests(PermitNotificationTestCase):
         self.submission.refresh_from_db()
         self.assertEqual(self.submission.status, PermitSubmission.STATUS_REJECTED)
         event = PermitEvent.objects.filter(event='REJECTED').first()
+        assert event is not None
         self.assertEqual(event.detail['reason'], EMAIL_REJECTION_NOTE)
 
     def test_the_decision_reaches_every_row(self):

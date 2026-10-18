@@ -102,9 +102,7 @@ class DeleteToolStatusTestCase(TestCase):
         self.assertEqual(sf.original_hld_feature_id, self.hld_feature.id)
 
     def test_upsert_keeps_removed_status_on_a_later_save(self):
-        sf = make_survey_feature(
-            self.copy, self.engineer, original_hld_feature=self.hld_feature
-        )
+        sf = make_survey_feature(self.copy, self.engineer, original_hld_feature=self.hld_feature)
         response = self.client.post(
             '/api/survey/survey-features/upsert/',
             {
@@ -124,9 +122,7 @@ class DeleteToolStatusTestCase(TestCase):
         self.assertEqual(sf.survey_status, SurveyFeature.SurveyStatus.REMOVED)
 
     def test_removed_row_is_kept_and_a_hard_delete_drops_it(self):
-        sf = make_survey_feature(
-            self.copy, self.engineer, original_hld_feature=self.hld_feature
-        )
+        sf = make_survey_feature(self.copy, self.engineer, original_hld_feature=self.hld_feature)
         self.client.patch(
             f'/api/survey/survey-features/{sf.id}/',
             {'survey_status': 'removed'},

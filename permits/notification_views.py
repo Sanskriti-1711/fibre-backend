@@ -65,7 +65,8 @@ def _page(title: str, body: str, status: int = 200, script: str = '') -> HttpRes
 
 def _facts(submission: PermitSubmission) -> str:
     """Project · authority · size — what a reviewer needs to recognise it."""
-    authority = submission.authority.name if submission.authority_id else 'no authority recorded'
+    authority_obj = submission.authority
+    authority = authority_obj.name if authority_obj is not None else 'no authority recorded'
     project = submission.project.name if submission.project_id else '—'
     facts = [
         escape(project),
@@ -158,6 +159,7 @@ class PermitSubmissionActionView(APIView):
     ) -> HttpResponse:
         already = not path
         verb = notifications.ACTION_VERBS.get(action, 'updated')
+        intro: str
         if already:
             heading = f'Already {verb}'
             intro = escape(
