@@ -707,24 +707,35 @@ class SurveyFeatureDetailAPIView(APIView):
         if serializer.is_valid():
             # Bump version when geometry or attributes change
             data = request.data
+            extra: dict[str, object] = {}
             if 'survey_geometry' in data or 'survey_attributes' in data:
                 sf.version_number = (sf.version_number or 1) + 1
-                if sf.survey_status == SurveyFeature.SurveyStatus.NEW:
-                    sf.survey_status = SurveyFeature.SurveyStatus.MODIFIED
-                elif sf.survey_status in (
-                    SurveyFeature.SurveyStatus.APPROVED,
-                    SurveyFeature.SurveyStatus.REJECTED,
-                    SurveyFeature.SurveyStatus.COMPLETED,
-                    SurveyFeature.SurveyStatus.NEEDS_CORRECTION,
-                ):
-                    # Re-edit after a decision -> re-enter the approval queue
-                    sf.survey_status = SurveyFeature.SurveyStatus.MODIFIED
+                # A status the client set explicitly wins over the automatic
+                # transition: the Delete tool records a removal by PATCHing
+                # survey_status='removed', and forcing the pre-change value here
+                # is what quietly turned that removal into 'modified'.
+                if 'survey_status' not in data:
+                    if sf.survey_status == SurveyFeature.SurveyStatus.NEW:
+                        sf.survey_status = SurveyFeature.SurveyStatus.MODIFIED
+                    elif sf.survey_status in (
+                        SurveyFeature.SurveyStatus.APPROVED,
+                        SurveyFeature.SurveyStatus.REJECTED,
+                        SurveyFeature.SurveyStatus.COMPLETED,
+                        SurveyFeature.SurveyStatus.NEEDS_CORRECTION,
+                    ):
+                        # Re-edit after a decision -> re-enter the approval queue
+                        sf.survey_status = SurveyFeature.SurveyStatus.MODIFIED
                 sf.sync_status = SurveyFeature.SyncState.PENDING
-            serializer.save(
-                version_number=sf.version_number,
-                survey_status=sf.survey_status,
-                sync_status=sf.sync_status,
-            )
+                extra['version_number'] = sf.version_number
+                # Only push the transition when the client did not send its own
+                # status; assigning sf.survey_status unconditionally re-stamped
+                # the pre-change value over a client 'removed'.
+                if 'survey_status' not in data:
+                    extra['survey_status'] = sf.survey_status
+                extra['sync_status'] = sf.sync_status
+            # No explicit status and no geometry/attribute change -> nothing for
+            # the view to impose; the serializer's own validated value applies.
+            serializer.save(**extra)
             _persist_survey_domain_data(engineer, request.data, sf.original_hld_feature_id)
             # Engineer edited after submission -> reopen the survey so they can
             # resubmit (new review cycle, new ASV version — never modify V1).
@@ -775,15 +786,18 @@ class SurveyFeatureUpsertAPIView(APIView):
                 data = request.data
                 if 'survey_geometry' in data or 'survey_attributes' in data:
                     extra['version_number'] = (sf.version_number or 1) + 1
-                    if sf.survey_status == SurveyFeature.SurveyStatus.NEW:
-                        extra['survey_status'] = SurveyFeature.SurveyStatus.MODIFIED
-                    elif sf.survey_status in (
-                        SurveyFeature.SurveyStatus.APPROVED,
-                        SurveyFeature.SurveyStatus.REJECTED,
-                        SurveyFeature.SurveyStatus.COMPLETED,
-                    ):
-                        # Re-edit after a decision -> re-enter the approval queue
-                        extra['survey_status'] = SurveyFeature.SurveyStatus.MODIFIED
+                    # An explicit client status (e.g. 'removed' from the Delete
+                    # tool) is never overwritten by the automatic transition.
+                    if 'survey_status' not in data:
+                        if sf.survey_status == SurveyFeature.SurveyStatus.NEW:
+                            extra['survey_status'] = SurveyFeature.SurveyStatus.MODIFIED
+                        elif sf.survey_status in (
+                            SurveyFeature.SurveyStatus.APPROVED,
+                            SurveyFeature.SurveyStatus.REJECTED,
+                            SurveyFeature.SurveyStatus.COMPLETED,
+                        ):
+                            # Re-edit after a decision -> re-enter the approval queue
+                            extra['survey_status'] = SurveyFeature.SurveyStatus.MODIFIED
                     extra['sync_status'] = SurveyFeature.SyncState.PENDING
             serializer.save(engineer=engineer, **extra)
             _persist_survey_domain_data(engineer, request.data, hld_feature_id)
