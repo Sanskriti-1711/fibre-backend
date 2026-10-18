@@ -300,9 +300,16 @@ EMAIL_BACKEND = os.getenv(
 PERMIT_NOTIFY_EMAIL = os.getenv('PERMIT_NOTIFY_EMAIL', '')
 # Absolute, publicly reachable base URL of THIS backend — the one-click
 # Approve/Reject links in an email are opened from a mail client, which cannot
-# resolve 127.0.0.1. Empty falls back to http://localhost:8000 under DEBUG; a
-# deployed host that leaves it empty gets tracker links instead of buttons.
-PERMITS_PUBLIC_BASE_URL = os.getenv('PERMITS_PUBLIC_BASE_URL', '')
+# resolve 127.0.0.1.  The deployed Render host is committed here for the same
+# reason as PERMITS_TRACKER_URL below: an email link that only works when a
+# host env var was remembered is a broken link, and a reviewer opening the
+# mail from a phone cannot reach 127.0.0.1 at all.  Set it to '' on a host that
+# must not carry the buttons (they then degrade to tracker links), or override
+# it when the backend moves.  Under DEBUG an explicitly empty value still
+# falls back to http://localhost:8000 for local testing.
+PERMITS_PUBLIC_BASE_URL = os.getenv(
+    'PERMITS_PUBLIC_BASE_URL', 'https://fibre-backend-wml3.onrender.com'
+)
 # The planner UI, linked from every notification email. The public Pages host
 # is committed here for the same reason it is in CORS_ALLOWED_ORIGINS: a link
 # that only works when a host env var is set correctly is a broken link.

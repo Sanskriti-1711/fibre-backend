@@ -85,10 +85,11 @@ def public_base_url() -> str:
     """Absolute base URL of this backend, for the links inside an email.
 
     A mailed link is opened by a mail client, which cannot resolve
-    ``127.0.0.1``, so a deployed host must set ``PERMITS_PUBLIC_BASE_URL``. Under
-    DEBUG the local server is a fair guess and local development works with no
-    configuration; anything else that left the variable empty gets tracker links
-    instead of one-click buttons rather than a dead localhost URL.
+    ``127.0.0.1``, so ``PERMITS_PUBLIC_BASE_URL`` defaults to the deployed host
+    in ``config.settings``. Under DEBUG an explicitly empty value falls back to
+    the local server (local development needs no configuration); anything else
+    that empties the variable gets tracker links instead of one-click buttons
+    rather than a dead localhost URL.
     """
     explicit = (getattr(settings, 'PERMITS_PUBLIC_BASE_URL', '') or '').strip().rstrip('/')
     if explicit:
