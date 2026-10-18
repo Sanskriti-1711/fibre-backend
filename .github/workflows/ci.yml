@@ -45,12 +45,18 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
+      # The app's own dependencies are required here, not just the linters:
+      # the django-stubs plugin populates config.settings.INSTALLED_APPS, so
+      # without rest_framework/corsheaders it dies with ModuleNotFoundError
+      # before checking a single line, on every push.
       - name: Install dev dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run Ruff (lint)
         run: ruff check .
