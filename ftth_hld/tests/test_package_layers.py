@@ -22,7 +22,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 from ftth_hld import pipeline
 from ftth_hld.config import (
@@ -32,6 +32,7 @@ from ftth_hld.config import (
     SURVEY_GEOJSON_FILES,
     SURVEY_PACKAGE_FILES,
 )
+from testutils.factories import make_feature, make_ftth_project, make_survey_copy
 
 
 def _feature_collection(count: int = 1) -> bytes:
@@ -298,7 +299,7 @@ class PackageContentsTests(SimpleTestCase):
         self.assertIn('Objects.gpkg', entries)
 
 
-class PackageReportTests(SimpleTestCase):
+class PackageReportTests(TestCase):
     """A package says what it could not carry, instead of dropping it silently.
 
     Measured on the live service 2026-10-14: the engine's output files for these
@@ -467,6 +468,7 @@ class DisplayedLayerFilterTests(SimpleTestCase):
 
     LAYERS = [
         {'name': 'objects', 'count': 1},
+        {'name': 'mfg', 'count': 1},
         {'name': 'mfg_service_areas', 'count': 1},
         {'name': 'trenches', 'count': 1},
         {'name': 'cables', 'count': 2},
@@ -478,7 +480,10 @@ class DisplayedLayerFilterTests(SimpleTestCase):
         # Displayed layers (and their files).
         'Objects.gpkg',
         'Objects.geojson',
+        'MFG.gpkg',
+        'MFG.geojson',
         'MFG_Service_Areas.gpkg',
+        'MFG_Service_Areas.geojson',
         'Final_Trenches.gpkg',
         'Final_Trenches.geojson',
         'Feeder_Cable.gpkg',
@@ -557,15 +562,222 @@ class DisplayedLayerFilterTests(SimpleTestCase):
         self.assertIn('Objects.gpkg', entries)
         self.assertIn('objects.geojson', entries)
 
+    def test_the_survey_package_carries_the_mfg_and_its_service_area(self):
+        """The field package must include MFG — the cabinet and what it serves.
+
+        Both GeoJSON files are in ``DESIGN_GEOJSON_FILES``, and the survey
+        package builder skips any GeoJSON either map names (it expects the
+        map to add it back reprojected). While ``SURVEY_GEOJSON_FILES`` did
+        not name them, they were skipped and never added, so the rebuilt
+        survey package for `73774a84…` had 15 entries and no MFG
+        (measured 2026-10-19).
+        """
+        for kind in ('survey', 'design'):
+            entries = self._entries(kind)
+            self.assertIn('MFG.gpkg', entries, kind)
+            self.assertIn('mfg.geojson', entries, kind)
+            self.assertIn('mfg_service_areas.geojson', entries, kind)
+
     def test_a_run_with_no_published_layers_keeps_its_package_whole(self):
-        """No layer list means no knowledge — never strip the deliverable."""
+        """No layer list means no knowledge -- except for the excluded layers.
+
+        The display filter cannot run without the run's own list, so the
+        package keeps every candidate. The excluded artefacts do not survive
+        that: they are never deliverables, whether the list is known or not
+        (see ``FieldSurveyLayerRuleTests``).
+        """
         entries = self._entries('design', layers=[])
 
-        self.assertIn('Pseudo_HH.gpkg', entries)
-        self.assertIn('Trench_Nodes.gpkg', entries)
+        self.assertIn('Objects.gpkg', entries)
+        self.assertNotIn('Pseudo_HH.gpkg', entries)
+        self.assertNotIn('Trench_Nodes.gpkg', entries)
 
     def test_a_published_layer_with_no_mapping_keeps_the_package_whole(self):
         entries = self._entries('design', layers=[{'name': 'brand_new_layer'}])
 
-        self.assertIn('Pseudo_HH.gpkg', entries)
+        self.assertNotIn('Pseudo_HH.gpkg', entries)
         self.assertIn('Objects.gpkg', entries)
+
+
+class FieldSurveyLayerRuleTests(SimpleTestCase):
+    """The field side gets `objects`, never `Pseudo_HH`.
+
+    `Pseudo_HH` is the footway end of a garden leg -- a design artefact of the
+    trench network with no address and no household -- while `Objects` is one
+    point per premise with its address and household count. A Survey copy built
+    before the rule carries both: project `24cd3573…` holds 23 layers including
+    `Pseudo_HH` (224) beside `objects` (285).
+
+    Two gaps are pinned here. A run that PUBLISHES ``pseudo_hh`` used to arrive
+    at ``_displayed_layer_stems`` as an unknown name, which returned None and
+    left the package whole -- so the artefact shipped. And a run whose published
+    list omitted ``objects`` dropped the premises layer the package is keyed on.
+    """
+
+    PROJECT = 'f' * 32
+
+    DOWNLOADS = [
+        'Objects.gpkg',
+        'Objects.geojson',
+        'Pseudo_HH.gpkg',
+        'Pseudo_HH.geojson',
+        'Final_Trenches.gpkg',
+    ]
+
+    def _entries(self, kind, layers):
+        def download(_project_id, name):
+            return b'gpkg-bytes' if name.endswith('.gpkg') else _feature_collection(1)
+
+        status = {'layers': layers, 'downloads': [{'name': n} for n in self.DOWNLOADS]}
+        with (
+            mock.patch.object(pipeline, 'get_status', return_value=status),
+            mock.patch.object(pipeline, '_read_status', return_value=status),
+            mock.patch.object(pipeline, 'get_download_file', side_effect=download),
+            mock.patch('ftth_hld.boq.render_boq_xlsx', return_value=b'xlsx-bytes'),
+        ):
+            build = (
+                pipeline.generate_survey_package
+                if kind == 'survey'
+                else pipeline.generate_design_package
+            )
+            blob = build(self.PROJECT)
+        return zipfile.ZipFile(io.BytesIO(blob)).namelist()
+
+    def test_a_run_that_publishes_pseudo_hh_does_not_ship_it(self):
+        layers = [
+            {'name': 'objects', 'count': 285},
+            {'name': 'pseudo_hh', 'count': 224},
+            {'name': 'trenches', 'count': 1},
+        ]
+
+        for kind in ('survey', 'design'):
+            entries = self._entries(kind, layers)
+            self.assertNotIn('Pseudo_HH.gpkg', entries, kind)
+            self.assertNotIn('Pseudo_HH.geojson', entries, kind)
+            self.assertIn('Objects.gpkg', entries, kind)
+
+    def test_a_run_that_publishes_a_per_tier_trench_does_not_ship_it(self):
+        """One trench layer in the survey package: ``Final_Trenches``.
+
+        The designer also writes ``Feeder_Trench`` / ``Distribution_Trench`` /
+        ``Garden_Trench``: the same paths, segmented by tier, and the cabling
+        stages' input rather than the published design layer. A run that names
+        them must not get them bundled, and ``Final_Trenches`` must still be
+        there -- dropping the mirrors is not dropping the trench.
+        """
+        layers = [
+            {'name': 'objects', 'count': 285},
+            {'name': 'trenches', 'count': 387},
+            {'name': 'Distribution_Trench', 'count': 265},
+            {'name': 'Garden_Trench', 'count': 224},
+            {'name': 'Feeder_Trench', 'count': 58},
+        ]
+
+        for kind in ('survey', 'design'):
+            entries = self._entries(kind, layers)
+            for mirror in ('Distribution_Trench', 'Garden_Trench', 'Feeder_Trench'):
+                self.assertNotIn(f'{mirror}.gpkg', entries, kind)
+                self.assertNotIn(f'{mirror}.geojson', entries, kind)
+                self.assertNotIn(f'{mirror.lower()}.geojson', entries, kind)
+            self.assertIn('Final_Trenches.gpkg', entries, kind)
+            self.assertIn('final_trenches.geojson', entries, kind)
+
+    def test_a_run_that_publishes_trench_nodes_does_not_ship_them(self):
+        """Trench joints are not a layer the crew records against.
+
+        Every node is realised by a chamber, which is the published layer; the
+        package must not arrive with a `Trench_Nodes` layer beside it.
+        """
+        layers = [
+            {'name': 'objects', 'count': 285},
+            {'name': 'trenches', 'count': 387},
+            {'name': 'trench_nodes', 'count': 123},
+            {'name': 'chambers', 'count': 73},
+        ]
+
+        for kind in ('survey', 'design'):
+            entries = self._entries(kind, layers)
+            self.assertNotIn('Trench_Nodes.gpkg', entries, kind)
+            self.assertNotIn('Trench_Nodes.geojson', entries, kind)
+            self.assertNotIn('trench_nodes.geojson', entries, kind)
+            self.assertIn('Objects.gpkg', entries, kind)
+            self.assertIn('Final_Trenches.gpkg', entries, kind)
+
+    def test_the_object_layer_is_packaged_even_when_the_run_does_not_list_it(self):
+        entries = self._entries('survey', [{'name': 'trenches', 'count': 1}])
+
+        self.assertIn('Objects.gpkg', entries)
+        self.assertIn('objects.geojson', entries)
+
+    def test_the_rule_names_the_excluded_and_always_packaged_layers(self):
+        """The app and the backend must name the same layer.
+
+        The app's list lives in TS (`lib/utils/layer-ids.ts`) and cannot be
+        imported here, so this pins what the backend side exports -- the value
+        the assignment import and the package filter both read.
+        """
+        from projects.layer_rules import (
+            FIELD_SURVEY_ALWAYS_PACKAGED_LAYERS,
+            FIELD_SURVEY_EXCLUDED_LAYERS,
+        )
+
+        self.assertIn('pseudo_hh', FIELD_SURVEY_EXCLUDED_LAYERS)
+        for mirror in ('feeder_trench', 'distribution_trench', 'garden_trench', 'trench_nodes'):
+            self.assertIn(mirror, FIELD_SURVEY_EXCLUDED_LAYERS)
+        # The one trench layer the field survey does use is not excluded.
+        self.assertNotIn('final_trenches', FIELD_SURVEY_EXCLUDED_LAYERS)
+        self.assertIn('objects', FIELD_SURVEY_ALWAYS_PACKAGED_LAYERS)
+
+
+class PackageFromCopyTests(TestCase):
+    """A run whose files are gone everywhere is rebuilt from its Survey copy.
+
+    Run `24cd3573…` (measured 2026-10-19): the engine answers 404 for every
+    file, every `gis.*` table has 0 rows for it, and its Survey copy is active
+    with 2,800 features. The copy was imported from this run's package, so it
+    is a faithful source — and the alternative is a 404 on the crew's own
+    project.
+    """
+
+    def test_the_package_is_rebuilt_from_the_copy_with_geojson_and_gpkg(self):
+        from projects.models import ImportSession
+
+        run_id = 'f' * 32
+        copy = make_survey_copy(make_ftth_project())
+        make_feature(copy, layer_id='objects', layer_name='objects')
+        make_feature(copy, layer_id='final_trenches', layer_name='final_trenches')
+        # A row the field survey never serves must not come back through this path.
+        make_feature(copy, layer_id='Trench_Nodes', layer_name='Trench_Nodes')
+        ImportSession.objects.create(
+            project=copy,
+            original_filename=f'{run_id}_survey_package.zip',
+            stored_file_path='imports/x.zip',
+        )
+
+        report: dict = {}
+        with (
+            mock.patch.object(pipeline, 'get_status', return_value={}),
+            mock.patch.object(
+                pipeline, '_build_package_zip', side_effect=FileNotFoundError('no files')
+            ),
+        ):
+            blob = pipeline.generate_survey_package(run_id, report)
+
+        names = zipfile.ZipFile(io.BytesIO(blob)).namelist()
+        self.assertIn('objects.geojson', names)
+        self.assertIn('final_trenches.geojson', names)
+        self.assertIn('Objects.gpkg', names)
+        self.assertIn('Final_Trenches.gpkg', names)
+        self.assertNotIn('trench_nodes.geojson', names)
+        self.assertEqual(report['source'], f'survey copy {copy.id}')
+        self.assertTrue(report['complete'])
+
+    def test_no_copy_keeps_the_original_not_found_error(self):
+        with (
+            mock.patch.object(pipeline, 'get_status', return_value={}),
+            mock.patch.object(
+                pipeline, '_build_package_zip', side_effect=FileNotFoundError('no files')
+            ),
+            self.assertRaises(FileNotFoundError),
+        ):
+            pipeline.generate_survey_package('a' * 32, {})

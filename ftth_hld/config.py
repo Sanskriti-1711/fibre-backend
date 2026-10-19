@@ -270,6 +270,11 @@ SURVEY_PACKAGE_FILES = [
     'Objects.gpkg',
     'Polygons.gpkg',
     'PDPs.gpkg',
+    # The cabinet the area is served from, and the ground it serves. A crew
+    # standing on a PDP needs to know which MFG it hangs off; both layers are
+    # displayed by the results map AND the survey app groups them under
+    # Infrastructure, so both belong in the field package.
+    'MFG.gpkg',
     'MFG_Service_Areas.gpkg',
     'Feeder_Cable.gpkg',
     'Distribution_Cable.gpkg',
@@ -305,6 +310,14 @@ SURVEY_GEOJSON_FILES = {
     'Objects.geojson': 'objects.geojson',
     'Polygons.geojson': 'polygons.geojson',
     'PDPs.geojson': 'pdps.geojson',
+    # The MFG cabinet and its service area. These two live in
+    # DESIGN_GEOJSON_FILES as well, and `_engine_deliverable_names` skips any
+    # GeoJSON that either map knows — so while the survey map did not list them
+    # here, the engine's MFG download was skipped as "handled by the map" and
+    # then never added, and the field package shipped without MFG at all
+    # (survey package for `73774a84…`, 2026-10-19: 15 entries, no MFG).
+    'MFG.geojson': 'mfg.geojson',
+    'MFG_Service_Areas.geojson': 'mfg_service_areas.geojson',
     'Feeder_Cable.geojson': 'feeder_cable.geojson',
     'Distribution_Cable.geojson': 'distribution_cable.geojson',
     'Chambers.geojson': 'chambers.geojson',

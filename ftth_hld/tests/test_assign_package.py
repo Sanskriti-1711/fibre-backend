@@ -174,6 +174,49 @@ class SurveyPackageTests(SimpleTestCase):
         self.assertEqual(Path(path).read_bytes(), PACKAGE)
 
 
+class FieldLayerImportTests(SimpleTestCase):
+    """A Survey copy is imported from the package minus the design artefacts.
+
+    The copy's Feature rows ARE the app's layer list, so filtering only at
+    fetch time would leave `Pseudo_HH` in the dataset for every other reader.
+    The rule is applied to what gets imported: `Pseudo_HH` -- the footway end
+    of a garden leg, not a premise -- never becomes a Feature, while `objects`
+    (one point per premise) does.
+    """
+
+    def test_the_excluded_layer_is_not_imported(self):
+        discovered = [
+            {'name': 'objects', 'feature_count': 285},
+            {'name': 'Pseudo_HH', 'feature_count': 224},
+            {'name': 'pdps', 'feature_count': 31},
+        ]
+
+        self.assertEqual(assign._field_layers(discovered), ['objects', 'pdps'])
+
+    def test_the_rule_matches_any_spelling_of_the_layer(self):
+        discovered = [
+            {'name': 'pseudo_hh', 'feature_count': 1},
+            {'name': 'Pseudo_HH ', 'feature_count': 1},
+            {'name': 'PSEUDO_HH', 'feature_count': 1},
+        ]
+
+        self.assertEqual(assign._field_layers(discovered), [])
+
+    def test_only_the_excluded_layer_is_dropped(self):
+        """The rule is one layer, not "strip what the map does not draw".
+
+        A copy can also hold layers an older package carried (`trench_nodes`, the
+        per-tier trench publications). Deciding those is a different question;
+        this rule must not silently widen into it.
+        """
+        discovered = [
+            {'name': 'chambers', 'feature_count': 73},
+            {'name': 'final_trenches', 'feature_count': 387},
+        ]
+
+        self.assertEqual(assign._field_layers(discovered), ['chambers', 'final_trenches'])
+
+
 class ReassignGuardTests(SimpleTestCase):
     """A copy may be replaced until someone has recorded something in it.
 

@@ -978,6 +978,27 @@ def _package_response_headers(report: dict) -> dict:
     return headers
 
 
+def _survey_copy_of(project_id: str):
+    """The Survey copy imported from this run, if there is one.
+
+    A copy outlives its `FtthProject` row: project `24cd3573…` has an active
+    Survey copy with 2,800+ features and its source run is gone from the HLD
+    table, so the package endpoint answered 404 for a run the field engineer
+    is working in right now. The import session names the run it came from
+    (`<run>_survey_package.zip`) — that is the proof the run completed and
+    that this caller is asking about a real project, not an arbitrary id.
+    """
+    from projects.models import ImportSession
+
+    return (
+        ImportSession.objects.filter(
+            original_filename=f'{project_id}_survey_package.zip',
+        )
+        .select_related('project')
+        .first()
+    )
+
+
 class SurveyPackageView(APIView):
     """
     Generate and download a survey package — a single ZIP containing
@@ -986,6 +1007,10 @@ class SurveyPackageView(APIView):
     Answers with ``X-Package-Complete: false`` and ``X-Package-Missing`` when
     any file in the contract could not be fetched, instead of serving a partial
     archive as if it were whole.
+
+    A run whose `FtthProject` row is gone is still served when a Survey copy
+    was imported from it (``_survey_copy_of``): the copy is the field evidence
+    that the run exists, and its package must stay rebuildable.
     """
 
     permission_classes = [IsAuthenticated]
@@ -994,12 +1019,17 @@ class SurveyPackageView(APIView):
         try:
             project = FtthProject.objects.get(pk=project_id)
         except FtthProject.DoesNotExist:
-            return JsonResponse(
-                {'detail': 'Project not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            if _survey_copy_of(project_id) is None:
+                return JsonResponse(
+                    {'detail': 'Project not found.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            project = None
 
-        if project.status not in (FtthProject.STATUS_COMPLETED, 'completed'):
+        if project is not None and project.status not in (
+            FtthProject.STATUS_COMPLETED,
+            'completed',
+        ):
             return JsonResponse(
                 {
                     'detail': 'Pipeline has not completed yet. Survey package is only '

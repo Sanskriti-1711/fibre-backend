@@ -24,6 +24,11 @@ from urllib.parse import quote
 import requests
 from django.conf import settings
 
+from projects.layer_rules import (
+    FIELD_SURVEY_ALWAYS_PACKAGED_LAYERS,
+    FIELD_SURVEY_EXCLUDED_LAYERS,
+)
+
 from .config import (
     DEFAULT_SOURCE_CRS,
     DESIGN_GEOJSON_FILES,
@@ -987,7 +992,10 @@ def get_download_file(project_id: str, file_path: str) -> bytes | None:
 
     Order: the engine's disk (the canonical file), then this host's cache of
     the outputs, then the shared database -- which holds the layer itself even
-    when the engine's disk (or this host's cache) does not.
+    when the engine's disk (or this host's cache) does not. A GeoPackage is
+    rebuilt from those rows when the database is the only source (`ftth_hld.gpkg`),
+    because a package that carries no GeoPackage is not the package the
+    contract promises.
     """
     if not file_path or '\\' in file_path or '..' in Path(file_path).parts:
         return None
@@ -1014,6 +1022,28 @@ def get_download_file(project_id: str, file_path: str) -> bytes | None:
 
     # Last resort: the shared database, which holds the layer itself even when
     # the engine's disk (or this host's cache) does not.
+    if safe_path.lower().endswith('.gpkg'):
+        # A GeoPackage is a container, and the rows behind it are still in the
+        # database — measured 2026-10-19 on the deployed engine: every `.gpkg`
+        # of every live run answers 404 while its GeoJSON is rebuildable. Write
+        # the container from those rows rather than shipping a package with no
+        # GeoPackage at all (see `ftth_hld.gpkg`).
+        stem = Path(safe_path).stem
+        geojson = _db_layer_geojson(project_id, f'{stem}.geojson')
+        if geojson is None:
+            return None
+        try:
+            from .gpkg import geojson_to_gpkg
+
+            return geojson_to_gpkg(geojson, stem)
+        except Exception as exc:  # noqa: BLE001 - a failed rebuild must not fail the package
+            logger.warning(
+                'Could not rebuild %s for %s from the database: %s',
+                safe_path,
+                project_id,
+                exc,
+            )
+            return None
     return _db_layer_geojson(project_id, safe_path)
 
 
@@ -1207,6 +1237,13 @@ def _displayed_layer_stems(status: dict | None) -> set[str] | None:
     map has no rule for), and the caller must then leave the package alone:
     stripping only the names it recognises would silently drop a brand-new
     layer instead of packaging it.
+
+    ``FIELD_SURVEY_EXCLUDED_LAYERS`` is checked FIRST. The name has no rule in
+    this map, so before this it landed in the ``unknown`` bucket, the function
+    returned ``None`` and the caller kept the package whole — with the artefact
+    inside. It is not an unknown layer, it is a known one the field side never
+    receives, and a run (or a re-published run) that names it must not be able
+    to bring it back that way.
     """
     stems: set[str] = set()
     unknown: list[str] = []
@@ -1214,7 +1251,10 @@ def _displayed_layer_stems(status: dict | None) -> set[str] | None:
         name = layer.get('name') if isinstance(layer, dict) else layer
         if not name:
             continue
-        files = DISPLAYED_LAYER_FILES.get(str(name).lower())
+        key = str(name).lower()
+        if key in FIELD_SURVEY_EXCLUDED_LAYERS:
+            continue
+        files = DISPLAYED_LAYER_FILES.get(key)
         if files is None:
             unknown.append(str(name))
             continue
@@ -1236,16 +1276,21 @@ def _restrict_to_displayed(filenames, stems: set[str] | None, project_id: str, l
     They were bundled because the engine's ``downloads`` list mentions them, so
     a package carried layers HLD Outputs does not show. Documents (``.json``,
     ``.xlsx``) are not layers and stay.
+
+    ``FIELD_SURVEY_EXCLUDED_LAYERS`` is dropped unconditionally, even when
+    ``stems`` is None: those files are never a deliverable, whatever the run
+    publishes and however little it says. Everything else follows ``stems``, so
+    a brand-new layer still survives an unknown list.
     """
     names = list(filenames)
-    if stems is None:
-        return names
     kept: list = []
     dropped: list[str] = []
     for name in names:
-        if name.lower().endswith(_LAYER_FILE_EXTS) and Path(name).stem.lower() not in stems:
-            dropped.append(name)
-            continue
+        if name.lower().endswith(_LAYER_FILE_EXTS):
+            stem = Path(name).stem.lower()
+            if stem in FIELD_SURVEY_EXCLUDED_LAYERS or (stems is not None and stem not in stems):
+                dropped.append(name)
+                continue
         kept.append(name)
     if dropped:
         logger.info(
@@ -1259,10 +1304,32 @@ def _restrict_to_displayed(filenames, stems: set[str] | None, project_id: str, l
 
 
 def _restrict_map_to_displayed(mapping: dict, stems: set[str] | None) -> dict:
-    """The GeoJSON map, limited to the displayed layers (when known)."""
+    """The GeoJSON map, limited to the displayed layers (when known).
+
+    The excluded stems are dropped even when ``stems`` is None, so a map entry
+    for one of them (none today — the two maps are curated — but the rule is
+    what keeps that true) cannot slip through on an unknown layer list.
+    """
+    return {
+        k: v
+        for k, v in mapping.items()
+        if Path(k).stem.lower() not in FIELD_SURVEY_EXCLUDED_LAYERS
+        and (stems is None or Path(k).stem.lower() in stems)
+    }
+
+
+def _package_stems(status: dict | None) -> set[str] | None:
+    """``_displayed_layer_stems`` plus the layers the field survey always gets.
+
+    ``Objects`` is the premises layer the whole exercise is keyed on, so it is
+    added back even when a run's published list omitted it. ``None`` (no usable
+    list) stays ``None`` — the caller must keep the package whole rather than
+    strip the layers it cannot classify.
+    """
+    stems = _displayed_layer_stems(status)
     if stems is None:
-        return dict(mapping)
-    return {k: v for k, v in mapping.items() if Path(k).stem.lower() in stems}
+        return None
+    return stems | set(FIELD_SURVEY_ALWAYS_PACKAGED_LAYERS)
 
 
 # The entry every package carries, naming what it could not bundle. Not a
@@ -1474,12 +1541,127 @@ def _build_package_zip(
     return zip_buffer.getvalue()
 
 
+def _build_package_from_copy(project_id: str, report: dict | None = None) -> bytes | None:
+    """Rebuild the field package from the Survey copy imported from this run.
+
+    The engine's disk is not durable, and the shared `gis.*` rows can be gone
+    as well — measured 2026-10-19 on run `24cd3573…`: the engine answers 404 for
+    every file and every `gis` table has **0** rows for it, while its Survey
+    copy is active with 2,800 features. The copy is the field dataset and it
+    was imported FROM this run's package, so it is a faithful source for that
+    package: every served layer is there, already in WGS84.
+
+    Returns ``None`` when there is no copy or it holds no servable layer, so
+    the caller keeps the original "nothing found" error.
+    """
+    from projects.layer_rules import is_field_survey_layer, normalize_layer_id
+    from projects.models import Feature, ImportSession
+
+    session = (
+        ImportSession.objects.filter(
+            original_filename=f'{project_id}_survey_package.zip',
+        )
+        .select_related('project')
+        .first()
+    )
+    if session is None:
+        return None
+
+    grouped: dict[str, list[dict]] = {}
+    rows = (
+        Feature.objects.filter(project=session.project)
+        .exclude(geometry=None)
+        .order_by('created_at')
+        .values('layer_id', 'layer_name', 'geometry', 'properties')
+    )
+    for row in rows.iterator():
+        layer_id = normalize_layer_id(row['layer_id'] or row['layer_name'] or '')
+        if not layer_id or not is_field_survey_layer(layer_id):
+            continue
+        geometry = row['geometry']
+        if not isinstance(geometry, dict):
+            continue
+        properties = row['properties'] if isinstance(row['properties'], dict) else {}
+        grouped.setdefault(layer_id, []).append(
+            {'type': 'Feature', 'geometry': geometry, 'properties': properties}
+        )
+    if not grouped:
+        return None
+
+    from .gpkg import geojson_to_gpkg
+
+    bundled: list[str] = []
+    substituted: list[dict] = []
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+        written: set[str] = set()
+
+        def _write(name: str, payload: bytes) -> None:
+            if name in written:
+                return
+            written.add(name)
+            archive.writestr(name, payload)
+            bundled.append(name)
+
+        for engine_name, zip_name in SURVEY_GEOJSON_FILES.items():
+            features = grouped.get(normalize_layer_id(Path(zip_name).stem))
+            if not features:
+                continue
+            # Already WGS84: the copy was imported from this package's
+            # reprojected GeoJSON, so it must not be reprojected again.
+            raw = json.dumps({'type': 'FeatureCollection', 'features': features}).encode()
+            _write(zip_name, raw)
+            gpkg_name = Path(engine_name).stem + '.gpkg'
+            try:
+                _write(gpkg_name, geojson_to_gpkg(raw, Path(engine_name).stem))
+            except Exception as exc:  # noqa: BLE001 - one layer must not empty the package
+                logger.warning(
+                    'Could not write %s for %s from its Survey copy: %s',
+                    gpkg_name,
+                    project_id,
+                    exc,
+                )
+                substituted.append(
+                    {
+                        'name': gpkg_name,
+                        'reason': f'could not be written from the copy: {exc}',
+                    }
+                )
+
+        if not bundled:
+            return None
+
+        report_text = _package_report_text(
+            'survey (rebuilt from the Survey copy)',
+            project_id,
+            sorted(bundled),
+            [],
+            substituted,
+        )
+        archive.writestr(PACKAGE_REPORT_NAME, report_text.encode('utf-8'))
+
+    if report is not None:
+        report.update(
+            {
+                'label': 'survey',
+                'project_id': project_id,
+                'bundled': sorted(bundled),
+                'missing': [],
+                'substituted': substituted,
+                'complete': not substituted,
+                'source': f'survey copy {session.project_id}',
+            }
+        )
+
+    return buffer.getvalue()
+
+
 def generate_survey_package(project_id: str, report: dict | None = None) -> bytes:
     """
     Generate the **field-survey package** zip — the compact subset a
-    surveyor needs on site: polygons, PDPs, cables, chambers, final
-    trenches, ducts (incl. drop ducts) and existing brownfield
-    infrastructure.
+    surveyor needs on site: polygons, PDPs, MFG and its service areas,
+    cables, chambers, final trenches, ducts (incl. drop ducts) and existing
+    brownfield infrastructure.
 
     Includes GPKG files plus GeoJSON versions **reprojected to
     EPSG:4326 (WGS84)** so the mobile app can render them on MapLibre
@@ -1496,14 +1678,29 @@ def generate_survey_package(project_id: str, report: dict | None = None) -> byte
     # never missing from the pack (the curated list is the offline fallback).
     status = get_status(project_id) or {}
     ordered = _engine_deliverable_names(project_id, status) or list(SURVEY_PACKAGE_FILES)
-    stems = _displayed_layer_stems(status)
-    return _build_package_zip(
-        project_id,
-        _restrict_to_displayed(ordered, stems, project_id, 'survey'),
-        _restrict_map_to_displayed(SURVEY_GEOJSON_FILES, stems),
-        'survey',
-        report=report,
-    )
+    stems = _package_stems(status)
+    try:
+        return _build_package_zip(
+            project_id,
+            _restrict_to_displayed(ordered, stems, project_id, 'survey'),
+            _restrict_map_to_displayed(SURVEY_GEOJSON_FILES, stems),
+            'survey',
+            report=report,
+        )
+    except FileNotFoundError:
+        # The run's files are gone from the engine AND from the shared `gis`
+        # tables. Its Survey copy still holds every layer those files carried,
+        # so the package can be rebuilt from the copy instead of 404-ing a
+        # crew out of its own project (project `24cd3573…`, 2026-10-19).
+        rebuilt = _build_package_from_copy(project_id, report)
+        if rebuilt is None:
+            raise
+        logger.warning(
+            'Survey package for %s rebuilt from its Survey copy: the engine and '
+            'the shared gis rows have no files for this run.',
+            project_id,
+        )
+        return rebuilt
 
 
 def generate_design_package(project_id: str, report: dict | None = None) -> bytes:
@@ -1552,7 +1749,7 @@ def generate_design_package(project_id: str, report: dict | None = None) -> byte
 
     if not ordered:
         ordered = list(DESIGN_PACKAGE_FILES)
-    stems = _displayed_layer_stems(status)
+    stems = _package_stems(status)
     ordered = _restrict_to_displayed(ordered, stems, project_id, 'design')
     # Inject the database-computed BOQ/BOM over the engine's hardcoded
     # template files (see ftth_hld/boq.py — quantities come from the

@@ -3,6 +3,7 @@ from typing import TypedDict
 
 from django.db.models import Count, Q
 
+from projects.layer_rules import field_survey_exclusion_q
 from projects.models import Feature, LayerWeight, Project
 
 
@@ -39,8 +40,11 @@ class CompletionService:
 
         Partial weighting: Layers without explicit weights get equal share of remaining %.
         """
-        # Get all features for this project
-        features_qs = Feature.objects.filter(project=project)
+        # Get all features for this project, minus the layers the field survey
+        # does not serve (see projects.layer_rules): the engineer is not shown
+        # them, so counting them would cap completion below 100% by rows nobody
+        # can record against.
+        features_qs = Feature.objects.filter(project=project).exclude(field_survey_exclusion_q())
 
         # Get total counts
         total_features = features_qs.count()

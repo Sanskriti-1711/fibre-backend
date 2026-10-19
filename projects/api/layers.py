@@ -6,6 +6,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from projects.layer_rules import is_field_survey_layer
 from projects.models import Feature, LayerFieldConfig, Project
 
 from .serializers import FeatureSerializer, FeatureUpdateSerializer
@@ -80,6 +81,10 @@ class ProjectMapDataAPIView(APIView):
         for f in features_qs:
             if not f.geometry:
                 continue
+            # A Survey copy can still hold rows an older package carried; the
+            # field survey does not serve them (see projects.layer_rules).
+            if not is_field_survey_layer(f.layer_id or f.layer_name):
+                continue
             name = f.layer_name or f.layer_id or 'layer'
             if name not in seen_layers:
                 seen_layers.add(name)
@@ -141,6 +146,10 @@ class ProjectLayerListAPIView(APIView):
             .order_by('layer_name')
         )
 
+        # Layers the field survey does not serve are not listed, whatever a
+        # stored copy holds: the app builds its whole layer list — panel, map
+        # and feature fetches — from this answer, so filtering here reaches an
+        # already-installed app without a rebuild.
         layers = [
             {
                 'layer_id': entry['layer_id'],
@@ -156,6 +165,7 @@ class ProjectLayerListAPIView(APIView):
                 'last_feature_update': entry['last_feature_update'],
             }
             for entry in layer_summaries
+            if is_field_survey_layer(entry['layer_id'])
         ]
 
         return Response(
@@ -180,6 +190,14 @@ class ProjectLayerDetailAPIView(APIView):
 
         if not _engineer_can_access(request, project):
             return _deny()
+
+        # A layer the field survey does not serve has no detail, exactly as an
+        # unknown id does — rather than a 200 with rows the app must ignore.
+        if not is_field_survey_layer(layer_id):
+            return Response(
+                {'detail': 'Layer not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         layer_features = Feature.objects.filter(
             project=project,

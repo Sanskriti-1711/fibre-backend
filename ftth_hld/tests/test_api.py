@@ -437,6 +437,29 @@ class PackageViewTests(HldApiTestCase):
         response = self.client.get('/api/ftth/hld/results/nope/survey-package/')
         self.assertEqual(response.status_code, 404)
 
+    def test_a_copy_outlives_its_run_row_so_the_package_still_builds(self):
+        """`24cd3573…` has an active Survey copy and no FtthProject row.
+
+        The copy's import session names the run (`<run>_survey_package.zip`),
+        which is the evidence that the run completed. Without this the crew's
+        own project answers 404 and its package can never be rebuilt.
+        """
+        from projects.models import ImportSession
+
+        run_id = 'd' * 32
+        copy = make_survey_copy(make_ftth_project())
+        ImportSession.objects.create(
+            project=copy,
+            original_filename=f'{run_id}_survey_package.zip',
+            stored_file_path='imports/x.zip',
+        )
+
+        with mock.patch('ftth_hld.api.generate_survey_package', return_value=b'PK\x03\x04zip'):
+            response = self.client.get(f'/api/ftth/hld/results/{run_id}/survey-package/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/zip')
+
     def test_survey_package_returns_zip(self):
         ftth = make_ftth_project()
         with mock.patch('ftth_hld.api.generate_survey_package', return_value=b'PK\x03\x04zip'):

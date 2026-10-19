@@ -34,6 +34,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from assignments.models import AssignmentJob
+from projects.layer_rules import is_field_survey_layer
 from projects.models import Feature, ImportSession, Project
 from users.models import User
 
@@ -41,6 +42,20 @@ from .models import FtthProject
 from .pipeline import generate_survey_package
 
 SURVEY_SUFFIX = ' - Survey'
+
+
+def _field_layers(layers) -> list[str]:
+    """The discovered package layers a Survey copy may hold.
+
+    A copy is the field engineer's dataset, so the layer rule applies at import
+    as well as at packaging: ``Pseudo_HH`` (the footway end of a garden leg,
+    not a premise) never becomes a Feature row, and ``Objects`` is the premises
+    layer that does. Without this a package built before the rule -- or one
+    uploaded by hand -- put the design artefact back in the Premises group on
+    the phone (project `24cd3573…`: 23 layers, 224 `Pseudo_HH` beside 285
+    objects).
+    """
+    return [layer['name'] for layer in layers if is_field_survey_layer(layer.get('name'))]
 
 
 def _package_hash(payload: bytes) -> str:
@@ -265,7 +280,7 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
         from projects.api.import_views import discover_zip_layers, import_zip_layers
 
         layers = discover_zip_layers(full_path)
-        layer_names = [layer['name'] for layer in layers]
+        layer_names = _field_layers(layers)
 
         if _holds_this_import(survey, imported_from, package_hash):
             # The copy was imported from these exact bytes, so re-importing it
