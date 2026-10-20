@@ -182,6 +182,23 @@ class EngineError(RuntimeError):
         self.detail = detail
 
 
+def _still_downloading(what: str) -> str:
+    """The reply for a wait that expired while the engine kept working.
+
+    A stalled download used to surface as ``Engine unreachable:
+    HTTPSConnectionPool(...): Read timed out. (read timeout=2400)`` after forty
+    minutes, which told the planner neither what was happening nor what to do.
+    The engine's download is not cancelled when this wait ends, so the honest
+    answer is that it is still running, that reloading is safe, and that the
+    next load will be served from the extract cache.
+    """
+    return (
+        f'The engine is still downloading this area\u2019s OpenStreetMap data, so the {what} '
+        'could not be returned yet. The download continues in the background \u2014 reload '
+        'this page in a few minutes and the area will be served from the cache.'
+    )
+
+
 def _engine_detail(resp) -> str:
     try:
         body = resp.json()
@@ -237,17 +254,24 @@ def resolve_area(
     a 502 with the boundary already drawn and nothing else: the page showed a
     map and no data.  The boundary call now starts the download, and the full
     call waits on that same download (the engine fetches each bbox once), so
-    the wait is shared rather than doubled — but a large area can still exceed
-    15 minutes, so the default is now 40.
+    the wait is shared rather than doubled.
+
+    The budget is 20 minutes, not the 40 it was: 40 held a gunicorn thread for
+    three quarters of an hour on a download that had genuinely stalled, and the
+    planner was told nothing until it expired with a raw "read timed out".  A
+    download that outlives this is no longer abandoned — the engine keeps it —
+    so the reply says so and names the cache, which is what the next reload gets.
     """
     if timeout is None:
-        timeout = int(os.environ.get('FTTH_RESOLVE_TIMEOUT', '2400'))
+        timeout = int(os.environ.get('FTTH_RESOLVE_TIMEOUT', '1200'))
     payload: dict = _area_payload(area, country, city, postcode, area_name)
     payload['boundary_only'] = bool(boundary_only)
     if max_premises:
         payload['max_premises'] = int(max_premises)
     try:
         resp = requests.post(_engine_url('/ftth/hld/resolve-area'), json=payload, timeout=timeout)
+    except requests.Timeout as exc:
+        raise EngineError(504, _still_downloading('area preview')) from exc
     except requests.RequestException as exc:
         raise EngineError(502, f'Engine unreachable: {exc}') from exc
     if resp.status_code != 200:
@@ -290,7 +314,7 @@ def get_input_layer(
     nothing else: the first layer asked for waited on the same download the
     preview had kicked off, and was cut before it returned.  Layers now join the
     in-flight download rather than starting their own, so the wait is the one
-    the area actually needs — up to the same 40 minutes the preview allows.
+    the area actually needs — up to the same 20 minutes the preview allows.
     """
     payload = _area_payload(area, country, city, postcode, area_name)
     payload['layer'] = layer
@@ -298,8 +322,10 @@ def get_input_layer(
         resp = requests.post(
             _engine_url('/ftth/hld/input-layers'),
             json=payload,
-            timeout=int(os.environ.get('FTTH_INPUT_LAYER_TIMEOUT', '2400')),
+            timeout=int(os.environ.get('FTTH_INPUT_LAYER_TIMEOUT', '1200')),
         )
+    except requests.Timeout as exc:
+        raise EngineError(504, _still_downloading(f'{layer} layer')) from exc
     except requests.RequestException as exc:
         raise EngineError(502, f'Engine unreachable: {exc}') from exc
     if resp.status_code != 200:
