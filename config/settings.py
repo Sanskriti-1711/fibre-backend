@@ -215,6 +215,12 @@ CORS_ALLOWED_ORIGINS = [
     # call fail while both services were healthy.  `EXTRA_CORS_ORIGINS`
     # below stays the mechanism for a host that moves.
     'https://fibre-fe-98f8e0.gitlab.io',
+    # The survey app's Render deployment.  Its web bundle is baked with this
+    # backend's host, so this is the origin its browser calls come from.
+    # Committing it keeps a redeploy from depending on EXTRA_CORS_ORIGINS being
+    # set correctly in the platform dashboard -- the failure that already cost
+    # the GitLab Pages origin above.
+    'https://fibre-survey-web.onrender.com',
     'http://localhost:3000',
     'http://localhost:8081',
     'http://127.0.0.1:8081',
@@ -248,6 +254,7 @@ CSRF_TRUSTED_ORIGINS = [
     # Same origin as above: a cross-origin POST from the Pages UI is rejected
     # by CSRF before it reaches a view unless it is trusted here too.
     'https://fibre-fe-98f8e0.gitlab.io',
+    'https://fibre-survey-web.onrender.com',
     'http://localhost:3000',
     'http://127.0.0.1:3000',
     'http://localhost:8081',
