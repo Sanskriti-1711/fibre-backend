@@ -38,6 +38,7 @@ from rest_framework.views import APIView
 from ftth_hld.models import FtthProject
 from ftth_lld.models import ApprovedSurveyVersion, LldLayer, LldRun
 from permits.rules.engine import run_analysis as run_permit_analysis
+from projects.layer_rules import normalize_layer_id
 from projects.models import Feature, Project, ProjectMember, StageEvent
 from survey.models import ApprovalRecord, SurveyFeature
 from users.models import User
@@ -161,6 +162,10 @@ def _normalize_layer(name):
     The GPKG import path names layers "X (Imported)" with an "imp-" layer_id
     prefix. Normalize both so LLD output groups cleanly (no stray
     "objects (Imported)" layer sitting next to "objects").
+
+    Then apply the same canonical id the engine keys on (lower case, CamelCase
+    and separators folded), so "Feeder_Cable" and "feeder_cable" are one layer
+    to propagation and relay. Without this those passes silently found nothing.
     """
     if not name:
         return name
@@ -168,7 +173,7 @@ def _normalize_layer(name):
     name = re.sub(r'\s*\(imported\)\s*$', '', name, flags=re.IGNORECASE)
     if name.lower().startswith('imp-'):
         name = name[4:]
-    return name.strip() or name
+    return normalize_layer_id(name) or name.strip() or name
 
 
 def _hld_feature_collection(survey_copy):

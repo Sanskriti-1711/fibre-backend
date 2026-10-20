@@ -279,6 +279,10 @@ SURVEY_PACKAGE_FILES = [
     'Feeder_Cable.gpkg',
     'Distribution_Cable.gpkg',
     'Chambers.gpkg',
+    # The aerial spans and drops are hung from poles: without the pole layer
+    # the crew surveys the overhead legs against no supports, and the LLD
+    # engine has no pole reference to validate them.
+    'Poles.gpkg',
     # The field team must know which drop legs are on the pole line and why,
     # otherwise an aerial leg looks like a missing trench on the map.
     'Aerial_Drops.gpkg',
@@ -324,6 +328,7 @@ SURVEY_GEOJSON_FILES = {
     'Aerial_Drops.geojson': 'aerial_drops.geojson',
     'Aerial_Spans.geojson': 'aerial_spans.geojson',
     'Aerial_Cable.geojson': 'aerial_cable.geojson',
+    'Poles.geojson': 'poles.geojson',
     'Final_Trenches.geojson': 'final_trenches.geojson',
     'Feeder_Ducts.geojson': 'feeder_ducts.geojson',
     'Distribution_Ducts.geojson': 'distribution_ducts.geojson',

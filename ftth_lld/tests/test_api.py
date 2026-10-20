@@ -19,12 +19,13 @@ from datetime import timedelta
 from unittest import mock
 
 from django.db import connection
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from ftth_lld.models import ApprovedSurveyVersion, LldRun
+from ftth_lld.views import _normalize_layer
 from survey.models import ApprovalRecord, SurveyFeature
 from testutils.factories import (
     LINE,
@@ -1025,3 +1026,21 @@ class ResolvedStatusTests(LldApiTestCase):
                     SurveyFeature.SurveyStatus.NEEDS_CORRECTION,
                 )
         self.assertIsNone(SurveyFeature.status_for_decision('banana'))
+
+
+class LayerNameNormalizationTests(SimpleTestCase):
+    """Copy layers must reach the engine under the keys it propagates on."""
+
+    def test_camel_case_and_gpkg_import_names_fold_to_engine_keys(self):
+        self.assertEqual(_normalize_layer('Feeder_Cable'), 'feeder_cable')
+        self.assertEqual(_normalize_layer('Feeder Ducts'), 'feeder_ducts')
+        self.assertEqual(_normalize_layer('Aerial_Drops (Imported)'), 'aerial_drops')
+        self.assertEqual(_normalize_layer('imp-objects'), 'objects')
+        self.assertEqual(_normalize_layer('Final_Trenches'), 'final_trenches')
+
+    def test_distinct_layers_stay_distinct(self):
+        self.assertNotEqual(_normalize_layer('trench_nodes'), _normalize_layer('trench_sections'))
+
+    def test_empty_name_passes_through(self):
+        self.assertIsNone(_normalize_layer(None))
+        self.assertEqual(_normalize_layer(''), '')
