@@ -1,0 +1,135 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# fibre-backend — API & credential expiry monitor
+#
+# Runs tools/check_api_expiries.py once a day and opens/updates a GitHub
+# issue when a credential is about to expire (or has expired), closing it
+# again once it is renewed.
+#
+# Why this exists
+# ---------------
+# Almost every credential in this stack has no expiry date at all -- Gemini,
+# Render, the Gmail app password, the database password.  They do not lapse,
+# so nothing warns about them.  The one that DOES carry a date is the GitLab
+# access token, and GitLab publishes that date through its own API
+# (`/api/v4/personal_access_tokens/self`), so the deadline can be read rather
+# than remembered.
+#
+# The check is stdlib-only and reads no secret it does not need.  Without the
+# token in the environment it falls back to the recorded date in
+# tools/api_expiry_known.json, which is refreshed by
+# `python tools/check_api_expiries.py --sync-known`.
+#
+# To let this workflow read the live date, add the token as a repository
+# secret (Settings -> Secrets -> Actions -> New repository secret):
+#
+#   GITLAB_CI_TOKEN
+#
+# With the secret present the expiry is read from GitLab on every run, so the
+# recorded file only matters as a fallback.
+#
+# ⚠️ Scheduled workflows only run from the DEFAULT branch, and GitHub disables
+#    them after 60 days of repository inactivity — re-enable from the Actions
+#    tab if the monitor goes quiet.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: API expiry monitor
+
+on:
+  schedule:
+    # 06:23 UTC daily.  Not on the hour: GitHub starts every scheduled job
+    # at the same minute, and the top of the hour is the busiest one.
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: api-expiry-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check credential expiry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the expiry dates
+        id: probe
+        continue-on-error: true
+        env:
+          # Optional: when present, the live expiry date is read from the
+          # provider instead of the recorded file.
+          GITLAB_CI_TOKEN: ${{ secrets.GITLAB_CI_TOKEN }}
+        run: |
+          set -o pipefail
+          python3 tools/check_api_expiries.py --strict | tee report.txt
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-expiry-report
+          path: report.txt
+          retention-days: 30
+
+      - name: Open or update the alert issue
+        if: steps.probe.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          gh label create api-expiry \
+            --color B60205 --description "Credential expiring or expired" --force || true
+
+          # Fingerprint the WARN/FAIL lines, so a repeat of the SAME deadline
+          # does not add another comment.  The fingerprint changes when the
+          # date moves, which is exactly when a new comment is useful.
+          fp=$( (grep -E '^(FAIL|WARN)' report.txt || echo 'no-warn-lines') \
+                | sha256sum | cut -c1-12 )
+          marker="<!-- api-expiry-fp:${fp} -->"
+
+          num=$(gh issue list --label api-expiry --state open \
+                  --limit 1 --json number --jq '.[0].number // empty')
+
+          if [ -z "$num" ]; then
+            { echo "$marker"; echo; cat report.txt; } > payload.md
+            gh issue create --title "A credential is expiring" \
+              --label api-expiry --body-file payload.md
+            echo "opened an issue for fingerprint ${fp}"
+            exit 0
+          fi
+
+          if gh issue view "$num" --json comments \
+               --jq '.comments[].body' | grep -qF "$marker"; then
+            echo "fingerprint ${fp} already reported on #${num}; not commenting again"
+            exit 0
+          fi
+
+          { echo "$marker"; echo; cat report.txt; } > payload.md
+          gh issue comment "$num" --body-file payload.md
+          echo "reported fingerprint ${fp} on #${num}"
+
+      - name: Close the alert issue after renewal
+        if: steps.probe.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          num=$(gh issue list --label api-expiry --state open \
+                  --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "Renewed — nothing expires inside the warning window again."
+            gh issue close "$num"
+          fi
+
+      # Make the run itself fail, so a red X appears in the Actions tab and
+      # GitHub notifies whoever the scheduled workflow is attributed to.
+      - name: Fail the run when a credential is expiring
+        if: steps.probe.outcome == 'failure'
+        run: |
+          echo "::error::a credential is expiring or expired — see the job summary and report.txt"
+          exit 1
