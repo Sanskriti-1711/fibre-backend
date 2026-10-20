@@ -29,6 +29,7 @@ import threading
 import time
 from typing import Any
 
+from django.db.models import Prefetch
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -694,9 +695,28 @@ class LldRunsView(APIView):
 
     def get(self, request):
         runs = []
+        # Fetch only the columns this payload reads.  The original
+        # `select_related('approved_survey_version')` plus a plain
+        # `prefetch_related('layers')` pulled two things nobody renders:
+        # ``ApprovedSurveyVersion.dataset`` (the frozen GeoJSON dataset) and
+        # ``LldLayer.geojson`` (a whole layer, per layer).  Measured on
+        # 2026-10-20 against the live database, ten runs:
+        #   plain rows 0.34 s | + approved_survey_version 12.7 s |
+        #   + layers prefetch 14.6 s | the endpoint 26-32 s.
+        # The dashboard asks for this with a 12 s budget, so the LLD KPI could
+        # only ever read "unreachable"; the payload is 11 KB.
         qs = (
-            LldRun.objects.select_related('ftth_project', 'approved_survey_version', 'run_by')
-            .prefetch_related('layers')
+            LldRun.objects.select_related('ftth_project', 'run_by')
+            .prefetch_related(
+                Prefetch(
+                    'approved_survey_version',
+                    queryset=ApprovedSurveyVersion.objects.only('id', 'version'),
+                ),
+                Prefetch(
+                    'layers',
+                    queryset=LldLayer.objects.only('id', 'lld_run_id', 'name', 'feature_count'),
+                ),
+            )
             .order_by('-run_date')
         )
         for r in qs:
