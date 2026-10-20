@@ -45,4 +45,12 @@ EXPOSE 8000
 # "The health check shares the worker pool". The count is pinned rather than
 # left to $WEB_CONCURRENCY, which resolved to one worker in the running
 # container while this file asked for three.
-CMD ["sh", "-c", "gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 2 --worker-class gthread --threads 4 --preload --max-requests 800 --max-requests-jitter 100 --timeout 120 --access-logfile - --error-logfile -"]
+# --timeout is the ARBITER's patience, not the request's: a worker that has not
+# reported back within it is killed mid-request. It was 120s, while this app
+# deliberately waits longer than that for the engine -- `FTTH_RESOLVE_TIMEOUT`
+# and `FTTH_INPUT_LAYER_TIMEOUT` both default to 1200s because a cold OSM city
+# download takes 10-16 minutes. Any wait past two minutes was therefore killed
+# by gunicorn and surfaced as a 502 to the page, no matter what the call itself
+# allowed. The budget here must stay ABOVE the longest blocking call; raise it
+# with them or the mismatch comes back. 1300 = 1200 + a margin for the reply.
+CMD ["sh", "-c", "gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 2 --worker-class gthread --threads 4 --preload --max-requests 800 --max-requests-jitter 100 --timeout 1300 --graceful-timeout 30 --access-logfile - --error-logfile -"]
