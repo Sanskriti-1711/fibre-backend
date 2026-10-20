@@ -380,11 +380,21 @@ def list_countries() -> list[dict]:
     An engine outage must not empty the dropdown — the country a planner picks
     is what keeps a five-digit postcode from being read on the wrong continent —
     so a failure returns an empty list rather than raising.
+
+    The timeout is 60s, not the 15s the neighbouring status calls use, because
+    the list is static and cheap: the only thing this call ever waits for is a
+    sleeping engine instance booting. A cold start measured 42s, so a 15s budget
+    expired before the engine could answer and the dropdown came back empty on
+    the first visit of the day.
     """
     try:
-        resp = requests.get(_engine_url('/ftth/hld/countries'), timeout=15)
+        resp = requests.get(_engine_url('/ftth/hld/countries'), timeout=60)
         if resp.status_code == 200:
-            return list(resp.json().get('countries') or [])
+            countries = list(resp.json().get('countries') or [])
+            if not countries:
+                logger.warning('Engine returned no country list (status 200)')
+            return countries
+        logger.warning('Engine answered countries with %s: %s', resp.status_code, _engine_detail(resp))
     except requests.RequestException as exc:
         logger.warning('Engine unreachable for countries: %s', exc)
     return []
