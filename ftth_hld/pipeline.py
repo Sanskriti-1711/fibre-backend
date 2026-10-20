@@ -420,7 +420,9 @@ def list_countries() -> list[dict]:
             if not countries:
                 logger.warning('Engine returned no country list (status 200)')
             return countries
-        logger.warning('Engine answered countries with %s: %s', resp.status_code, _engine_detail(resp))
+        logger.warning(
+            'Engine answered countries with %s: %s', resp.status_code, _engine_detail(resp)
+        )
     except requests.RequestException as exc:
         logger.warning('Engine unreachable for countries: %s', exc)
     return []

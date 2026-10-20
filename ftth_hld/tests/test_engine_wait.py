@@ -30,11 +30,14 @@ def _no_timeout_env():
 
 class StillDownloadingReplyTests(SimpleTestCase):
     def test_a_preview_that_times_out_says_the_download_continues(self):
-        with _no_timeout_env(), mock.patch.object(
-            pipeline.requests, 'post', side_effect=requests.Timeout('Read timed out.')
+        with (
+            _no_timeout_env(),
+            mock.patch.object(
+                pipeline.requests, 'post', side_effect=requests.Timeout('Read timed out.')
+            ),
+            self.assertRaises(pipeline.EngineError) as caught,
         ):
-            with self.assertRaises(pipeline.EngineError) as caught:
-                pipeline.resolve_area(area='B16 9BH, Birmingham, United Kingdom')
+            pipeline.resolve_area(area='B16 9BH, Birmingham, United Kingdom')
 
         self.assertEqual(caught.exception.status_code, 504)
         detail = str(caught.exception)
@@ -46,22 +49,26 @@ class StillDownloadingReplyTests(SimpleTestCase):
         self.assertNotIn('Engine unreachable', detail)
 
     def test_an_input_layer_that_times_out_says_the_same_thing(self):
-        with _no_timeout_env(), mock.patch.object(
-            pipeline.requests, 'post', side_effect=requests.Timeout('boom')
+        with (
+            _no_timeout_env(),
+            mock.patch.object(pipeline.requests, 'post', side_effect=requests.Timeout('boom')),
+            self.assertRaises(pipeline.EngineError) as caught,
         ):
-            with self.assertRaises(pipeline.EngineError) as caught:
-                pipeline.get_input_layer(area='Berlin', layer='roads')
+            pipeline.get_input_layer(area='Berlin', layer='roads')
 
         self.assertEqual(caught.exception.status_code, 504)
         self.assertIn('roads layer', str(caught.exception))
         self.assertIn('still downloading', str(caught.exception))
 
     def test_a_transport_failure_that_is_not_a_timeout_is_still_unreachable(self):
-        with _no_timeout_env(), mock.patch.object(
-            pipeline.requests, 'post', side_effect=requests.ConnectionError('refused')
+        with (
+            _no_timeout_env(),
+            mock.patch.object(
+                pipeline.requests, 'post', side_effect=requests.ConnectionError('refused')
+            ),
+            self.assertRaises(pipeline.EngineError) as caught,
         ):
-            with self.assertRaises(pipeline.EngineError) as caught:
-                pipeline.resolve_area(area='Berlin')
+            pipeline.resolve_area(area='Berlin')
 
         self.assertEqual(caught.exception.status_code, 502)
         self.assertIn('Engine unreachable', str(caught.exception))
@@ -71,29 +78,34 @@ class WaitBudgetTests(SimpleTestCase):
     """40 minutes held a worker for three quarters of an hour on a dead download."""
 
     def _timeout_seen(self, call):
-        with _no_timeout_env(), mock.patch.object(
-            pipeline.requests, 'post', return_value=mock.Mock(
-                status_code=200, json=lambda: {'area': 'ok'}
-            )
-        ) as post:
+        with (
+            _no_timeout_env(),
+            mock.patch.object(
+                pipeline.requests,
+                'post',
+                return_value=mock.Mock(status_code=200, json=lambda: {'area': 'ok'}),
+            ) as post,
+        ):
             call()
         return post.call_args.kwargs['timeout']
 
     def test_the_preview_waits_twenty_minutes_by_default(self):
-        self.assertEqual(self._timeout_seen(
-            lambda: pipeline.resolve_area(area='B16 9BH')
-        ), 1200)
+        self.assertEqual(self._timeout_seen(lambda: pipeline.resolve_area(area='B16 9BH')), 1200)
 
     def test_the_input_layer_waits_the_same(self):
-        self.assertEqual(self._timeout_seen(
-            lambda: pipeline.get_input_layer(area='B16 9BH', layer='roads')
-        ), 1200)
+        self.assertEqual(
+            self._timeout_seen(lambda: pipeline.get_input_layer(area='B16 9BH', layer='roads')),
+            1200,
+        )
 
     def test_the_budget_can_still_be_raised_by_environment(self):
-        with mock.patch.dict(os.environ, {'FTTH_RESOLVE_TIMEOUT': '1800'}), mock.patch.object(
-            pipeline.requests, 'post', return_value=mock.Mock(
-                status_code=200, json=lambda: {'area': 'ok'}
-            )
-        ) as post:
+        with (
+            mock.patch.dict(os.environ, {'FTTH_RESOLVE_TIMEOUT': '1800'}),
+            mock.patch.object(
+                pipeline.requests,
+                'post',
+                return_value=mock.Mock(status_code=200, json=lambda: {'area': 'ok'}),
+            ) as post,
+        ):
             pipeline.resolve_area(area='B16 9BH')
         self.assertEqual(post.call_args.kwargs['timeout'], 1800)
