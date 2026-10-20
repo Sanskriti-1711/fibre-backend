@@ -24,6 +24,7 @@ from urllib.parse import quote
 import requests
 from django.conf import settings
 
+from ftth_hld.countries import country_options
 from projects.layer_rules import (
     FIELD_SURVEY_ALWAYS_PACKAGED_LAYERS,
     FIELD_SURVEY_EXCLUDED_LAYERS,
@@ -403,29 +404,24 @@ def osm_status() -> dict:
 def list_countries() -> list[dict]:
     """Country options for the area input's country dropdown.
 
-    An engine outage must not empty the dropdown — the country a planner picks
-    is what keeps a five-digit postcode from being read on the wrong continent —
-    so a failure returns an empty list rather than raising.
+    Served from this backend's own data file, not from the engine.  The list is
+    static ISO 3166-1 data that never changes at runtime, and routing it through
+    the engine made a dropdown depend on a remote instance being awake: a cold
+    Render start took 42s, the request budget expired first, and the page told
+    the planner "Could not load the country list".  Reading it locally answers
+    in microseconds and cannot fail because of an engine outage.
 
-    The timeout is 60s, not the 15s the neighbouring status calls use, because
-    the list is static and cheap: the only thing this call ever waits for is a
-    sleeping engine instance booting. A cold start measured 42s, so a 15s budget
-    expired before the engine could answer and the dropdown came back empty on
-    the first visit of the day.
+    It never raises and never returns an error status: the country a planner
+    picks is what keeps a five-digit postcode from being read on the wrong
+    continent, so the form has to get the list even in a degraded deployment.
     """
-    try:
-        resp = requests.get(_engine_url('/ftth/hld/countries'), timeout=60)
-        if resp.status_code == 200:
-            countries = list(resp.json().get('countries') or [])
-            if not countries:
-                logger.warning('Engine returned no country list (status 200)')
-            return countries
-        logger.warning(
-            'Engine answered countries with %s: %s', resp.status_code, _engine_detail(resp)
+    options = country_options()
+    if not options:
+        logger.error(
+            'Country data file is empty or missing — the area dropdown will be '
+            'empty; check ftth_hld/data/countries.json in the image.'
         )
-    except requests.RequestException as exc:
-        logger.warning('Engine unreachable for countries: %s', exc)
-    return []
+    return options
 
 
 def suggest_places(q: str, country: str = '', limit: int = 8) -> dict:
