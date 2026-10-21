@@ -1147,6 +1147,16 @@ class LldChangeActionView(APIView):
                 str(sf.id),
                 {'comment': comment},
             )
+            # Tell the engineer who made the edit — that is the person who has
+            # to act on a rejection or a correction request.
+            try:
+                from notifications import service as notify
+
+                notify.survey_change_decided(
+                    sf, decision=decision_value, actor=request.user, comment=comment
+                )
+            except Exception:  # noqa: BLE001 — the decision is already recorded
+                logger.exception('Could not notify engineer of decision on %s', sf.id)
 
         # Survey-stage permit hooks (fire-and-forget — never allowed to
         # break the review flow):
@@ -1310,6 +1320,17 @@ class LldApprovedVersionView(APIView):
             created_by=request.user if request.user.is_authenticated else None,
         )
         _record_event(copy, 'survey', 'approved_survey_created', request.user, asv.version)
+        try:
+            from notifications import service as notify
+
+            notify.approved_survey_ready(
+                project_id=project_id,
+                project_name=ftth.name or '',
+                version=asv.version,
+                actor=request.user,
+            )
+        except Exception:  # noqa: BLE001 — the version is already frozen
+            logger.exception('Could not notify planners of %s for %s', asv.version, project_id)
         return JsonResponse(
             {
                 'approved_survey_version': asv.version,
@@ -1317,6 +1338,24 @@ class LldApprovedVersionView(APIView):
                 'features': dataset,
             }
         )
+
+
+def _notify_run_finished(run, *, ok: bool, error: str = '') -> None:
+    """Tell the planners how a background LLD run ended.
+
+    Runs inside the worker thread after the run row has been saved, so it must
+    never raise: an inbox failure cannot be allowed to mark a completed run as
+    crashed.
+    """
+    try:
+        from django.db import close_old_connections
+
+        from notifications import service as notify
+
+        close_old_connections()
+        notify.lld_run_finished(run, ok=ok, error=error)
+    except Exception:  # noqa: BLE001 — notification is best-effort
+        logger.exception('Could not notify planners about LLD run %s', getattr(run, 'pk', '?') )
 
 
 def _run_lld_job(project_id: str, run_id, submit: bool = True) -> None:
@@ -1484,17 +1523,20 @@ def _run_lld_job(project_id: str, run_id, submit: bool = True) -> None:
                     logger.warning(
                         'Permit package auto-generation failed for %s: %s', project_id, exc
                     )
+                _notify_run_finished(run, ok=True)
                 return
             if engine_status == 'failed':
                 run.status = LldRun.STATUS_FAILED
                 run.error_message = status.get('error') or 'LLD engine failed'
                 run.save()
+                _notify_run_finished(run, ok=False, error=run.error_message)
                 return
             time.sleep(1)
 
         run.status = LldRun.STATUS_FAILED
         run.error_message = 'LLD run timed out'
         run.save()
+        _notify_run_finished(run, ok=False, error=run.error_message)
     except Exception as exc:
         try:
             import traceback
@@ -1504,6 +1546,7 @@ def _run_lld_job(project_id: str, run_id, submit: bool = True) -> None:
             run.save(update_fields=['status', 'error_message'])
         except Exception:
             pass
+        _notify_run_finished(run, ok=False, error=str(exc))
     finally:
         close_old_connections()
 

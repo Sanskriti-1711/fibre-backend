@@ -19,6 +19,7 @@ urlpatterns = [
     path('api/', include('ftth_lld.urls')),
     path('api/', include('permits.urls')),
     path('api/survey/', include('survey.urls')),
+    path('api/', include('notifications.urls')),
 ]
 
 # Serve media files in development

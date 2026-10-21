@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'ftth_lld',
     'permits',
     'survey',
+    'notifications',
 ]
 
 MIDDLEWARE = [

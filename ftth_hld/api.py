@@ -1451,4 +1451,20 @@ class FtthProjectAssignView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
+        # Tell the engineers.  The assignment is already committed, so this is
+        # deliberately fire-and-forget: an inbox problem must not turn a
+        # successful assignment into an error the planner has to retry.
+        try:
+            from notifications import service as notify
+
+            notify.survey_assigned(
+                [eng['id'] for eng in result.get('engineers', [])],
+                project_id=result.get('survey_project_id') or project_id,
+                project_name=result.get('survey_project_name') or result.get('hl_name') or '',
+                feature_count=result.get('features_created'),
+                actor=request.user,
+            )
+        except Exception:  # noqa: BLE001 — never fail the assignment
+            logger.exception('Could not notify assigned engineers for %s', project_id)
+
         return JsonResponse(result, status=status.HTTP_201_CREATED)

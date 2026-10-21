@@ -246,6 +246,17 @@ class ProjectSubmitAPIView(APIView):
                 {'detail': f'Submit failed: {exc}'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
+        # The survey has left the field: put it in front of the planners.
+        try:
+            from notifications import service as notify
+
+            notify.survey_package_submitted(
+                str(result.get('source_ftth_project_id') or project_id),
+                project_name=result.get('name') or '',
+                actor=request.user,
+            )
+        except Exception:  # noqa: BLE001 — the submit already succeeded
+            pass
         return Response(result)
 
 
@@ -279,4 +290,28 @@ class ProjectReviewAPIView(APIView):
                 {'detail': f'Review failed: {exc}'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
+        # Engineers only need to hear about the decisions that change what they
+        # do next: a send-back is work, an accept or a close-out is closure.
+        action = str(result.get('action') or '').lower()
+        if action in ('redo', 'accept', 'complete'):
+            try:
+                from assignments.models import AssignmentJob
+                from notifications import service as notify
+
+                assignees = list(
+                    AssignmentJob.objects.filter(
+                        project_id=project_id,
+                        scope=AssignmentJob.SCOPE_PROJECT,
+                    ).values_list('assignee_id', flat=True)
+                )
+                notify.survey_package_decided(
+                    assignees,
+                    # The engineer opens the survey copy, not the HLD project.
+                    project_id=str(result.get('project_id') or project_id),
+                    project_name=result.get('name') or '',
+                    action=action,
+                    actor=request.user,
+                )
+            except Exception:  # noqa: BLE001 — the review already succeeded
+                pass
         return Response(result)

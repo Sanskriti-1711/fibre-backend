@@ -799,7 +799,21 @@ class SurveyFeatureUpsertAPIView(APIView):
                             # Re-edit after a decision -> re-enter the approval queue
                             extra['survey_status'] = SurveyFeature.SurveyStatus.MODIFIED
                     extra['sync_status'] = SurveyFeature.SyncState.PENDING
-            serializer.save(engineer=engineer, **extra)
+            saved = serializer.save(engineer=engineer, **extra)
+            # A field edit that needs a decision belongs in the planner's bell.
+            # Resolved states (approved / rejected / completed) are not news —
+            # they are the outcome of a review this bell already announced.
+            if saved.survey_status in (
+                SurveyFeature.SurveyStatus.NEW,
+                SurveyFeature.SurveyStatus.MODIFIED,
+                SurveyFeature.SurveyStatus.PENDING_REVIEW,
+            ):
+                try:
+                    from notifications import service as notify
+
+                    notify.survey_change_submitted(saved, actor=engineer)
+                except Exception:  # noqa: BLE001 — the edit is already saved
+                    pass
             _persist_survey_domain_data(engineer, request.data, hld_feature_id)
             if sf:
                 # Engineer edited after submission -> reopen the survey so they
