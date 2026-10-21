@@ -203,19 +203,41 @@ class RunPipelineView(APIView):
 # ======================================================================
 
 
+def _polygon_field(data):
+    """The section drawn on the map, if the client sent one.
+
+    It arrives as a nested object on a JSON body and as a JSON string on a
+    multipart one (the brownfield upload path), so both are accepted here and
+    forwarded as an object.  Nothing is validated here: the engine owns what a
+    usable polygon is, and two validators would eventually disagree.
+    """
+    raw = data.get('polygon')
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return None
+    return raw if isinstance(raw, dict) else None
+
+
 def _area_inputs(data) -> dict:
     """Structured area fields from a request body, empties dropped.
 
     Accepts the structured form (country / city / postcode / area_name) and the
     older single ``area`` label.  Nothing is joined here: the engine owns the
     composition, so there is one implementation of how the parts become a
-    search string.
+    search string.  A drawn ``polygon`` rides along untouched.
     """
     fields = {}
     for key in ('country', 'city', 'postcode', 'area_name', 'area'):
         value = str(data.get(key) or '').strip()
         if value:
             fields[key] = value
+    polygon = _polygon_field(data)
+    if polygon:
+        fields['polygon'] = polygon
     return fields
 
 
@@ -263,6 +285,7 @@ class ResolveAreaView(APIView):
                 city=fields.get('city', ''),
                 postcode=fields.get('postcode', ''),
                 area_name=fields.get('area_name', ''),
+                polygon=fields.get('polygon'),
             )
         except EngineError as exc:
             return JsonResponse({'detail': exc.detail}, status=exc.status_code)
@@ -296,6 +319,7 @@ class InputLayerView(APIView):
                     city=fields.get('city', ''),
                     postcode=fields.get('postcode', ''),
                     area_name=fields.get('area_name', ''),
+                    polygon=fields.get('polygon'),
                 )
             )
         except EngineError as exc:
@@ -389,6 +413,7 @@ class RunFromAreaView(APIView):
                 postcode=fields.get('postcode', ''),
                 area_name=fields.get('area_name', ''),
                 brownfield_path=str(brownfield_path) if brownfield_path else None,
+                polygon=fields.get('polygon'),
             )
         except EngineError as exc:
             # The row was already created, so mark it failed rather than leaving

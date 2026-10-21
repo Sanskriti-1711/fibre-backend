@@ -211,7 +211,8 @@ def _engine_detail(resp) -> str:
 
 
 def _area_payload(
-    area: str = '', country: str = '', city: str = '', postcode: str = '', area_name: str = ''
+    area: str = '', country: str = '', city: str = '', postcode: str = '', area_name: str = '',
+    polygon=None,
 ) -> dict:
     """Structured area inputs for the engine, with the empty parts omitted.
 
@@ -230,6 +231,10 @@ def _area_payload(
         text = str(value or '').strip()
         if text:
             payload[key] = text
+    if polygon:
+        # A section drawn on the map, forwarded as an object; the multipart
+        # path stringifies it in the one place that needs a flat form.
+        payload['polygon'] = polygon
     return payload
 
 
@@ -242,6 +247,7 @@ def resolve_area(
     city: str = '',
     postcode: str = '',
     area_name: str = '',
+    polygon=None,
 ) -> dict:
     """Area -> boundary, and (unless ``boundary_only``) its premise counts.
 
@@ -265,7 +271,7 @@ def resolve_area(
     """
     if timeout is None:
         timeout = int(os.environ.get('FTTH_RESOLVE_TIMEOUT', '1200'))
-    payload: dict = _area_payload(area, country, city, postcode, area_name)
+    payload: dict = _area_payload(area, country, city, postcode, area_name, polygon)
     payload['boundary_only'] = bool(boundary_only)
     if max_premises:
         payload['max_premises'] = int(max_premises)
@@ -308,6 +314,7 @@ def get_input_layer(
     city: str = '',
     postcode: str = '',
     area_name: str = '',
+    polygon=None,
 ) -> dict:
     """Fetch one complete OSM/HLD input layer for the pre-run review map.
 
@@ -317,7 +324,7 @@ def get_input_layer(
     in-flight download rather than starting their own, so the wait is the one
     the area actually needs — up to the same 20 minutes the preview allows.
     """
-    payload = _area_payload(area, country, city, postcode, area_name)
+    payload = _area_payload(area, country, city, postcode, area_name, polygon)
     payload['layer'] = layer
     try:
         resp = requests.post(
@@ -344,6 +351,7 @@ def run_from_area(
     postcode: str = '',
     area_name: str = '',
     brownfield_path: str | None = None,
+    polygon=None,
 ) -> dict:
     """Start a full HLD run from an area.
 
@@ -358,7 +366,7 @@ def run_from_area(
     request becomes multipart (the area fields travel as form fields);
     otherwise it stays JSON, so an existing JSON client is untouched.
     """
-    payload: dict = _area_payload(area, country, city, postcode, area_name)
+    payload: dict = _area_payload(area, country, city, postcode, area_name, polygon)
     payload['project_id'] = project_id
     payload['poly_method'] = int(poly_method)
     if name:
@@ -373,9 +381,14 @@ def run_from_area(
                         'application/octet-stream',
                     )
                 }
+                # Every multipart field is a string, so the polygon travels as
+                # JSON text; the engine reads either form.
+                form = dict(payload)
+                if form.get('polygon'):
+                    form['polygon'] = json.dumps(form['polygon'])
                 resp = requests.post(
                     _engine_url('/ftth/hld/run-from-area'),
-                    data=payload,
+                    data=form,
                     files=files,
                     timeout=120,
                 )
