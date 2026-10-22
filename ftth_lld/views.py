@@ -1761,9 +1761,63 @@ class LldVersionsDiffView(APIView):
 
 
 class LldRunStatusView(APIView):
-    """GET /api/ftth/lld/projects/<pid>/runs/<lld_version>/"""
+    """GET / DELETE /api/ftth/lld/projects/<pid>/runs/<lld_version>/"""
 
     permission_classes = [IsAuthenticated]
+
+    def delete(self, request, project_id, lld_version):
+        """Remove one LLD run and its persisted layers.
+
+        The output list (``/runs/``) and the versions page read the Django
+        rows, so dropping them is what makes the run disappear; the engine's
+        copy is deliberately left alone — its container disk is ephemeral and
+        its run registry is in memory, so a restarted engine has nothing left
+        to serve for a deleted version anyway.
+
+        A running run is refused: the background poller is still writing to
+        the row, and a delete would race it into recreating the layers.
+        """
+        ftth = get_object_or_404(FtthProject, pk=project_id)
+        run = (
+            LldRun.objects.filter(ftth_project=ftth, lld_version=lld_version)
+            .order_by('-run_date')
+            .first()
+        )
+        if run is None:
+            return JsonResponse({'detail': 'LLD run not found.'}, status=404)
+        if run.status == LldRun.STATUS_RUNNING:
+            return JsonResponse(
+                {
+                    'detail': 'This LLD run is still running. '
+                    'Wait for it to finish before deleting it.'
+                },
+                status=409,
+            )
+
+        layer_count = LldLayer.objects.filter(lld_run=run).count()
+        run.delete()
+
+        # BOQ/BOM caches "the latest completed run" per project; without this
+        # the deleted run's layers would keep feeding the quantities until the
+        # cache expired.
+        try:
+            from ftth_hld.boq import clear_lld_cache
+
+            clear_lld_cache(project_id)
+        except Exception as exc:  # noqa: BLE001 - never fail the delete
+            logger.warning('LLD cache clear failed for %s: %s', project_id, exc)
+
+        _record_event(
+            _survey_copy(project_id), 'lld', 'lld_deleted', request.user, lld_version
+        )
+        return JsonResponse(
+            {
+                'deleted': True,
+                'project_id': project_id,
+                'lld_version': lld_version,
+                'layers_deleted': layer_count,
+            }
+        )
 
     def get(self, request, project_id, lld_version):
         ftth = get_object_or_404(FtthProject, pk=project_id)

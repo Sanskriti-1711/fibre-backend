@@ -24,8 +24,9 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from ftth_lld.models import ApprovedSurveyVersion, LldRun
+from ftth_lld.models import ApprovedSurveyVersion, LldLayer, LldRun
 from ftth_lld.views import _normalize_layer
+from projects.models import StageEvent
 from survey.models import ApprovalRecord, SurveyFeature
 from testutils.factories import (
     LINE,
@@ -714,6 +715,77 @@ class LldVersionsViewTests(LldApiTestCase):
         self.assertEqual(entry['layers'], [{'name': 'final_trenches', 'feature_count': 9}])
 
 
+# ======================================================================
+# DELETE /api/ftth/lld/projects/<pid>/runs/<lld_version>/  — remove an output
+# ======================================================================
+
+
+class LldRunDeleteTests(LldApiTestCase):
+    def _url(self, version, project_id=None):
+        return f'/api/ftth/lld/projects/{project_id or self.ftth.project_id}/runs/{version}/'
+
+    def test_deletes_the_run_and_its_layers(self):
+        run = make_lld_run(self.ftth, version='LLD-V01', status=LldRun.STATUS_COMPLETED)
+        make_lld_layer(run, name='final_trenches')
+        make_lld_layer(run, name='chambers')
+        kept = make_lld_run(self.ftth, version='LLD-V02', status=LldRun.STATUS_COMPLETED)
+
+        resp = self.client.delete(self._url('LLD-V01'))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['layers_deleted'], 2)
+        self.assertFalse(LldRun.objects.filter(pk=run.pk).exists())
+        self.assertFalse(LldLayer.objects.filter(lld_run_id=run.pk).exists())
+        self.assertTrue(LldRun.objects.filter(pk=kept.pk).exists())
+
+    def test_deleted_run_leaves_the_output_list(self):
+        make_lld_run(self.ftth, version='LLD-V01', status=LldRun.STATUS_COMPLETED)
+        self.client.delete(self._url('LLD-V01'))
+
+        body = self.client.get('/api/ftth/lld/runs/').json()
+
+        self.assertEqual(body['runs'], [])
+
+    def test_refuses_a_running_run(self):
+        make_lld_run(self.ftth, version='LLD-V01', status=LldRun.STATUS_RUNNING)
+
+        resp = self.client.delete(self._url('LLD-V01'))
+
+        self.assertEqual(resp.status_code, 409)
+        self.assertTrue(
+            LldRun.objects.filter(ftth_project=self.ftth, lld_version='LLD-V01').exists()
+        )
+
+    def test_unknown_version_is_404(self):
+        self.assertEqual(self.client.delete(self._url('LLD-V99')).status_code, 404)
+
+    def test_version_is_scoped_to_the_project(self):
+        other = make_ftth_project(name='Other project')
+        make_lld_run(other, version='LLD-V01', status=LldRun.STATUS_COMPLETED)
+
+        resp = self.client.delete(self._url('LLD-V01'))  # asks under self.ftth
+
+        self.assertEqual(resp.status_code, 404)
+        self.assertTrue(LldRun.objects.filter(ftth_project=other).exists())
+
+    def test_requires_authentication(self):
+        make_lld_run(self.ftth, version='LLD-V01', status=LldRun.STATUS_COMPLETED)
+
+        resp = self.anon.delete(self._url('LLD-V01'))
+
+        self.assertIn(resp.status_code, (401, 403))
+        self.assertTrue(LldRun.objects.filter(ftth_project=self.ftth).exists())
+
+    def test_records_the_deletion_on_the_project_timeline(self):
+        make_lld_run(self.ftth, version='LLD-V01', status=LldRun.STATUS_COMPLETED)
+
+        self.client.delete(self._url('LLD-V01'))
+
+        event = StageEvent.objects.get(project=self.copy, stage='lld', event='lld_deleted')
+        self.assertEqual(event.entity_id, 'LLD-V01')
+        self.assertEqual(event.actor, self.planner)
+
+
 class LldRunsViewTests(LldApiTestCase):
     def test_lists_runs_across_projects(self):
         other = make_ftth_project(name='Other run')
@@ -725,6 +797,7 @@ class LldRunsViewTests(LldApiTestCase):
         self.assertEqual(
             {r['project_id'] for r in body['runs']}, {self.ftth.project_id, other.project_id}
         )
+
 
 
 # ======================================================================
