@@ -71,7 +71,11 @@ def lld_status(project_id: str, lld_version: str) -> dict | None:
     """Poll the engine for an LLD run's status. Returns None if unreachable."""
     url = _engine_url(f'/ftth/lld/results/{project_id}/{lld_version}')
     try:
-        resp = requests.get(url, timeout=10)
+        # 30 s, not 10: the hosted free instance runs at 0.1 vCPU and a status
+        # read on a busy engine (10 k features in memory) can take longer than
+        # a local one. A timeout here is retried by the caller, but a short one
+        # turns a working run into a wall of "engine unreachable" warnings.
+        resp = requests.get(url, timeout=30)
         if resp.status_code == 200:
             return dict(resp.json())
     except requests.RequestException as exc:

@@ -1448,14 +1448,25 @@ def _run_lld_job(project_id: str, run_id, submit: bool = True) -> None:
                 engine_lld_run(project_id, run.lld_version, dataset)
 
         # 2. Poll the engine until it completes/fails (bounded). Mode B
-        #    (replan) re-runs the full QGIS design pipeline and legitimately
-        #    takes 10-40 minutes — far longer than the ~1 min Mode A verify.
-        #    Give replan runs a 60-minute budget, keep verify at 5.
-        poll_budget = 3600 if run.mode == LldRun.MODE_REPLAN else 300
+        #    (replan) re-runs the full QGIS design pipeline — measured at
+        #    ~55 minutes on the hosted free instance (0.1 vCPU) for 870
+        #    premises, and slower for a larger extent — so give it two hours;
+        #    keep verify at 15 minutes.
+        #
+        #    The budget is a wall-clock guard on THIS poller, not a verdict on
+        #    the engine: the loop still reads the engine once after the
+        #    deadline, so a run that finished while the last poll was in
+        #    flight is persisted instead of being thrown away as "timed out"
+        #    (which is what happened to LLD-V19 on 2026-10-22: the engine
+        #    reported completion at 100 % while this side wrote "failed").
+        poll_budget = 7200 if run.mode == LldRun.MODE_REPLAN else 900
         deadline = time.time() + poll_budget
-        while time.time() < deadline:
+        while True:
             status = engine_lld_status(project_id, run.lld_version)
+            past_deadline = time.time() >= deadline
             if status is None:
+                if past_deadline:
+                    break
                 time.sleep(1)
                 continue
             engine_status = status.get('status')
@@ -1553,6 +1564,8 @@ def _run_lld_job(project_id: str, run_id, submit: bool = True) -> None:
                 run.save()
                 _notify_run_finished(run, ok=False, error=run.error_message)
                 return
+            if past_deadline:
+                break
             time.sleep(1)
 
         run.status = LldRun.STATUS_FAILED
