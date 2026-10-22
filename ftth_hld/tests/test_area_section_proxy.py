@@ -27,8 +27,13 @@ from users.models import User
 SECTION = {
     'type': 'Polygon',
     'coordinates': [
-        [[-1.9250, 52.4740], [-1.9210, 52.4740], [-1.9210, 52.4770],
-         [-1.9250, 52.4770], [-1.9250, 52.4740]]
+        [
+            [-1.9250, 52.4740],
+            [-1.9210, 52.4740],
+            [-1.9210, 52.4770],
+            [-1.9250, 52.4770],
+            [-1.9250, 52.4740],
+        ]
     ],
 }
 
@@ -62,23 +67,25 @@ class AreaSectionProxyTests(TestCase):
         self.assertEqual(engine.call_args.kwargs.get('polygon'), SECTION)
 
     def test_the_run_forwards_the_drawn_section(self):
-        with mock.patch('ftth_hld.api.run_from_area',
-                        return_value={'area': 'B16 8UU', 'status': 'queued'}) as engine:
+        with mock.patch(
+            'ftth_hld.api.run_from_area', return_value={'area': 'B16 8UU', 'status': 'queued'}
+        ) as engine:
             response = self.client.post(
                 '/api/ftth/hld/run-from-area/',
                 {'area': 'B16 8UU', 'polygon': SECTION},
                 format='json',
             )
 
-        self.assertIn(response.status_code, (200, 202))   # a run is accepted
+        self.assertIn(response.status_code, (200, 202))  # a run is accepted
         self.assertEqual(engine.call_args.kwargs.get('polygon'), SECTION)
 
     def test_the_section_survives_the_multipart_path_as_json_text(self):
         """A brownfield upload makes the whole body a form: fields become strings."""
         import json
 
-        with mock.patch('ftth_hld.api.run_from_area',
-                        return_value={'area': 'B16 8UU', 'status': 'queued'}) as engine:
+        with mock.patch(
+            'ftth_hld.api.run_from_area', return_value={'area': 'B16 8UU', 'status': 'queued'}
+        ) as engine:
             response = self.client.post(
                 '/api/ftth/hld/run-from-area/',
                 {
@@ -94,8 +101,6 @@ class AreaSectionProxyTests(TestCase):
 
     def test_no_section_is_forwarded_as_none(self):
         with mock.patch('ftth_hld.api.resolve_area', return_value={'bbox': []}) as engine:
-            self.client.post(
-                '/api/ftth/hld/resolve-area/', {'area': 'B16 8UU'}, format='json'
-            )
+            self.client.post('/api/ftth/hld/resolve-area/', {'area': 'B16 8UU'}, format='json')
 
         self.assertIsNone(engine.call_args.kwargs.get('polygon'))

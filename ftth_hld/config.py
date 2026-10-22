@@ -56,6 +56,7 @@ def engine_write_headers() -> dict[str, str]:
     """Headers a mutating engine request must carry (empty when no key)."""
     return {'X-FTTH-Engine-Key': FTTH_ENGINE_API_KEY} if FTTH_ENGINE_API_KEY else {}
 
+
 # ---------------------------------------------------------------------------
 # Pipeline stages
 # Each stage has:

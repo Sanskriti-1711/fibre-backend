@@ -1377,7 +1377,7 @@ def _notify_run_finished(run, *, ok: bool, error: str = '') -> None:
         close_old_connections()
         notify.lld_run_finished(run, ok=ok, error=error)
     except Exception:  # noqa: BLE001 — notification is best-effort
-        logger.exception('Could not notify planners about LLD run %s', getattr(run, 'pk', '?') )
+        logger.exception('Could not notify planners about LLD run %s', getattr(run, 'pk', '?'))
 
 
 def _run_lld_job(project_id: str, run_id, submit: bool = True) -> None:

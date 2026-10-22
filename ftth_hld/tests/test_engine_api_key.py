@@ -21,24 +21,24 @@ class EngineApiKeyTests(unittest.TestCase):
 
     def test_a_key_becomes_the_engine_header(self):
         with patch.object(config, 'FTTH_ENGINE_API_KEY', 'shared-secret'):
-            self.assertEqual(
-                config.engine_write_headers(), {'X-FTTH-Engine-Key': 'shared-secret'}
-            )
+            self.assertEqual(config.engine_write_headers(), {'X-FTTH-Engine-Key': 'shared-secret'})
 
     def test_a_delete_carries_the_header(self):
         response = Mock(status_code=200)
         response.json.return_value = {'deleted': True}
-        with patch.object(config, 'FTTH_ENGINE_API_KEY', 'shared-secret'):
-            with patch.object(pipeline.requests, 'delete', return_value=response) as delete:
-                pipeline.delete_project('p-1')
-        self.assertEqual(
-            delete.call_args.kwargs['headers'], {'X-FTTH-Engine-Key': 'shared-secret'}
-        )
+        with (
+            patch.object(config, 'FTTH_ENGINE_API_KEY', 'shared-secret'),
+            patch.object(pipeline.requests, 'delete', return_value=response) as delete,
+        ):
+            pipeline.delete_project('p-1')
+        self.assertEqual(delete.call_args.kwargs['headers'], {'X-FTTH-Engine-Key': 'shared-secret'})
 
     def test_a_write_without_a_configured_key_sends_no_header(self):
         response = Mock(status_code=200)
         response.json.return_value = {'deleted': True}
-        with patch.object(config, 'FTTH_ENGINE_API_KEY', ''):
-            with patch.object(pipeline.requests, 'delete', return_value=response) as delete:
-                pipeline.delete_project('p-1')
+        with (
+            patch.object(config, 'FTTH_ENGINE_API_KEY', ''),
+            patch.object(pipeline.requests, 'delete', return_value=response) as delete,
+        ):
+            pipeline.delete_project('p-1')
         self.assertEqual(delete.call_args.kwargs['headers'], {})

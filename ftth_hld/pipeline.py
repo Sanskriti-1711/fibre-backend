@@ -214,7 +214,11 @@ def _engine_detail(resp) -> str:
 
 
 def _area_payload(
-    area: str = '', country: str = '', city: str = '', postcode: str = '', area_name: str = '',
+    area: str = '',
+    country: str = '',
+    city: str = '',
+    postcode: str = '',
+    area_name: str = '',
     polygon=None,
 ) -> dict:
     """Structured area inputs for the engine, with the empty parts omitted.

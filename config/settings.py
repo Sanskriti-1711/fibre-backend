@@ -39,10 +39,11 @@ _ALLOWED_HOSTS_ENV = os.getenv('DJANGO_ALLOWED_HOSTS', '').strip()
 if _ALLOWED_HOSTS_ENV:
     ALLOWED_HOSTS = [h.strip() for h in _ALLOWED_HOSTS_ENV.split(',') if h.strip()]
     if not DEBUG and '*' in ALLOWED_HOSTS:
-        raise ImproperlyConfigured(
+        wildcard_refused = (
             'DJANGO_ALLOWED_HOSTS must list the real hostname(s) when DJANGO_DEBUG '
             'is off — "*" turns Host-header validation off.'
         )
+        raise ImproperlyConfigured(wildcard_refused)
 else:
     ALLOWED_HOSTS = (
         ['localhost', '127.0.0.1', '[::1]', 'testserver']
