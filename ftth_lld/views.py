@@ -86,6 +86,13 @@ _RESOLVED_STATUSES = [
     # flips it back to MODIFIED / pending_review) and the reviewer approves.
 ]
 
+# Properties the approved dataset owns. A field-created survey feature now
+# carries the attributes the surveyor recorded, but it must never be able to
+# forge the engine's own bookkeeping keys.
+_RESERVED_APPROVED_PROPS = frozenset(
+    {'feature_id', 'layer', 'approved', 'change_id', 'original_geometry'}
+)
+
 
 def _survey_copy(ftth_project_id):
     """The survey copy Project linked to an HLD run, or None."""
@@ -428,15 +435,30 @@ def _approved_feature_collection(survey_copy):
                     keep[key]['properties'][a['field']] = a['survey_value']
         else:
             if sf.survey_geometry:
-                keep[str(sf.id)] = {
-                    'type': 'Feature',
-                    'geometry': sf.survey_geometry,
-                    'properties': {
+                # A field-created feature keeps the attributes the surveyor
+                # recorded. Without them the LLD receives a bare line/point:
+                # a new drop duct would arrive with no ADDR_ID (so the served
+                # premises register cannot attribute it to the building) and no
+                # DUCT_TYPE/WAYS/DIAMETER_MM (so the BOQ has nothing to take
+                # off, and the duct layer loses the schema its own auto-created
+                # ducts carry). Reserved keys stay the dataset's.
+                props = {
+                    str(k): v
+                    for k, v in (sf.survey_attributes or {}).items()
+                    if str(k) not in _RESERVED_APPROVED_PROPS
+                }
+                props.update(
+                    {
                         'feature_id': str(sf.id),
                         'layer': _normalize_layer(sf.layer_name or sf.layer_id or 'unknown'),
                         'approved': True,
                         'change_id': str(sf.id),
-                    },
+                    }
+                )
+                keep[str(sf.id)] = {
+                    'type': 'Feature',
+                    'geometry': sf.survey_geometry,
+                    'properties': props,
                 }
     return _fc(list(keep.values()))
 

@@ -433,6 +433,46 @@ class LldApprovedVersionViewTests(LldApiTestCase):
         self.assertEqual(asv.version, 'AS-V01')
         self.assertEqual(asv.created_by, self.planner)
 
+    def test_new_feature_keeps_its_surveyed_attributes(self):
+        """A field-created feature reaches the LLD with its attributes.
+
+        A new drop duct without ADDR_ID cannot be attributed to a premise by
+        the served-premises register, and without DUCT_TYPE/WAYS the BOQ has
+        nothing to take off — the duct layer would also lose the schema its
+        own auto-created ducts carry. The dataset's own keys stay authoritative.
+        """
+        sf = SurveyFeature.objects.create(
+            project=self.copy,
+            engineer=self.engineer,
+            layer_id='imp-drop_ducts',
+            layer_name='drop_ducts (Imported)',
+            survey_geometry=OTHER_LINE,
+            survey_attributes={
+                'ADDR_ID': 'OSM-W86615259-C',
+                'DUCT_TYPE': '1-Way HDPE',
+                'DIAMETER_MM': 32,
+                # Cannot be forged by the survey record:
+                'approved': False,
+                'change_id': 'forged',
+                'layer': 'feeder_cable',
+            },
+            survey_status=SurveyFeature.SurveyStatus.APPROVED,
+        )
+
+        body = self._create().json()
+        feature = next(
+            f
+            for f in body['features']['features']
+            if f['properties'].get('change_id') == str(sf.id)
+        )
+        props = feature['properties']
+        self.assertEqual(props['ADDR_ID'], 'OSM-W86615259-C')
+        self.assertEqual(props['DUCT_TYPE'], '1-Way HDPE')
+        self.assertEqual(props['DIAMETER_MM'], 32)
+        self.assertEqual(props['layer'], 'drop_ducts')
+        self.assertIs(props['approved'], True)
+        self.assertEqual(props['change_id'], str(sf.id))
+
     def test_repeating_creation_returns_the_frozen_version_unchanged(self):
         make_survey_feature(self.copy, self.engineer, status=SurveyFeature.SurveyStatus.APPROVED)
         first = self._create().json()
