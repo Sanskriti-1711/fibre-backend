@@ -1075,11 +1075,24 @@ def _fallback_name(code: str) -> str:
 
 
 def totals_for(rows: list[dict]) -> dict:
+    """Sum rows per section and overall.
+
+    BOQ rows carry a single ``amount``; BOM rows carry only the material split
+    (``material_total``, plus labour/rent when a caller adds them), so summing
+    ``amount`` alone left every BOM total at 0.0 even when the rows were
+    priced. Fall back to the split columns when ``amount`` is absent.
+    """
     per_section: dict[str, float] = {}
     grand = 0.0
     for r in rows:
         try:
-            amt = float(r.get('amount') or 0.0)
+            if r.get('amount') is not None:
+                amt = float(r.get('amount') or 0.0)
+            else:
+                amt = sum(
+                    float(r.get(key) or 0.0)
+                    for key in ('material_total', 'labour_total', 'rent_total')
+                )
         except (TypeError, ValueError):
             amt = 0.0
         sect = str(r.get('section', '')).strip() or 'Other'

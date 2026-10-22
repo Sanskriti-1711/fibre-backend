@@ -141,3 +141,24 @@ class SumOpenCutBySurfaceTests(SimpleTestCase):
     def test_reused_features_are_excluded(self):
         got = _sum([_feat('Open Cut', 'Asphalt', 100.0, infra='Existing')])
         self.assertEqual(got, {})
+
+
+class TotalsForTests(SimpleTestCase):
+    def test_bom_rows_are_summed_from_their_material_split(self):
+        """BOM rows carry material_total, not amount — they must still total.
+
+        Every BOM total read 0.0 while the rows were priced (material_total
+        26,657.21 on the feeder duct), because totals_for only read `amount`.
+        """
+        rows = [
+            {'section': 'Ducts', 'material_total': 26657.21},
+            {'section': 'Ducts', 'material_total': 118422.40},
+            {'section': 'Cables', 'material_total': 0.0},
+        ]
+        totals = boq.totals_for(rows)
+        self.assertEqual(totals['grand_total'], 145079.61)
+        self.assertEqual(totals['per_section']['Ducts'], 145079.61)
+
+    def test_boq_rows_keep_using_amount(self):
+        rows = [{'section': 'SUMMARY', 'amount': 100.0}, {'section': 'SUMMARY', 'amount': 50.5}]
+        self.assertEqual(boq.totals_for(rows)['grand_total'], 150.5)
