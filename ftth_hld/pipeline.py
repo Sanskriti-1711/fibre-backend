@@ -114,6 +114,7 @@ def run_pipeline(
     Returns the JSON response from the engine (which includes
     ``project_id``, ``status``, etc.).
     """
+    ensure_engine_awake('the design run')
     url = _engine_url('/ftth/hld/run')
 
     with (
@@ -213,6 +214,130 @@ def _engine_detail(resp) -> str:
     return str(body)
 
 
+# ---------------------------------------------------------------------------
+# Waking a sleeping engine
+# ---------------------------------------------------------------------------
+# Render stops a free web service after 15 minutes without traffic, so the
+# engine is usually asleep when a planner comes back to the page.  The first
+# engine call of that visit meets the platform's edge, which answers 502 for as
+# long as the boot takes (42 s was measured for this backend; the engine is
+# slower because its image carries QGIS) — and the call sites below read that
+# as "Engine unreachable", so a boot that a reload would have survived was
+# reported as an outage.
+#
+# The wait is spent BEFORE the call rather than on it.  A boot is not a slow
+# answer: a call that follows a successful probe is the one the planner asked
+# for, and it is not holding a gunicorn thread (and a 20-minute download
+# budget) while the engine is still unpacking its image.  The shape is the
+# engine's own wait for the QGIS worker (main.py, `_worker_wake`): a /health
+# probe, doubling backoff, one budget.
+#
+# Probing is affordable because the engine's /health answers from memory
+# (`_health_body(live=False)` in main.py): it does not gather PostGIS info or
+# OSM status, so a probe every few seconds costs no more than a ping.
+ENGINE_HEALTH_PATH = '/health'
+
+# A budget for a cold start, not for a dead engine.  240 s covers a 42 s boot
+# with room to spare and still fits inside the gunicorn worker's patience
+# (Dockerfile: --timeout 1300) and the platform's own request ceiling.
+ENGINE_WAKE_BUDGET_S = 240.0
+ENGINE_WAKE_RETRY_S = 5.0
+ENGINE_WAKE_MAX_RETRY_S = 30.0
+ENGINE_WAKE_PROBE_TIMEOUT_S = 10.0
+# A 200 is trusted for this long: one page load fires several engine calls, and
+# probing once per call would put a round trip in front of every one of them.
+ENGINE_READY_S = 60.0
+
+# Shared by every request this process serves (gunicorn threads share module
+# state), which is exactly the point of the trust window.
+_engine_ready_until = 0.0
+
+
+def _wake_seconds(name: str, default: float) -> float:
+    """A wake setting from the environment, falling back to the module default.
+
+    Read per call, like every other budget in this module, so a deployment can
+    change the wait without a code change and a test can set it to 0.
+    """
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _engine_probe(timeout: float) -> bool:
+    """One cheap liveness probe: is the engine answering yet?"""
+    try:
+        resp = requests.get(
+            _engine_url(ENGINE_HEALTH_PATH),
+            timeout=(min(timeout, 5.0), timeout),
+        )
+    except requests.RequestException as exc:
+        logger.info('Engine health probe failed: %s', exc)
+        return False
+    return resp.status_code == 200
+
+
+def _engine_starting_reply(budget: float) -> str:
+    """The reply for an engine that was still booting when the budget ran out.
+
+    Not "unreachable": the service exists and is coming up.  What the planner
+    needs to know is that this is a wake-up, that nothing was lost, and that
+    trying again shortly is the fix.
+    """
+    return (
+        f'The engine was still starting up after {int(budget)} seconds. It is a free instance '
+        'that sleeps when it has been idle, so the first request after a quiet spell has to '
+        'wait for it to boot. Nothing was submitted and nothing was lost \u2014 try again in a '
+        'minute; a boot usually finishes well inside two.'
+    )
+
+
+def ensure_engine_awake(purpose: str = 'this request') -> None:
+    """Wait for a sleeping engine to finish booting before spending a call on it.
+
+    Returns as soon as the engine answers its /health probe, and immediately
+    when a probe succeeded recently.  Raises ``EngineError(503)`` naming the
+    boot when the budget runs out, and does nothing at all when the budget is
+    configured as 0 (an air-gapped deployment, or a test that is about the
+    call and not the wake).
+    """
+    global _engine_ready_until
+    budget = _wake_seconds('FTTH_ENGINE_WAKE', ENGINE_WAKE_BUDGET_S)
+    if budget <= 0:
+        return
+    if time.monotonic() < _engine_ready_until:
+        return
+
+    probe_timeout = _wake_seconds('FTTH_ENGINE_PROBE_TIMEOUT', ENGINE_WAKE_PROBE_TIMEOUT_S)
+    ready_for = _wake_seconds('FTTH_ENGINE_READY', ENGINE_READY_S)
+    if _engine_probe(probe_timeout):
+        _engine_ready_until = time.monotonic() + ready_for
+        return
+
+    # The probe is the wake: on Render, hitting the service is what starts it.
+    # Back off so a boot (or an edge rate limit) is not met with a burst.
+    delay = max(0.5, _wake_seconds('FTTH_ENGINE_WAKE_RETRY', ENGINE_WAKE_RETRY_S))
+    max_delay = max(delay, _wake_seconds('FTTH_ENGINE_WAKE_MAX_RETRY', ENGINE_WAKE_MAX_RETRY_S))
+    logger.warning('Engine is not awake; waiting up to %ss for %s', int(budget), purpose)
+    waited = 0.0
+    while waited < budget:
+        pause = min(delay, budget - waited)
+        time.sleep(pause)
+        waited += pause
+        if _engine_probe(probe_timeout):
+            _engine_ready_until = time.monotonic() + ready_for
+            logger.info(
+                'Engine awake after %ss (budget %ss); serving %s',
+                int(waited),
+                int(budget),
+                purpose,
+            )
+            return
+        delay = min(delay * 2, max_delay)
+    raise EngineError(503, _engine_starting_reply(budget))
+
+
 def _area_payload(
     area: str = '',
     country: str = '',
@@ -276,6 +401,7 @@ def resolve_area(
     download that outlives this is no longer abandoned — the engine keeps it —
     so the reply says so and names the cache, which is what the next reload gets.
     """
+    ensure_engine_awake('the area preview')
     if timeout is None:
         timeout = int(os.environ.get('FTTH_RESOLVE_TIMEOUT', '1200'))
     payload: dict = _area_payload(area, country, city, postcode, area_name, polygon)
@@ -336,6 +462,7 @@ def get_input_layer(
     in-flight download rather than starting their own, so the wait is the one
     the area actually needs — up to the same 20 minutes the preview allows.
     """
+    ensure_engine_awake(f'the {layer} layer')
     payload = _area_payload(area, country, city, postcode, area_name, polygon)
     payload['layer'] = layer
     try:
@@ -379,6 +506,7 @@ def run_from_area(
     request becomes multipart (the area fields travel as form fields);
     otherwise it stays JSON, so an existing JSON client is untouched.
     """
+    ensure_engine_awake('the design run')
     payload: dict = _area_payload(area, country, city, postcode, area_name, polygon)
     payload['project_id'] = project_id
     payload['poly_method'] = int(poly_method)

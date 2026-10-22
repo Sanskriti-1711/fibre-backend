@@ -117,6 +117,7 @@ Environment variables (Render → Environment):
 | `FTTH_ENGINE_API_KEY` | same value as on the engine | Shared key the engine requires on every mutating route (`X-FTTH-Engine-Key`). Set it on both services; with it missing the engine refuses writes with 503 instead of staying open. |
 | `PGDATABASE` / `PGUSER` / `PGPASSWORD` / `PGHOST` / `PGPORT` | the Zeabur database | Must match what the engine writes to. See section 1. `PGPASSWORD` has **no committed fallback** — without it the container cannot connect. |
 | `FTTH_ENGINE_URL` | `https://ftth-planning.onrender.com` | Keeps HLD/LLD working on the existing engine. |
+| `FTTH_ENGINE_WAKE` | `240` (default) | Seconds this backend waits for a sleeping engine to boot before making the call. `0` disables the wait. See "A sleeping engine is waited out" below. |
 | `EXTRA_CORS_ORIGINS` | the deployed frontend origin | e.g. `https://fe.example.com`. Comma-separated for several. |
 | `EXTRA_CSRF_TRUSTED_ORIGINS` | same origin | Required for admin/login POSTs. |
 | `DJANGO_DEBUG` / `CORS_ALLOW_ALL_ORIGINS` | leave unset | Falls back to existing behaviour. |
@@ -124,6 +125,21 @@ Environment variables (Render → Environment):
 Do **not** set `FTTH_DB` — leaving it unset selects the production branch of
 `config/settings.py`, which reads every connection detail from the variables
 above.
+
+### A sleeping engine is waited out, not reported as a 502
+
+The engine is a free service, so it stops after 15 minutes without traffic and
+the platform's edge answers **502** until it has booted. Every HLD call used to
+read that as "Engine unreachable" — an outage a reload would have fixed.
+`ftth_hld.pipeline.ensure_engine_awake()` now probes the engine's `/health`
+(which answers from memory, so probing is cheap), waits the boot out with a
+doubling backoff inside `FTTH_ENGINE_WAKE` seconds, and sends the real request
+only once the engine answers. A successful probe is trusted for 60 s
+(`FTTH_ENGINE_READY`): one page load fires several engine calls and must not pay
+a round trip for each. When the budget runs out the reply is a **503** saying
+the engine is starting and to try again — nothing is sent to an engine that was
+not up. Keep the budget under the platform's own request ceiling; 240 s covers a
+42 s boot with room to spare.
 
 ### No credential fallback, and a bounded database connect
 

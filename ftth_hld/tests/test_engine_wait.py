@@ -23,8 +23,15 @@ from ftth_hld import pipeline
 
 
 def _no_timeout_env():
-    """The defaults only mean anything with the override unset."""
+    """The defaults only mean anything with the override unset.
+
+    ``FTTH_ENGINE_WAKE=0`` keeps these tests offline: what is asserted here is
+    the call's own timeout, and a wake probe in front of it would otherwise
+    reach the real engine URL.  The wake has its own tests
+    (``test_engine_awake``).
+    """
     env = {k: v for k, v in os.environ.items() if not k.startswith('FTTH_')}
+    env['FTTH_ENGINE_WAKE'] = '0'
     return mock.patch.dict(os.environ, env, clear=True)
 
 
@@ -100,7 +107,9 @@ class WaitBudgetTests(SimpleTestCase):
 
     def test_the_budget_can_still_be_raised_by_environment(self):
         with (
-            mock.patch.dict(os.environ, {'FTTH_RESOLVE_TIMEOUT': '1800'}),
+            mock.patch.dict(
+                os.environ, {'FTTH_RESOLVE_TIMEOUT': '1800', 'FTTH_ENGINE_WAKE': '0'}
+            ),
             mock.patch.object(
                 pipeline.requests,
                 'post',
