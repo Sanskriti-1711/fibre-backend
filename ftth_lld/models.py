@@ -103,6 +103,16 @@ class LldRun(models.Model):
     progress = models.IntegerField(default=0)
     validation = models.JSONField(default=dict)
 
+    # Poller ownership. The poller that drives a run lives on a daemon thread
+    # inside a gunicorn worker, and a worker recycle kills it silently while
+    # the engine keeps designing. These two fields make ownership a fact the
+    # database knows: ``poller_token`` names the thread that owns the run and
+    # ``poller_heartbeat`` is refreshed while it is alive, so another process
+    # can tell a working poller from a dead one and reattach without ever
+    # re-submitting a run that is already in flight (see ``poller.py``).
+    poller_token = models.CharField(max_length=32, blank=True, default='')
+    poller_heartbeat = models.DateTimeField(null=True, blank=True)
+
     run_by = models.ForeignKey(
         'users.User',
         null=True,

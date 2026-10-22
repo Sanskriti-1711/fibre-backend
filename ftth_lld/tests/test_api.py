@@ -24,8 +24,9 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+import ftth_lld.poller as poller
 from ftth_lld.models import ApprovedSurveyVersion, LldLayer, LldRun
-from ftth_lld.views import _normalize_layer
+from ftth_lld.views import _normalize_layer, _run_lld_job
 from projects.models import StageEvent
 from survey.models import ApprovalRecord, SurveyFeature
 from testutils.factories import (
@@ -605,6 +606,110 @@ class LldRunViewTests(LldApiTestCase):
 
         self.assertEqual(response.json()['lld_version'], 'LLD-V04')
         self.assertEqual(response.json()['mode'], LldRun.MODE_REPLAN)
+
+
+# ======================================================================
+# Poller durability
+# ======================================================================
+
+
+class LldRunPollerTests(LldApiTestCase):
+    """A run must finish even when the worker that polls it is recycled.
+
+    A poller is a daemon thread inside a gunicorn worker, and the hosted free
+    instance recycles its workers every 30-70 minutes. LLD-V20 lost its poller
+    at 20:39 while the engine kept designing until 20:53: the run row stayed
+    ``running``, its layers were never persisted and no BOQ was regenerated.
+    Ownership therefore lives in the database (``poller.py``) and a sweeper
+    reattaches without re-submitting the in-flight engine task.
+    """
+
+    def setUp(self):
+        super().setUp()
+        poller._starts.clear()
+
+    def _start_run(self):
+        make_asv(self.ftth)
+        make_survey_feature(self.copy, self.engineer, status=SurveyFeature.SurveyStatus.APPROVED)
+        with mock.patch('ftth_lld.views.threading.Thread') as thread:
+            response = self.client.post(
+                f'/api/ftth/lld/projects/{self.ftth.project_id}/runs/',
+                {'mode': LldRun.MODE_REPLAN},
+                format='json',
+            )
+        self.assertEqual(response.status_code, 200)
+        return LldRun.objects.get(), thread
+
+    def _orphan(self, run):
+        LldRun.objects.filter(pk=run.pk).update(
+            poller_token='dead-poller',
+            poller_heartbeat=timezone.now() - timedelta(seconds=poller.STALE_SECONDS + 60),
+        )
+
+    def test_a_new_run_is_born_owned_so_no_sweep_can_race_its_thread(self):
+        run, thread = self._start_run()
+        self.assertTrue(run.poller_token)
+        self.assertIsNotNone(run.poller_heartbeat)
+        # The thread is handed the same token, so it claims the run without a
+        # takeover in the seconds before its first heartbeat.
+        self.assertEqual(thread.call_args.kwargs['kwargs']['token'], run.poller_token)
+
+    def test_a_live_poller_keeps_the_run(self):
+        run, _ = self._start_run()
+        owner = run.poller_token
+        self.assertTrue(poller.claim_poller(run.pk, owner))  # heartbeat refresh
+        self.assertFalse(poller.claim_poller(run.pk, poller.new_token()))
+        self.assertTrue(poller.claim_poller(run.pk, owner))
+
+    def test_a_stale_heartbeat_hands_the_run_over(self):
+        run, _ = self._start_run()
+        self._orphan(run)
+        replacement = poller.new_token()
+        self.assertTrue(poller.claim_poller(run.pk, replacement))
+        run.refresh_from_db()
+        self.assertEqual(run.poller_token, replacement)
+
+    def test_a_completed_run_is_never_reattached(self):
+        run = make_lld_run(self.ftth, status=LldRun.STATUS_COMPLETED, progress=100)
+        LldRun.objects.filter(pk=run.pk).update(
+            poller_heartbeat=timezone.now() - timedelta(hours=1)
+        )
+        self.assertFalse(poller.claim_poller(run.pk, poller.new_token()))
+        with mock.patch('ftth_lld.poller.threading.Thread') as thread:
+            self.assertEqual(poller.reattach_stale(self.ftth.project_id), 0)
+        thread.assert_not_called()
+
+    def test_an_orphaned_run_is_reattached_without_resubmitting_it(self):
+        run, _ = self._start_run()
+        self._orphan(run)
+
+        with mock.patch('ftth_lld.poller.threading.Thread') as thread:
+            self.assertEqual(poller.reattach_stale(self.ftth.project_id), 1)
+
+        thread.return_value.start.assert_called_once()
+        args = thread.call_args.kwargs['args']
+        self.assertEqual(args[0], self.ftth.project_id)
+        self.assertEqual(args[1], run.pk)
+        # submit=False: the engine task is still in flight and must not be re-sent.
+        self.assertIs(args[2], False)
+        self.assertTrue(args[3])
+
+    def test_a_second_sweep_does_not_stack_pollers(self):
+        run, _ = self._start_run()
+        self._orphan(run)
+        with mock.patch('ftth_lld.poller.threading.Thread') as thread:
+            poller.reattach_stale()
+            poller.reattach_stale()
+        self.assertEqual(thread.call_count, 1)
+
+    def test_a_non_owner_never_touches_the_run(self):
+        run, _ = self._start_run()
+        LldRun.objects.filter(pk=run.pk).update(
+            poller_token='owner', poller_heartbeat=timezone.now()
+        )
+        with mock.patch('ftth_lld.views.engine_lld_run') as submit:
+            _run_lld_job(self.ftth.project_id, run.pk, True, 'intruder')
+        submit.assert_not_called()
 
 
 # ======================================================================

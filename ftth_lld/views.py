@@ -60,6 +60,7 @@ from .engine import (
 from .engine import (
     lld_status as engine_lld_status,
 )
+from .poller import HEARTBEAT_SECONDS, claim_poller, new_token
 
 logger = logging.getLogger(__name__)
 
@@ -1380,20 +1381,32 @@ def _notify_run_finished(run, *, ok: bool, error: str = '') -> None:
         logger.exception('Could not notify planners about LLD run %s', getattr(run, 'pk', '?'))
 
 
-def _run_lld_job(project_id: str, run_id, submit: bool = True) -> None:
+def _run_lld_job(project_id: str, run_id, submit: bool = True, token: str = '') -> None:
     """Background job: submit the LLD run to the engine, poll it, and persist
     the final output layers. Runs on a daemon thread so the POST returns
     immediately and the frontend polls progress via the run status.
 
     ``submit=False`` attaches a poller to an engine task that is ALREADY
     running (e.g. after a Django restart or after the previous poller died
-    on the short verify-only deadline) without re-submitting it.
+    with its gunicorn worker) without re-submitting it.
+
+    ``token`` names this thread as the run's owner (``poller.py``). Ownership
+    is recorded in the database and refreshed as a heartbeat, so a poller that
+    dies with its worker can be replaced by another process while exactly one
+    poller writes the result.
     """
     from django.db import close_old_connections
 
     try:
         run = LldRun.objects.get(pk=run_id)
     except LldRun.DoesNotExist:
+        return
+
+    token = token or new_token()
+    # A run that is already owned by a live poller (or is no longer running)
+    # belongs to that poller: attaching a second one would duplicate the ingest.
+    if not claim_poller(run.id, token):
+        logger.info('LLD run %s/%s is owned by another poller; not attaching.', project_id, run.lld_version)
         return
 
     try:
@@ -1461,7 +1474,20 @@ def _run_lld_job(project_id: str, run_id, submit: bool = True) -> None:
         #    reported completion at 100 % while this side wrote "failed").
         poll_budget = 7200 if run.mode == LldRun.MODE_REPLAN else 900
         deadline = time.time() + poll_budget
+        last_heartbeat = time.monotonic()
         while True:
+            # Say we are alive, and find out whether we still are the owner. A
+            # sweeper hands the run to a new poller once this heartbeat stops;
+            # the old thread must then stop writing instead of racing it.
+            if time.monotonic() - last_heartbeat >= HEARTBEAT_SECONDS:
+                if not claim_poller(run.id, token):
+                    logger.warning(
+                        'LLD poller for %s/%s lost ownership; leaving the run to its new poller.',
+                        project_id,
+                        run.lld_version,
+                    )
+                    return
+                last_heartbeat = time.monotonic()
             status = engine_lld_status(project_id, run.lld_version)
             past_deadline = time.time() >= deadline
             if status is None:
@@ -1475,9 +1501,23 @@ def _run_lld_job(project_id: str, run_id, submit: bool = True) -> None:
                 run.progress = progress
                 run.save(update_fields=['progress'])
             if engine_status == 'completed':
+                # Persisting is the owner's job alone: a reattached poller may
+                # already be writing the same result.
+                if not claim_poller(run.id, token):
+                    logger.warning(
+                        'LLD poller for %s/%s lost ownership before persisting; '
+                        'leaving the result to the new poller.',
+                        project_id,
+                        run.lld_version,
+                    )
+                    return
                 layer_list = status.get('layers') or []
                 persisted = 0
                 for meta in layer_list:
+                    # Keep the heartbeat fresh: fetching fifteen layers from a
+                    # free instance can take minutes, longer than the stale
+                    # window, and a takeover mid-ingest would duplicate work.
+                    claim_poller(run.id, token)
                     name = meta.get('name')
                     if not name:
                         continue
@@ -1622,6 +1662,10 @@ class LldRunView(APIView):
             return JsonResponse({'detail': 'mode must be verify | replan'}, status=400)
 
         version = _next_version(LldRun.objects.filter(ftth_project=ftth), 'LLD')
+        # The run is born owned: its poller starts below with this token, and a
+        # sweeper must not mistake the seconds before its first heartbeat for a
+        # dead poller (see poller.py).
+        token = new_token()
         run = LldRun.objects.create(
             ftth_project=ftth,
             lld_version=version,
@@ -1633,12 +1677,15 @@ class LldRunView(APIView):
             status=LldRun.STATUS_RUNNING,
             progress=0,
             run_by=request.user if request.user.is_authenticated else None,
+            poller_token=token,
+            poller_heartbeat=timezone.now(),
         )
 
         # Orchestrate the engine asynchronously; the frontend polls progress.
         threading.Thread(
             target=_run_lld_job,
             args=(project_id, run.id),
+            kwargs={'token': token},
             daemon=True,
         ).start()
 
