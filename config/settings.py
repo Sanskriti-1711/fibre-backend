@@ -3,6 +3,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+from django.core.exceptions import ImproperlyConfigured
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -27,9 +29,26 @@ SECRET_KEY = os.getenv(
 # host that did not set it.
 DEBUG = os.getenv('DJANGO_DEBUG', 'false').lower() == 'true'
 
-# Comma-separated at deploy time. Falls back to the previous permissive "*"
-# so local development is unaffected.
-ALLOWED_HOSTS = [h.strip() for h in os.getenv('DJANGO_ALLOWED_HOSTS', '*').split(',') if h.strip()]
+# Comma-separated at deploy time. A wildcard is refused once DEBUG is off: it
+# switches Host-header validation off entirely, so a service that did set the
+# variable was still answering for every name pointed at it (found by the
+# 2026-10-22 audit). Local development needs no variable at all, and a host
+# that forgets it in production falls back to the one name this app answers on
+# instead of to "any name".
+_ALLOWED_HOSTS_ENV = os.getenv('DJANGO_ALLOWED_HOSTS', '').strip()
+if _ALLOWED_HOSTS_ENV:
+    ALLOWED_HOSTS = [h.strip() for h in _ALLOWED_HOSTS_ENV.split(',') if h.strip()]
+    if not DEBUG and '*' in ALLOWED_HOSTS:
+        raise ImproperlyConfigured(
+            'DJANGO_ALLOWED_HOSTS must list the real hostname(s) when DJANGO_DEBUG '
+            'is off — "*" turns Host-header validation off.'
+        )
+else:
+    ALLOWED_HOSTS = (
+        ['localhost', '127.0.0.1', '[::1]', 'testserver']
+        if DEBUG
+        else ['fiber-backend-wml3.onrender.com']
+    )
 
 
 # Application definition

@@ -41,6 +41,7 @@ from .config import (
     LAYER_STEM_SUBLAYER,
     SURVEY_GEOJSON_FILES,
     SURVEY_PACKAGE_FILES,
+    engine_write_headers,
 )
 
 logger = logging.getLogger(__name__)
@@ -147,7 +148,9 @@ def run_pipeline(
         if project_id:
             data['project_id'] = project_id
 
-        resp = requests.post(url, files=files, data=data, timeout=120)
+        resp = requests.post(
+            url, files=files, data=data, timeout=120, headers=engine_write_headers()
+        )
 
     if resp.status_code not in (200, 201, 202):
         detail = 'Unknown error'
@@ -276,7 +279,12 @@ def resolve_area(
     if max_premises:
         payload['max_premises'] = int(max_premises)
     try:
-        resp = requests.post(_engine_url('/ftth/hld/resolve-area'), json=payload, timeout=timeout)
+        resp = requests.post(
+            _engine_url('/ftth/hld/resolve-area'),
+            json=payload,
+            timeout=timeout,
+            headers=engine_write_headers(),
+        )
     except requests.Timeout as exc:
         raise EngineError(504, _still_downloading('area preview')) from exc
     except requests.RequestException as exc:
@@ -331,6 +339,7 @@ def get_input_layer(
             _engine_url('/ftth/hld/input-layers'),
             json=payload,
             timeout=int(os.environ.get('FTTH_INPUT_LAYER_TIMEOUT', '1200')),
+            headers=engine_write_headers(),
         )
     except requests.Timeout as exc:
         raise EngineError(504, _still_downloading(f'{layer} layer')) from exc
@@ -391,9 +400,15 @@ def run_from_area(
                     data=form,
                     files=files,
                     timeout=120,
+                    headers=engine_write_headers(),
                 )
         else:
-            resp = requests.post(_engine_url('/ftth/hld/run-from-area'), json=payload, timeout=120)
+            resp = requests.post(
+                _engine_url('/ftth/hld/run-from-area'),
+                json=payload,
+                timeout=120,
+                headers=engine_write_headers(),
+            )
     except requests.RequestException as exc:
         raise EngineError(502, f'Engine unreachable: {exc}') from exc
     if resp.status_code not in (200, 201, 202):
@@ -574,6 +589,7 @@ def run_trench_design(project_id: str, force: bool = False) -> dict | None:
             url,
             params={'force': 'true' if force else 'false'},
             timeout=60,
+            headers=engine_write_headers(),
         )
         if resp.status_code in (200, 202):
             return dict(resp.json())
@@ -820,7 +836,12 @@ def classify_surface_at_point(
     if include_imagery:
         payload['include_imagery'] = True
     try:
-        resp = requests.post(url, json=payload, timeout=SURFACE_CLASSIFY_TIMEOUT_SECONDS)
+        resp = requests.post(
+            url,
+            json=payload,
+            timeout=SURFACE_CLASSIFY_TIMEOUT_SECONDS,
+            headers=engine_write_headers(),
+        )
     except requests.RequestException as exc:
         logger.warning('Surface point classify failed for %s: %s', project_id, exc)
         raise EngineError(502, 'The engine could not complete the surface review.') from exc
@@ -849,7 +870,12 @@ def preview_surface_imagery(project_id: str, payload: dict) -> dict:
         f"/ftth/hld/results/{quote(str(project_id), safe='')}" "/surface-ai-review/imagery"
     )
     try:
-        resp = requests.post(url, json=payload, timeout=SURFACE_IMAGERY_TIMEOUT_SECONDS)
+        resp = requests.post(
+            url,
+            json=payload,
+            timeout=SURFACE_IMAGERY_TIMEOUT_SECONDS,
+            headers=engine_write_headers(),
+        )
     except requests.RequestException as exc:
         logger.warning('Surface imagery preview failed for %s: %s', project_id, exc)
         raise EngineError(502, 'The engine could not fetch the surface imagery.') from exc
@@ -1829,7 +1855,7 @@ def delete_project(project_id: str) -> dict:
     url = _engine_url(f'/ftth/hld/projects/{project_id}')
 
     try:
-        resp = requests.delete(url, timeout=30)
+        resp = requests.delete(url, timeout=30, headers=engine_write_headers())
     except requests.RequestException as exc:
         return {'deleted': False, 'detail': f'Engine unreachable: {exc}'}
     else:

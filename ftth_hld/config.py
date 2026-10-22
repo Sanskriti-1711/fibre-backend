@@ -44,6 +44,18 @@ def _default_engine_url() -> str:
 
 FTTH_ENGINE_URL = os.getenv('FTTH_ENGINE_URL', _default_engine_url()).rstrip('/')
 
+# The engine's public URL now protects its mutating routes (POST/PUT/DELETE)
+# with a shared key. This is the same value set as FTTH_ENGINE_API_KEY on the
+# engine; empty means either no key is configured or this deployment cannot
+# write to a protected engine -- the engine answers 401/503 with a message that
+# names the variable, so the failure is never silent.
+FTTH_ENGINE_API_KEY = os.getenv('FTTH_ENGINE_API_KEY', '').strip()
+
+
+def engine_write_headers() -> dict[str, str]:
+    """Headers a mutating engine request must carry (empty when no key)."""
+    return {'X-FTTH-Engine-Key': FTTH_ENGINE_API_KEY} if FTTH_ENGINE_API_KEY else {}
+
 # ---------------------------------------------------------------------------
 # Pipeline stages
 # Each stage has:

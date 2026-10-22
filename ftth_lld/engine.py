@@ -9,7 +9,7 @@ import logging
 
 import requests
 
-from ftth_hld.config import FTTH_ENGINE_URL
+from ftth_hld.config import FTTH_ENGINE_URL, engine_write_headers
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ def lld_run(project_id: str, lld_version: str, dataset: dict) -> dict:
         url,
         json={'project_id': project_id, 'lld_version': lld_version, 'dataset': dataset},
         timeout=30,
+        headers=engine_write_headers(),
     )
     if resp.status_code not in (200, 201, 202):
         detail = 'Unknown error'
@@ -52,6 +53,7 @@ def lld_replan(project_id: str, lld_version: str, dataset: dict) -> dict:
         url,
         json={'project_id': project_id, 'lld_version': lld_version, 'dataset': dataset},
         timeout=30,
+        headers=engine_write_headers(),
     )
     if resp.status_code not in (200, 201, 202):
         detail = 'Unknown error'

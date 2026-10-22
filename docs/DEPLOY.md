@@ -113,7 +113,8 @@ Environment variables (Render → Environment):
 |---|---|---|
 | `DJANGO_SECRET_KEY` | long random string | Without it, `settings.py` falls back to a committed insecure key. **Required.** |
 | `DJANGO_DEBUG` | `false` | Otherwise Django serves verbose error pages publicly. **Required.** |
-| `DJANGO_ALLOWED_HOSTS` | `<service>.onrender.com` | Replaces the permissive `*`. |
+| `DJANGO_ALLOWED_HOSTS` | `<service>.onrender.com` | Comma-separated hostnames. `*` is refused when `DJANGO_DEBUG` is off (settings raises `ImproperlyConfigured`); unset in production falls back to `fiber-backend-wml3.onrender.com`, and unset in development to localhost/test hosts. |
+| `FTTH_ENGINE_API_KEY` | same value as on the engine | Shared key the engine requires on every mutating route (`X-FTTH-Engine-Key`). Set it on both services; with it missing the engine refuses writes with 503 instead of staying open. |
 | `PGDATABASE` / `PGUSER` / `PGPASSWORD` / `PGHOST` / `PGPORT` | the Zeabur database | Must match what the engine writes to. See section 1. `PGPASSWORD` has **no committed fallback** — without it the container cannot connect. |
 | `FTTH_ENGINE_URL` | `https://ftth-planning.onrender.com` | Keeps HLD/LLD working on the existing engine. |
 | `EXTRA_CORS_ORIGINS` | the deployed frontend origin | e.g. `https://fe.example.com`. Comma-separated for several. |
@@ -402,7 +403,8 @@ Build and run the production image:
 
 ```bash
 docker build -t fibre-backend:ci .
-docker run -p 8000:8000 -e DJANGO_DEBUG=false -e DJANGO_ALLOWED_HOSTS='*' \
+docker run -p 8000:8000 -e DJANGO_DEBUG=false \
+  -e DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1 \
   -e DJANGO_SECRET_KEY=dev-only fibre-backend:ci
 ```
 
