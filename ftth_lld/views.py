@@ -464,6 +464,42 @@ def _approved_feature_collection(survey_copy):
     return _fc(list(keep.values()))
 
 
+# Layers that carry trench geometry in an Approved Survey Version. The field
+# survey works in the single published ``final_trenches`` layer; the per-tier
+# mirrors are kept because older packages still carry them.
+_TRENCH_LAYERS = {'final_trenches', 'feeder_trench', 'distribution_trench', 'garden_trench'}
+
+
+def _approved_new_trenches(asv) -> list[str]:
+    """Approved survey changes that CREATE a trench, by SurveyFeature id.
+
+    ``_approved_feature_collection`` marks every approved change with its
+    ``change_id`` (the SurveyFeature id) but not whether the feature is new:
+    an attribute-only edit also arrives without ``original_geometry``. The
+    distinguishing fact is ``original_hld_feature_id`` — null means the
+    engineer created the feature in the field, non-null means it replaces an
+    HLD feature (a reroute carries its before-geometry and verify can follow
+    it).
+    """
+    change_ids = set()
+    for feature in (asv.dataset or {}).get('features', []):
+        props = feature.get('properties') or {}
+        if not props.get('approved') or not props.get('change_id'):
+            continue
+        if _normalize_layer(props.get('layer') or '') in _TRENCH_LAYERS:
+            change_ids.add(str(props['change_id']))
+    if not change_ids:
+        return []
+    return [
+        str(pk)
+        for pk in SurveyFeature.objects.filter(
+            pk__in=list(change_ids), original_hld_feature_id__isnull=True
+        )
+        .order_by('created_at')
+        .values_list('id', flat=True)
+    ]
+
+
 def _project_payload(ftth):
     d = ftth.completed_at or ftth.created_at
     return {
@@ -1670,6 +1706,33 @@ class LldRunView(APIView):
         mode = (request.data or {}).get('mode') or LldRun.MODE_VERIFY
         if mode not in (LldRun.MODE_VERIFY, LldRun.MODE_REPLAN):
             return JsonResponse({'detail': 'mode must be verify | replan'}, status=400)
+
+        # A trench the engineer created in the field has no ducts or cables in
+        # the frozen design, and verify mode only applies survey edits to the
+        # existing one: `_relay_dependents` skips it (there is no old region to
+        # relay from) and `_propagate_support_layers` works cable -> duct ->
+        # trench, never trench -> duct. Measured on the Mode-A fixture with one
+        # approved 40 m trench: the trench is published, nothing rides it, and
+        # the run still reports 0 continuity/attribute/drop issues while the
+        # BOQ bills the metres. Only the full re-plan feeds approved survey
+        # trenches into the router (BF_TRENCHES, USE_MODE=survey), so that is
+        # the only mode allowed to build over one.
+        if mode == LldRun.MODE_VERIFY:
+            new_trenches = _approved_new_trenches(asv)
+            if new_trenches:
+                return JsonResponse(
+                    {
+                        'detail': (
+                            '%d approved change(s) add a new trench. Verify mode applies '
+                            'survey edits to the existing design and would publish that '
+                            'trench with no duct or cable in it; run a full re-plan so the '
+                            'design is routed over it.' % len(new_trenches)
+                        ),
+                        'requires_replan': True,
+                        'new_trench_changes': new_trenches[:10],
+                    },
+                    status=409,
+                )
 
         version = _next_version(LldRun.objects.filter(ftth_project=ftth), 'LLD')
         # The run is born owned: its poller starts below with this token, and a

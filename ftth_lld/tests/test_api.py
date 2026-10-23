@@ -574,6 +574,90 @@ class LldRunViewTests(LldApiTestCase):
         response = self._run(mode='teleport')
         self.assertEqual(response.status_code, 400)
 
+    # ── A trench the engineer created needs the design routed over it ────
+
+    def _asv_with_change(self, sf, *, layer='final_trenches', reroute=False):
+        props = {
+            'layer': layer,
+            'feature_id': str(sf.id),
+            'approved': True,
+            'change_id': str(sf.id),
+        }
+        if reroute:
+            props['original_geometry'] = OTHER_LINE
+        return make_asv(
+            self.ftth,
+            dataset={
+                'type': 'FeatureCollection',
+                'features': [{'type': 'Feature', 'geometry': LINE, 'properties': props}],
+            },
+        )
+
+    def test_a_trench_the_engineer_created_requires_a_full_replan(self):
+        """Verify would publish the new trench with no duct or cable in it.
+
+        ``_relay_dependents`` skips it (no old region to relay from) and
+        ``_propagate_support_layers`` only runs cable -> duct -> trench, so the
+        approved trench comes out empty while the BOQ still bills its metres.
+        Only the re-plan feeds approved trenches into the router.
+        """
+        sf = make_survey_feature(
+            self.copy,
+            self.engineer,
+            status=SurveyFeature.SurveyStatus.APPROVED,
+            original_hld_feature=None,
+        )
+        self._asv_with_change(sf)
+
+        response = self._run()
+
+        self.assertEqual(response.status_code, 409, response.content)
+        body = response.json()
+        self.assertIs(body['requires_replan'], True)
+        self.assertEqual(body['new_trench_changes'], [str(sf.id)])
+        self.assertIn('full re-plan', body['detail'])
+        self.assertFalse(LldRun.objects.exists())
+
+        with mock.patch('ftth_lld.views.threading.Thread'):
+            replan = self._run(mode='replan')
+        self.assertEqual(replan.status_code, 200, replan.content)
+        self.assertEqual(replan.json()['mode'], LldRun.MODE_REPLAN)
+
+    def test_a_rerouted_trench_is_still_allowed_in_verify(self):
+        """A moved trench carries its before-geometry, so verify can relay it."""
+        hld = make_feature(self.copy)
+        sf = make_survey_feature(
+            self.copy,
+            self.engineer,
+            status=SurveyFeature.SurveyStatus.APPROVED,
+            original_hld_feature=hld,
+            original_geometry=OTHER_LINE,
+            survey_geometry=LINE,
+        )
+        self._asv_with_change(sf, reroute=True)
+
+        with mock.patch('ftth_lld.views.threading.Thread'):
+            response = self._run()
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()['mode'], LldRun.MODE_VERIFY)
+
+    def test_a_new_duct_does_not_force_a_replan(self):
+        """A duct the engineer added is complete civil work: its trench is
+        auto-created under it, so verify handles it."""
+        sf = make_survey_feature(
+            self.copy,
+            self.engineer,
+            status=SurveyFeature.SurveyStatus.APPROVED,
+            original_hld_feature=None,
+        )
+        self._asv_with_change(sf, layer='distribution_ducts')
+
+        with mock.patch('ftth_lld.views.threading.Thread'):
+            response = self._run()
+
+        self.assertEqual(response.status_code, 200, response.content)
+
     def test_creates_a_verify_run_and_does_not_block_the_request(self):
         asv = make_asv(self.ftth)
         make_survey_feature(self.copy, self.engineer, status=SurveyFeature.SurveyStatus.APPROVED)
