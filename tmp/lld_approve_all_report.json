@@ -1,0 +1,143 @@
+[
+  {
+    "id": "2da460b7-286c-4c24-93b6-ad6e6db3edbf",
+    "layer": "FEEDER DUCTS",
+    "status": "rejected",
+    "is_removal": false,
+    "version": 1,
+    "reason": "Rerouted with final_trenches 5f54facc (bundle propagation)",
+    "review_notes": "not proper",
+    "survey_geometry": {
+      "type": "MultiLineString",
+      "coordinates": [
+        [
+          [
+            -1.923514456325865,
+            52.47558219976561
+          ],
+          [
+            -1.923739932,
+            52.47553749
+          ]
+        ]
+      ]
+    },
+    "original_geometry": {
+      "type": "MultiLineString",
+      "coordinates": [
+        [
+          [
+            -1.923526877,
+            52.475582804
+          ],
+          [
+            -1.923739932,
+            52.47553749
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "id": "2b9aa97a-39af-499f-80ea-0b32c9bd0846",
+    "layer": "FEEDER DUCTS",
+    "status": "rejected",
+    "is_removal": false,
+    "version": 1,
+    "reason": "Rerouted with final_trenches 5f54facc (bundle propagation)",
+    "review_notes": "not proper",
+    "survey_geometry": {
+      "type": "MultiLineString",
+      "coordinates": [
+        [
+          [
+            -1.9223277584902192,
+            52.475199801390374
+          ],
+          [
+            -1.9235141764254196,
+            52.47558332460578
+          ],
+          [
+            -1.923514456325865,
+            52.47558219976561
+          ]
+        ]
+      ]
+    },
+    "original_geometry": {
+      "type": "MultiLineString",
+      "coordinates": [
+        [
+          [
+            -1.922419135,
+            52.475010009
+          ],
+          [
+            -1.9235189,
+            52.4755845
+          ],
+          [
+            -1.923526877,
+            52.475582804
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "id": "ccadedc9-f14b-4567-8706-965cc4eec441",
+    "layer": "FEEDER DUCTS",
+    "status": "rejected",
+    "is_removal": false,
+    "version": 1,
+    "reason": "Rerouted with final_trenches 5f54facc (bundle propagation)",
+    "review_notes": "np",
+    "survey_geometry": {
+      "type": "MultiLineString",
+      "coordinates": [
+        [
+          [
+            -1.922317367,
+            52.475109404
+          ],
+          [
+            -1.9223298,
+            52.4751017
+          ],
+          [
+            -1.9223145150732819,
+            52.47519342528006
+          ],
+          [
+            -1.9223277584902192,
+            52.475199801390374
+          ]
+        ]
+      ]
+    },
+    "original_geometry": {
+      "type": "MultiLineString",
+      "coordinates": [
+        [
+          [
+            -1.922317367,
+            52.475109404
+          ],
+          [
+            -1.9223298,
+            52.4751017
+          ],
+          [
+            -1.9224061,
+            52.4750032
+          ],
+          [
+            -1.922419135,
+            52.475010009
+          ]
+        ]
+      ]
+    }
+  }
+]
