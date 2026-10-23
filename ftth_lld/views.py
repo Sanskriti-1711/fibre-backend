@@ -1410,51 +1410,61 @@ def _run_lld_job(project_id: str, run_id, submit: bool = True, token: str = '') 
         return
 
     try:
-        asv = run.approved_survey_version
-        # IMMUTABILITY: never mutate the frozen Approved Survey dataset in
-        # place. Deep-copy it here — the enrichment below adds per-change
-        # before/after metadata for the engine's within-dataset relay.
-        dataset = copy.deepcopy(
-            asv.dataset
-            if asv and isinstance(asv.dataset, dict)
-            else {'type': 'FeatureCollection', 'features': []}
-        )
-
-        # Enrich the working copy with each approved change's before/after
-        # pair (the survey change's own frozen original geometry). The engine
-        # needs the old path to detect a reroute and re-lay the duct/cable
-        # onto the new one. Only the working copy is touched — the stored AS
-        # version is never modified.
-        try:
-            # NOTE: never assign a local named ``copy`` here — it shadows the
-            # module-level ``import copy`` used above for deepcopy, making
-            # ``copy`` local for the whole function (UnboundLocalError).
-            copy_project = _survey_copy(project_id)
-            if copy_project is not None:
-                fresh = _approved_feature_collection(copy_project)
-                by_change = {
-                    (f.get('properties') or {}).get('change_id'): f
-                    for f in fresh.get('features', [])
-                    if (f.get('properties') or {}).get('change_id')
-                }
-                for feat in dataset.get('features', []):
-                    props = feat.get('properties') or {}
-                    cid = props.get('change_id')
-                    if not cid:
-                        continue
-                    fresh_feat = by_change.get(cid)
-                    if fresh_feat and not props.get('original_geometry'):
-                        props['original_geometry'] = (fresh_feat.get('properties') or {}).get(
-                            'original_geometry'
-                        )
-        except Exception as exc:
-            logger.warning('LLD dataset enrichment failed for %s: %s', project_id, exc)
-
         # 1. Submit to the engine (returns immediately). Mode B (replan)
         #    re-runs the full design algorithm with the ASV as brownfield;
         #    Mode A (verify) applies the survey changes to the HLD design.
         #    Skip submission when resuming an engine task already in flight.
+        #
+        #    The dataset copy lives on the submit path only. A reattached
+        #    poller (``submit=False``) sends nothing — it just reads the
+        #    engine — and building it there put a second full copy of every
+        #    approved feature on a 512 MB instance, once per reattach. On
+        #    2026-10-23 that is what turned a worker recycle into a crash
+        #    loop: the sweeper reattached three running runs, each copied the
+        #    dataset, the worker hit its memory limit, and the restart
+        #    reattached them again.
         if submit:
+            asv = run.approved_survey_version
+            # IMMUTABILITY: never mutate the frozen Approved Survey dataset in
+            # place. Deep-copy it here — the enrichment below adds per-change
+            # before/after metadata for the engine's within-dataset relay.
+            dataset = copy.deepcopy(
+                asv.dataset
+                if asv and isinstance(asv.dataset, dict)
+                else {'type': 'FeatureCollection', 'features': []}
+            )
+
+            # Enrich the working copy with each approved change's before/after
+            # pair (the survey change's own frozen original geometry). The
+            # engine needs the old path to detect a reroute and re-lay the
+            # duct/cable onto the new one. Only the working copy is touched —
+            # the stored AS version is never modified.
+            try:
+                # NOTE: never assign a local named ``copy`` here — it shadows
+                # the module-level ``import copy`` used above for deepcopy,
+                # making ``copy`` local for the whole function
+                # (UnboundLocalError).
+                copy_project = _survey_copy(project_id)
+                if copy_project is not None:
+                    fresh = _approved_feature_collection(copy_project)
+                    by_change = {
+                        (f.get('properties') or {}).get('change_id'): f
+                        for f in fresh.get('features', [])
+                        if (f.get('properties') or {}).get('change_id')
+                    }
+                    for feat in dataset.get('features', []):
+                        props = feat.get('properties') or {}
+                        cid = props.get('change_id')
+                        if not cid:
+                            continue
+                        fresh_feat = by_change.get(cid)
+                        if fresh_feat and not props.get('original_geometry'):
+                            props['original_geometry'] = (fresh_feat.get('properties') or {}).get(
+                                'original_geometry'
+                            )
+            except Exception as exc:
+                logger.warning('LLD dataset enrichment failed for %s: %s', project_id, exc)
+
             if run.mode == LldRun.MODE_REPLAN:
                 engine_lld_replan(project_id, run.lld_version, dataset)
             else:

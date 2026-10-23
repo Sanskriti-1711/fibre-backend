@@ -694,6 +694,31 @@ class LldRunPollerTests(LldApiTestCase):
         self.assertIs(args[2], False)
         self.assertTrue(args[3])
 
+    def test_a_reattached_poller_never_rebuilds_the_dataset(self):
+        """Reattaching is a read-only job, so it must not copy the dataset.
+
+        The Approved Survey dataset is the whole approved feature set; a copy
+        costs tens of megabytes of Python objects. Building one in every
+        reattached poller is what made a worker recycle into an OOM crash loop
+        on 2026-10-23 (three running runs, one copy each, 512 MB instance):
+        the restart reattached them and the copies were rebuilt again.
+        """
+        run, _ = self._start_run()
+        self._orphan(run)
+
+        with (
+            mock.patch('ftth_lld.views.copy.deepcopy') as deepcopy,
+            mock.patch('ftth_lld.views._approved_feature_collection') as fresh,
+            mock.patch(
+                'ftth_lld.views.engine_lld_status',
+                side_effect=RuntimeError('engine gone'),
+            ),
+        ):
+            _run_lld_job(self.ftth.project_id, run.pk, False, poller.new_token())
+
+        deepcopy.assert_not_called()
+        fresh.assert_not_called()
+
     def test_a_second_sweep_does_not_stack_pollers(self):
         run, _ = self._start_run()
         self._orphan(run)
