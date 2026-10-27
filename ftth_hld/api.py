@@ -68,6 +68,21 @@ logger = logging.getLogger(__name__)
 # ======================================================================
 
 
+def _flag(value, default=True):
+    """A request flag as a bool. Absent/unreadable keeps ``default``.
+
+    `request.data` is a QueryDict for multipart and a dict for JSON, so the
+    toggle arrives as 'true'/'false'/'1'/'0' or a real boolean. Anything the
+    client does not recognise must keep the behaviour that existed before the
+    flag, never silently disable reuse.
+    """
+    if value is None or value == '':
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in ('0', 'false', 'no', 'off')
+
+
 class RunPipelineView(APIView):
     """
     Accept multipart upload (excel + roads), save files to disk,
@@ -83,6 +98,7 @@ class RunPipelineView(APIView):
         brownfield = request.FILES.get('brownfield')
         name = request.POST.get('name', '')
         poly_method = int(request.POST.get('poly_method', 3))
+        use_brownfield = _flag(request.POST.get('use_brownfield'), default=True)
 
         # Optional OSM reference layers (stored with the project; the design
         # algorithm does not consume them yet — they will feed routing
@@ -166,6 +182,7 @@ class RunPipelineView(APIView):
                 poly_method=poly_method,
                 brownfield_path=str(brownfield_path) if brownfield_path else None,
                 osm_layer_paths=osm_paths or None,
+                use_brownfield=use_brownfield,
             )
         except RuntimeError as exc:
             return JsonResponse(
@@ -382,6 +399,9 @@ class RunFromAreaView(APIView):
         except (TypeError, ValueError):
             poly_method = 3
         brownfield = request.FILES.get('brownfield')
+        # The run's own toggle for existing infrastructure. Absent means ON,
+        # which is the behaviour every existing client already gets.
+        use_brownfield = _flag(request.data.get('use_brownfield'), default=True)
 
         project_id = uuid.uuid4().hex
         FtthProject.objects.create(
@@ -414,6 +434,7 @@ class RunFromAreaView(APIView):
                 area_name=fields.get('area_name', ''),
                 brownfield_path=str(brownfield_path) if brownfield_path else None,
                 polygon=fields.get('polygon'),
+                use_brownfield=use_brownfield,
             )
         except EngineError as exc:
             # The row was already created, so mark it failed rather than leaving

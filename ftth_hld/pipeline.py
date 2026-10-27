@@ -98,6 +98,7 @@ def run_pipeline(
     poly_method: int = 3,
     brownfield_path: str | None = None,
     osm_layer_paths: dict | None = None,
+    use_brownfield: bool = True,
 ) -> dict:
     """
     Upload files to the FastAPI engine and start a pipeline run.
@@ -110,6 +111,10 @@ def run_pipeline(
     natural: path} — OSM reference layers stored with the project for
     future routing-constraint / permit use. Forwarded to the engine, which
     stores them in inputs/; the design algorithm does not consume them yet.
+
+    ``use_brownfield`` is the run's own toggle: False disables the archive AND
+    the read-back of the project's own stored network, so every duct and trench
+    is designed fresh instead of reusing the previous design's geometry.
 
     Returns the JSON response from the engine (which includes
     ``project_id``, ``status``, etc.).
@@ -143,7 +148,8 @@ def run_pipeline(
                     stack.enter_context(Path(path).open('rb')),
                     'application/octet-stream',
                 )
-        data = {'poly_method': str(poly_method)}
+        data = {'poly_method': str(poly_method),
+                'use_brownfield': 'true' if use_brownfield else 'false'}
         if name:
             data['name'] = name
         if project_id:
@@ -492,6 +498,7 @@ def run_from_area(
     area_name: str = '',
     brownfield_path: str | None = None,
     polygon=None,
+    use_brownfield: bool = True,
 ) -> dict:
     """Start a full HLD run from an area.
 
@@ -505,11 +512,18 @@ def run_from_area(
     parameters, exactly as the manual-upload path does.  When present the
     request becomes multipart (the area fields travel as form fields);
     otherwise it stays JSON, so an existing JSON client is untouched.
+
+    ``use_brownfield`` is the run's own toggle.  False means no existing
+    infrastructure at all: no archive, and no read-back of this project's own
+    stored network — which is otherwise fed in as BF_* and priced below a new
+    trench, so a re-run replays its previous design instead of applying the
+    current rules.
     """
     ensure_engine_awake('the design run')
     payload: dict = _area_payload(area, country, city, postcode, area_name, polygon)
     payload['project_id'] = project_id
     payload['poly_method'] = int(poly_method)
+    payload['use_brownfield'] = bool(use_brownfield)
     if name:
         payload['name'] = name
     try:
