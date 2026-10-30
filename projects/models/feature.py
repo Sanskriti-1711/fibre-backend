@@ -42,6 +42,11 @@ class Feature(models.Model):
     field_measurements = models.JSONField(null=True, blank=True)
     comparison_notes = models.TextField(blank=True)
 
+    # What the reviewer recorded when they approved the feature ("accepted
+    # 0.2 m deviation", "re-surveyed on 12 Nov"). Supervision-only, and the
+    # reason `FeatureApproveAPIView` no longer throws the note away.
+    approval_notes = models.TextField(blank=True, default='')
+
     submitted_at = models.DateTimeField(null=True, blank=True)
     approved_at = models.DateTimeField(null=True, blank=True)
 

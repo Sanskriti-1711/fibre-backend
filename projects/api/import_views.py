@@ -1,5 +1,6 @@
 import contextlib
 import json
+import os
 import zipfile
 from pathlib import Path
 
@@ -13,7 +14,9 @@ from rest_framework.views import APIView
 
 from projects.models import Feature, ImportSession, Project
 
-MICROSERVICE_BASE_URL = 'https://fiber-import.zeabur.app'
+# Where the import/geo service runs. Local development starts it on :8180
+# (see dev/start.sh); a deployment overrides this with its own host.
+MICROSERVICE_BASE_URL = os.getenv('MICROSERVICE_BASE_URL', 'http://localhost:8180')
 
 
 def _is_zip_file(filename):
@@ -396,6 +399,10 @@ class GpkgImportView(APIView):
                         'layer_name': layer_name,
                         'layer_id': layer_id,
                         'properties': properties,
+                        # The geometry comes back from the microservice; without
+                        # storing it the project map renders empty even though
+                        # the import reports success.
+                        'geometry': feature_payload.get('geometry'),
                         'field_schema': field_schema,
                         'status': Feature.STATUS_PENDING,
                     },

@@ -14,6 +14,7 @@ urlpatterns = [
     path('healthz/engine', engine_health),
     path('api/users/', include('users.urls')),
     path('api/', include('projects.api.urls')),
+    path('api/', include('supervision.urls')),
     path('api/', include('assignments.api.urls')),
     path('api/', include('ftth_hld.urls')),
     path('api/', include('ftth_lld.urls')),

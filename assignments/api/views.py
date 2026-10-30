@@ -17,6 +17,27 @@ from assignments.models import AssignmentJob
 from projects.models import Feature
 
 
+def engineer_feature_queryset(engineer_id):
+    """Every feature an engineer is responsible for, across all three scopes.
+
+    A project-scope job is the normal supervision assignment and grants the
+    whole project — that is also what ``_engineer_can_access`` checks. Joining on
+    ``assignment_jobs__assignee_id`` alone only matches feature-scope jobs, so it
+    reports zero work for a project the engineer can actually open. Layer-scope
+    jobs expand to their layer, feature-scope jobs to their feature.
+    """
+    jobs = AssignmentJob.objects.filter(assignee_id=engineer_id)
+
+    condition = Q(
+        project_id__in=jobs.filter(scope=AssignmentJob.SCOPE_PROJECT).values('project_id')
+    )
+    condition |= Q(id__in=jobs.filter(scope=AssignmentJob.SCOPE_FEATURE).values('feature_id'))
+    for pair in jobs.filter(scope=AssignmentJob.SCOPE_LAYER).values('project_id', 'layer_id'):
+        condition |= Q(project_id=pair['project_id'], layer_id=pair['layer_id'])
+
+    return Feature.objects.filter(condition).distinct()
+
+
 class AssignmentJobListCreateAPIView(generics.ListCreateAPIView):
     queryset = AssignmentJob.objects.select_related('project', 'feature', 'assignee')
 
@@ -353,9 +374,10 @@ class EngineerActivityAPIView(APIView):
 
         # Get features assigned to this engineer with recent updates
         features = (
-            Feature.objects.select_related('project')
+            engineer_feature_queryset(engineer_id)
+            .select_related('project')
             .prefetch_related('assignment_jobs')
-            .filter(assignment_jobs__assignee_id=engineer_id, updated_at__gte=since)
+            .filter(updated_at__gte=since)
             .order_by('-updated_at')
         )
 
@@ -447,8 +469,8 @@ class EngineerStatsAPIView(APIView):
 
         since = timezone.now() - timedelta(days=days)
 
-        # Get features assigned to this engineer
-        features = Feature.objects.filter(assignment_jobs__assignee_id=engineer_id)
+        # Get features assigned to this engineer (project, layer and feature scope)
+        features = engineer_feature_queryset(engineer_id)
 
         # Overall stats
         overall = features.aggregate(
@@ -686,9 +708,15 @@ class FeatureApproveAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Update status to approved and set approved_at
+        # Update status to approved, set approved_at, and keep the note. The
+        # note used to be echoed back and dropped, so "approve with deviation"
+        # left no record of why.
         now = timezone.now()
-        updated_count = features.update(status=Feature.STATUS_APPROVED, approved_at=now)
+        updated_count = features.update(
+            status=Feature.STATUS_APPROVED,
+            approved_at=now,
+            approval_notes=notes or '',
+        )
 
         approved_ids = [str(f.id) for f in features]
 

@@ -36,6 +36,7 @@ class FeatureSerializer(serializers.ModelSerializer):
             'field_schema',
             'field_measurements',
             'comparison_notes',
+            'approval_notes',
             'status',
             'photo_url',
             'edited_by',

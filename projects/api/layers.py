@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 import requests
@@ -11,7 +12,9 @@ from projects.models import Feature, LayerFieldConfig, Project
 
 from .serializers import FeatureSerializer, FeatureUpdateSerializer
 
-MICROSERVICE_BASE_URL = 'https://fiber-import.zeabur.app'
+# Where the import/geo service runs. Local development starts it on :8180
+# (see dev/start.sh); a deployment overrides this with its own host.
+MICROSERVICE_BASE_URL = os.getenv('MICROSERVICE_BASE_URL', 'http://localhost:8180')
 
 _GEOM_NAMES = {
     'Point': 'Point',

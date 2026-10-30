@@ -170,7 +170,9 @@ Handles GPKG file upload and import pipeline.
 ---
 
 ### Microservice Direct Import (Optional)
-**POST** `https://fiber-import.zeabur.app/import/gpkg`
+**POST** `{MICROSERVICE_BASE_URL}/import/gpkg` — the host is the
+`MICROSERVICE_BASE_URL` setting (default `http://localhost:8180`, see
+`dev/start.sh`); a deployment sets its own. No production host is committed.
 
 ---
 

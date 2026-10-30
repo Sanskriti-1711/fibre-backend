@@ -71,6 +71,10 @@ INSTALLED_APPS = [
     'permits',
     'survey',
     'notifications',
+    # Supervision-only models (evidence photos today): kept in its own app so the
+    # design stages never import it, and so the whole app can be pointed at its
+    # own schema or deployment later.
+    'supervision',
 ]
 
 MIDDLEWARE = [

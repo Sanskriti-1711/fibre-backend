@@ -1,3 +1,4 @@
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -14,7 +15,9 @@ from projects.models.project import Project
 
 from .serializers import ProjectSerializer
 
-MICROSERVICE_BASE_URL = 'https://fiber-import.zeabur.app'
+# Where the import/geo service runs. Local development starts it on :8180
+# (see dev/start.sh); a deployment overrides this with its own host.
+MICROSERVICE_BASE_URL = os.getenv('MICROSERVICE_BASE_URL', 'http://localhost:8180')
 
 # Survey statuses that mark the transition from field survey into the LLD
 # (review + detailed design) stage.
