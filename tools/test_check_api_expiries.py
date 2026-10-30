@@ -146,6 +146,7 @@ class RegistryTests(unittest.TestCase):
             'permits_llm',
             'gemini_api',
             'render_api',
+            'engine_api_key',
             'database_password',
             'smtp_app_password',
             'jwt_access',
@@ -159,7 +160,97 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(known['gitlab_token']['expires_at'], '2026-11-05')
 
 
+class EngineKeyProbeTests(unittest.TestCase):
+    """The engine key never expires, so agreement IS the check.
+
+    ``FTTH_ENGINE_API_KEY`` has no date; what can break is the engine and the
+    backend holding different copies, which the engine reports as 401 on a
+    write, or 503 when it holds no key at all.
+    """
+
+    ENV = {
+        'FTTH_ENGINE_API_KEY': 'backend-copy',
+        'FTTH_ENGINE_URL': 'https://engine.example/',
+    }
+
+    def _probe(self, code, env=None):
+        calls: list[tuple[str, str, dict]] = []
+
+        def fake_request(method, url, headers=None):
+            calls.append((method, url, dict(headers or {})))
+            return code, '{}'
+
+        original = exp.__dict__['_request']
+        exp.__dict__['_request'] = fake_request
+        try:
+            result = exp.probe_engine_key(self.ENV if env is None else env)
+        finally:
+            exp.__dict__['_request'] = original
+        return result, calls
+
+    def test_a_key_the_engine_accepts_is_the_404_behind_the_guard(self):
+        probe, calls = self._probe(404)
+        self.assertEqual(probe.state, 'ok')
+        # The header carries the backend's copy, to the URL without a double slash.
+        self.assertEqual(calls[0][0], 'DELETE')
+        self.assertEqual(calls[0][1], 'https://engine.example/__expiry_probe__')
+        self.assertEqual(calls[0][2]['X-FTTH-Engine-Key'], 'backend-copy')
+
+    def test_a_key_the_engine_rejects_is_denied(self):
+        probe, _ = self._probe(401)
+        self.assertEqual(probe.state, 'denied')
+        self.assertIn('differ', probe.detail)
+
+    def test_an_engine_with_no_key_set_is_denied_not_unchecked(self):
+        probe, _ = self._probe(503)
+        self.assertEqual(probe.state, 'denied')
+
+    def test_a_rejected_key_fails_the_row(self):
+        cred = fake_credential(
+            id='engine_api_key',
+            env=('FTTH_ENGINE_API_KEY',),
+            expiry='never',
+            probe=lambda _env: exp.Probe('denied', 'the engine rejected this key'),
+        )
+        row = exp.grade(cred, self.ENV, {}, TODAY, 14)
+        self.assertEqual(row.status, exp.FAIL)
+        self.assertIn('cannot be used', row.detail)
+
+    def test_an_accepted_key_passes_the_row(self):
+        cred = fake_credential(
+            id='engine_api_key',
+            env=('FTTH_ENGINE_API_KEY',),
+            expiry='never',
+            probe=lambda _env: exp.Probe('ok', 'the engine accepted the key'),
+        )
+        row = exp.grade(cred, self.ENV, {}, TODAY, 14)
+        self.assertEqual(row.status, exp.PASS)
+
+    def test_no_key_here_skips_without_a_call(self):
+        probe, calls = self._probe(200, env={'FTTH_ENGINE_URL': 'https://engine.example'})
+        self.assertEqual(probe.state, 'skipped')
+        self.assertEqual(calls, [])
+
+    def test_no_engine_url_skips_without_a_call(self):
+        probe, calls = self._probe(200, env={'FTTH_ENGINE_API_KEY': 'backend-copy'})
+        self.assertEqual(probe.state, 'skipped')
+        self.assertEqual(calls, [])
+
+
 class OutputTests(unittest.TestCase):
+    @staticmethod
+    def _in_days(days: int) -> str:
+        """A date relative to the real clock.
+
+        ``main()`` grades against ``datetime.now()``, not the ``TODAY`` constant
+        the grading tests use, so a hardcoded date here stops meaning "in a
+        week" the moment it passes: this suite went red on 2026-10-29 with
+        nothing in the checker having changed.
+        """
+        from datetime import timedelta
+
+        return (exp.datetime.now(exp.UTC).date() + timedelta(days=days)).isoformat()
+
     def _run_main(self, argv, env=None, credentials=None):
         import os
         import sys
@@ -197,13 +288,13 @@ class OutputTests(unittest.TestCase):
         self.assertIn('probe_me', text)
 
     def test_an_expired_credential_exits_1(self):
-        cred = fake_credential(probe=lambda _env: exp.Probe('ok', 'ok', '2026-10-01'))
+        cred = fake_credential(probe=lambda _env: exp.Probe('ok', 'ok', self._in_days(-9)))
         code, text = self._run_main([], env={'PROBE_ME_TOKEN': 'x'}, credentials=[cred])
         self.assertEqual(code, 1)
         self.assertIn('EXPIRED', text)
 
     def test_a_warning_is_tolerated_unless_strict(self):
-        cred = fake_credential(probe=lambda _env: exp.Probe('ok', 'ok', '2026-10-28'))
+        cred = fake_credential(probe=lambda _env: exp.Probe('ok', 'ok', self._in_days(8)))
         code, text = self._run_main([], env={'PROBE_ME_TOKEN': 'x'}, credentials=[cred])
         self.assertEqual(code, 0)
         self.assertIn('WARN', text)
@@ -211,18 +302,19 @@ class OutputTests(unittest.TestCase):
         self.assertEqual(code, 1)
 
     def test_nothing_due_exits_0(self):
-        cred = fake_credential(probe=lambda _env: exp.Probe('ok', 'ok', '2027-01-01'))
+        cred = fake_credential(probe=lambda _env: exp.Probe('ok', 'ok', self._in_days(120)))
         code, _ = self._run_main([], env={'PROBE_ME_TOKEN': 'x'}, credentials=[cred])
         self.assertEqual(code, 0)
 
     def test_the_json_output_is_machine_readable(self):
-        cred = fake_credential(probe=lambda _env: exp.Probe('ok', 'ok', '2026-11-05'))
+        soon = self._in_days(16)
+        cred = fake_credential(probe=lambda _env: exp.Probe('ok', 'ok', soon))
         code, text = self._run_main(['--json'], env={'PROBE_ME_TOKEN': 'x'}, credentials=[cred])
         payload = json.loads(text)
         self.assertEqual(code, 0)
         self.assertEqual(payload['failed'], 0)
         self.assertEqual(payload['credentials'][0]['id'], 'probe_me')
-        self.assertEqual(payload['credentials'][0]['expires_at'], '2026-11-05')
+        self.assertEqual(payload['credentials'][0]['expires_at'], soon)
 
     def test_the_json_output_carries_no_secret(self):
         secret = 'sk-super-secret-value-1234567890'

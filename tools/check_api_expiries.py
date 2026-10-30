@@ -270,6 +270,51 @@ def probe_epc(env) -> Probe:
     return Probe('unreachable', f'HTTP {code}')
 
 
+def probe_engine_key(env) -> Probe:
+    """Does the engine accept the key the Django backend holds?
+
+    The engine checks ``X-FTTH-Engine-Key`` in middleware, *before* routing
+    (``main.py``, ``EngineKeyMiddleware``), so a request to a path that does not
+    exist is the cheapest way to ask, and the answer is unambiguous:
+
+      401  the engine rejected this key -- the two copies disagree
+      503  the engine has no key set, so it refuses every write
+      404  the key passed the guard and the router had nothing to match
+
+    Nothing is read and nothing is mutated: there is no route at that path, and
+    the call never reaches the pipeline.  It does wake the deployed service.
+    """
+    key = env.get('FTTH_ENGINE_API_KEY', '')
+    if not key:
+        return Probe('skipped', 'no FTTH_ENGINE_API_KEY')
+    base = (env.get('FTTH_ENGINE_URL') or '').strip().rstrip('/')
+    if not base:
+        return Probe('skipped', 'no FTTH_ENGINE_URL to ask')
+    try:
+        code, _body = _request(
+            'DELETE',
+            f'{base}/__expiry_probe__',
+            headers={'X-FTTH-Engine-Key': key},
+        )
+    except ConnectionError as e:
+        return Probe('unreachable', f'{base} unreachable -- {e}')
+    host = base.split('//')[-1].split('/')[0]
+    if code in (401, 403):
+        return Probe(
+            'denied',
+            f'the engine at {host} rejected this key (HTTP {code}) -- the engine and '
+            'backend copies differ',
+        )
+    if code == 503:
+        return Probe(
+            'denied',
+            f'the engine at {host} has no key set at all, so it refuses every write',
+        )
+    if code in (404, 405):
+        return Probe('ok', f'the engine at {host} accepted the key')
+    return Probe('unreachable', f'HTTP {code} from {host} on the probe path')
+
+
 # ── The registry ─────────────────────────────────────────────────────────────
 
 
@@ -418,6 +463,25 @@ CREDENTIALS: list[Credential] = [
         basis='A shared secret with no lifetime, set on both sides.',
         renewal='Change it on the engine and the worker together and restart ' 'both.',
         breaks='The worker rejects every job call; LLD runs stop at the export ' 'step.',
+    ),
+    Credential(
+        id='engine_api_key',
+        name='Engine API key (backend <-> engine)',
+        kind='secret',
+        env=('FTTH_ENGINE_API_KEY',),
+        powers='Every mutating engine route: starting a run, stopping one, deleting a '
+        'project. The Django backend sends it as X-FTTH-Engine-Key.',
+        expiry='never',
+        basis='A shared secret generated with secrets.token_urlsafe(32) and set on '
+        'both sides by hand; it carries no date, so the only way it breaks is the '
+        'two copies disagreeing -- the engine answers 401, or 503 when it has no '
+        'key at all.',
+        renewal='Generate one with `python -c "import secrets; '
+        'print(secrets.token_urlsafe(32))"`, set the SAME value on the engine and '
+        'on the Django backend, then restart both.',
+        breaks='Pipeline runs cannot be started or stopped (401/503 on every write). '
+        'Health, results, layers and downloads keep working.',
+        probe=probe_engine_key,
     ),
     Credential(
         id='expo_token',
@@ -609,7 +673,10 @@ def grade(
             probe = cred.probe(env)
             if probe.state == 'denied':
                 return Row(
-                    cred, FAIL, f'{probe.detail} -- no expiry, but it is revoked', configured=True
+                    cred,
+                    FAIL,
+                    f'{probe.detail} -- no expiry date, but it cannot be used',
+                    configured=True,
                 )
             if probe.state == 'ok':
                 detail = f'{probe.detail}. {cred.basis}'
