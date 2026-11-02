@@ -17,6 +17,7 @@ it exits non-zero on the first failure.
 import copy
 import json
 import os
+import re
 import sys
 
 import django
@@ -56,6 +57,66 @@ def fail(message):
 
 def ok(message):
     print('  PASS  %s' % message)
+
+
+FE_PAGE = os.path.join(os.path.dirname(BASE_DIR), 'fiber-fe', 'audit-detail.html')
+
+
+def function_body(source, name):
+    """The `function <name>(...) { ... }` text, brace-matched; None if absent."""
+    start = source.find('function %s(' % name)
+    if start < 0:
+        return None
+    brace = source.find('{', start)
+    if brace < 0:
+        return None
+    depth = 0
+    for index in range(brace, len(source)):
+        char = source[index]
+        if char == '{':
+            depth += 1
+        elif char == '}':
+            depth -= 1
+            if depth == 0:
+                return source[start : index + 1]
+    return None
+
+
+def check_audit_delta_sign():
+    """The audit page must derive Δ in the backend's direction, in both cards.
+
+    `deltaCell` (the live planned-vs-as-built table) and `signedDelta` (the
+    decision-history snapshot) once subtracted in opposite orders, so the same
+    field read +0.20 m in one card and -0.20 m in the other. The page is static
+    HTML with no build step, so this reads both functions from source and
+    proves they agree on planned minus as-built - the direction the as-built
+    report uses and projects/services/deviation.py stores.
+    """
+    if not os.path.exists(FE_PAGE):
+        fail('%s not found - run this from the workspace checkout' % FE_PAGE)
+    with open(FE_PAGE, encoding='utf-8') as handle:
+        page = handle.read()
+
+    live = function_body(page, 'deltaCell')
+    history = function_body(page, 'signedDelta')
+    if not live or not history:
+        fail('audit-detail.html no longer defines deltaCell and signedDelta')
+
+    if 'var a = numeric(planned)' not in live or 'var b = numeric(measurementValue(' not in live:
+        fail('deltaCell no longer reads planned into a and as-built into b')
+    if not re.search(r'var\s+diff\s*=\s*a\s*-\s*b\s*;', live):
+        fail('deltaCell no longer subtracts as-built from planned (a - b)')
+    ok('live table derives Δ as planned minus as-built')
+
+    if 'var p = Number(planned)' not in history or 'var a = Number(asBuilt)' not in history:
+        fail('signedDelta no longer reads planned into p and as-built into a')
+    if not re.search(r'return\s+p\s*-\s*a\s*;', history):
+        fail('signedDelta no longer returns planned minus as-built (p - a)')
+    ok('decision history derives Δ as planned minus as-built')
+
+    if 'Δ is planned minus as-built' not in page:
+        fail('the comparison caption no longer states the Δ direction')
+    ok('the caption states the same Δ direction')
 
 
 def shift_north(geometry, metres=3.0):
@@ -229,6 +290,12 @@ def main():
     if not data['totals'].get('as_built_features'):
         fail('totals.as_built_features is empty')
     ok('totals count %d feature(s) with as-built geometry' % data['totals']['as_built_features'])
+
+    # The report above proves the backend's Δ direction. The audit page renders
+    # its own Δ twice (live table + decision history) and once disagreed in
+    # sign, so the page is checked here too rather than left to a code review.
+    print('== audit page Δ convention ==')
+    check_audit_delta_sign()
 
     print('\nAll as-built geometry checks passed for feature %s.' % feature.id)
 
