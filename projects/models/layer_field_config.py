@@ -21,6 +21,11 @@ class LayerFieldConfig(models.Model):
 
     schema = models.JSONField(default=list)
 
+    # Absolute slack, in the layer's own unit, that still counts as "as
+    # designed". Read by the planned-vs-as-built comparison (§3 Stage 5.2);
+    # 0 means any difference is a deviation.
+    tolerance = models.DecimalField(max_digits=10, decimal_places=3, default=0)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

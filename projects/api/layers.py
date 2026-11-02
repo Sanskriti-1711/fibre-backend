@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 from projects.api.microservice import headers as microservice_headers
 from projects.layer_rules import is_field_survey_layer
 from projects.models import Feature, LayerFieldConfig, Project
+from projects.services import feature_deviation
 
 from .serializers import FeatureSerializer, FeatureUpdateSerializer
 
@@ -284,6 +285,20 @@ class ProjectFeatureDetailAPIView(APIView):
             pass
         except Exception:
             pass
+
+        # Planned vs as-built (INTEGRATION_PLAN.md §3 Stage 5.2). This endpoint
+        # serves one feature, so the extra lookup for the layer's tolerance is
+        # free — the layer lists deliberately do not carry it.
+        try:
+            layer_cfg = LayerFieldConfig.objects.get(
+                project=project, layer_id=feature.layer_id
+            )
+            tolerance = layer_cfg.tolerance
+        except LayerFieldConfig.DoesNotExist:
+            tolerance = 0
+        except Exception:
+            tolerance = 0
+        feature_data['deviation'] = feature_deviation(feature, tolerance)
 
         # ── Try microservice for authoritative geometry; fall back to local ──
         microservice_url = (

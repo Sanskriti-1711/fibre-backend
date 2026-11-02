@@ -36,6 +36,13 @@ urlpatterns = [
     path('projects/<uuid:project_id>/review/', ProjectReviewAPIView.as_view()),
     path('projects/<uuid:project_id>/map-data/', ProjectMapDataAPIView.as_view()),
     path('projects/<uuid:project_id>/layers/', ProjectLayerListAPIView.as_view()),
+    # Before the `<layer_id>` routes below: otherwise `layers/weights/` is read
+    # as a layer named "weights" and the PUT gets a 405 from the detail view,
+    # leaving layer weights impossible to set from any client.
+    path(
+        'projects/<uuid:project_id>/layers/weights/',
+        ProjectLayerWeightsAPIView.as_view(),
+    ),
     path(
         'projects/<uuid:project_id>/layers/<str:layer_id>/field-config/',
         LayerFieldConfigAPIView.as_view(),
@@ -61,10 +68,6 @@ urlpatterns = [
     path(
         'projects/<uuid:project_id>/completion/',
         ProjectCompletionAPIView.as_view(),
-    ),
-    path(
-        'projects/<uuid:project_id>/layers/weights/',
-        ProjectLayerWeightsAPIView.as_view(),
     ),
     # Import endpoints
     # LLD → supervision handoff (INTEGRATION_PLAN.md §3 Stage 4)

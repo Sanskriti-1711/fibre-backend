@@ -1,3 +1,5 @@
+from decimal import Decimal, InvalidOperation
+
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -59,6 +61,7 @@ class LayerFieldConfigAPIView(APIView):
                 'layer_id': layer_id,
                 'layer_name': _layer_name(project, layer_id),
                 'configured': configured,
+                'tolerance': float(cfg.tolerance) if configured else 0.0,
                 'schema': effective,
                 'derived': derived,
             }
@@ -103,10 +106,26 @@ class LayerFieldConfigAPIView(APIView):
                 }
             )
 
+        # Absolute slack that still counts as "as designed" (§3 Stage 5.2).
+        # Omitted means 0, the strictest reading: any difference is a deviation.
+        try:
+            tolerance = Decimal(str(request.data.get('tolerance', 0))).quantize(
+                Decimal('0.001')
+            )
+        except (InvalidOperation, TypeError, ValueError):
+            return Response(
+                {'detail': 'tolerance must be a number'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         cfg, _ = LayerFieldConfig.objects.update_or_create(
             project=project,
             layer_id=layer_id,
-            defaults={'schema': clean, 'layer_name': _layer_name(project, layer_id) or ''},
+            defaults={
+                'schema': clean,
+                'layer_name': _layer_name(project, layer_id) or '',
+                'tolerance': tolerance,
+            },
         )
 
         return Response(
@@ -115,6 +134,7 @@ class LayerFieldConfigAPIView(APIView):
                 'layer_id': layer_id,
                 'layer_name': cfg.layer_name,
                 'configured': True,
+                'tolerance': float(cfg.tolerance),
                 'schema': cfg.schema,
             }
         )
