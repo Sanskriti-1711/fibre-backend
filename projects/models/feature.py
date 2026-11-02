@@ -52,7 +52,14 @@ class Feature(models.Model):
 
     # Edited GeoJSON geometry (stored locally for fast reads;
     # the authoritative copy may live in the PostGIS microservice).
+    # This is the DESIGN baseline the LLD handed over.
     geometry = models.JSONField(null=True, blank=True)
+
+    # Where the crew actually laid it. A separate column, never an overwrite:
+    # supervision records evidence *beside* the design, so planned-vs-as-built
+    # stays a comparison and the baseline cannot be destroyed
+    # (INTEGRATION_PLAN.md §1 rule 3). Null until someone submits a survey.
+    as_built_geometry = models.JSONField(null=True, blank=True)
 
     # Audit trail for geometry edits
     edited_by = models.UUIDField(null=True, blank=True)

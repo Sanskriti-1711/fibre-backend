@@ -33,6 +33,32 @@ class ProjectSerializer(serializers.ModelSerializer):
         return (obj.business_meta or {}).get('origin') or 'manual_gpkg'
 
 
+GEOJSON_GEOMETRY_TYPES = (
+    'Point',
+    'MultiPoint',
+    'LineString',
+    'MultiLineString',
+    'Polygon',
+    'MultiPolygon',
+    'GeometryCollection',
+)
+
+
+def validate_geojson_geometry(value):
+    """Shared GeoJSON geometry check for the planned and as-built columns."""
+    if value is None:
+        return value
+    if not isinstance(value, dict):
+        raise serializers.ValidationError('Geometry must be a JSON object')
+    geom_type = value.get('type')
+    if geom_type not in GEOJSON_GEOMETRY_TYPES:
+        raise serializers.ValidationError(f'Invalid GeoJSON geometry type: {geom_type}')
+    coordinates = value.get('coordinates')
+    if not isinstance(coordinates, list | tuple):
+        raise serializers.ValidationError('Geometry must contain a coordinates array')
+    return value
+
+
 class FeatureSerializer(serializers.ModelSerializer):
     photo_url = serializers.SerializerMethodField()
 
@@ -44,6 +70,7 @@ class FeatureSerializer(serializers.ModelSerializer):
             'layer_id',
             'properties',
             'geometry',
+            'as_built_geometry',
             'field_schema',
             'field_measurements',
             'comparison_notes',
@@ -76,6 +103,7 @@ class FeatureUpdateSerializer(serializers.ModelSerializer):
         model = Feature
         fields = [
             'geometry',
+            'as_built_geometry',
             'properties',
             'field_measurements',
             'comparison_notes',
@@ -84,6 +112,7 @@ class FeatureUpdateSerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {
             'geometry': {'required': False},
+            'as_built_geometry': {'required': False},
             'properties': {'required': False},
             'field_measurements': {'required': False},
             'comparison_notes': {'required': False},
@@ -92,34 +121,22 @@ class FeatureUpdateSerializer(serializers.ModelSerializer):
         }
 
     def validate_geometry(self, value):
-        if value is None:
-            return value
-        if not isinstance(value, dict):
-            msg = 'Geometry must be a JSON object'
-            raise serializers.ValidationError(msg)
-        # Basic GeoJSON geometry validation
-        geom_type = value.get('type')
-        if geom_type not in (
-            'Point',
-            'MultiPoint',
-            'LineString',
-            'MultiLineString',
-            'Polygon',
-            'MultiPolygon',
-            'GeometryCollection',
-        ):
-            msg = f'Invalid GeoJSON geometry type: {geom_type}'
-            raise serializers.ValidationError(msg)
-        coordinates = value.get('coordinates')
-        if not isinstance(coordinates, list | tuple):
-            msg = 'Geometry must contain a coordinates array'
-            raise serializers.ValidationError(msg)
-        return value
+        return validate_geojson_geometry(value)
+
+    def validate_as_built_geometry(self, value):
+        return validate_geojson_geometry(value)
 
     def update(self, instance, validated_data):
         # Auto-set the audit timestamp on any edit
         if any(
-            k in validated_data for k in ('geometry', 'properties', 'field_measurements', 'status')
+            k in validated_data
+            for k in (
+                'geometry',
+                'as_built_geometry',
+                'properties',
+                'field_measurements',
+                'status',
+            )
         ):
             validated_data['edited_at'] = timezone.now()
             if not validated_data.get('edited_by'):

@@ -158,15 +158,27 @@ def _layer_report(project, layer_id, layer_name, tolerance, units, weight):
 
     rows = (
         Feature.objects.filter(project=project, layer_id=layer_id)
-        .values('status', 'geometry', 'properties', 'field_measurements')
+        .values(
+            'status',
+            'geometry',
+            'as_built_geometry',
+            'properties',
+            'field_measurements',
+        )
         .iterator(chunk_size=500)
     )
+    laid_m = 0.0
+    laid_features = 0
 
     for row in rows:
         feature_count += 1
         status_counts[row['status']] = status_counts.get(row['status'], 0) + 1
 
         planned_m += geometry_length_m(row['geometry'])
+
+        if row['as_built_geometry']:
+            laid_features += 1
+            laid_m += geometry_length_m(row['as_built_geometry'])
 
         properties = row['properties'] if isinstance(row['properties'], dict) else {}
         measurements = (
@@ -237,11 +249,24 @@ def _layer_report(project, layer_id, layer_name, tolerance, units, weight):
             }
         )
 
+    # The laid geometry is the strongest evidence: an engineer drew where the
+    # span went. Falling back to the length readings keeps older submissions
+    # (and the field app's numbers-only flow) in the report; `source` says which
+    # one the number came from, so nobody has to guess.
+    if laid_features:
+        as_built_source = 'geometry'
+        as_built_value = laid_m
+    elif measured_length_features > 0:
+        as_built_source = 'measurements'
+        as_built_value = as_built_m
+    else:
+        as_built_source = None
+        as_built_value = None
+
     # With nothing recorded yet, `as_built - 0` is not a 100 % shortfall — it is
     # missing evidence. Reporting 0 m as the difference told every layer on a
     # freshly opened project that it was fully out of tolerance.
-    measured = measured_length_features > 0
-    length_delta = (planned_m - as_built_m) if measured else None
+    length_delta = (planned_m - as_built_value) if as_built_source else None
     return {
         'layer_id': layer_id,
         'layer_name': layer_name,
@@ -251,11 +276,15 @@ def _layer_report(project, layer_id, layer_name, tolerance, units, weight):
         'weight_percentage': _round(weight, 2),
         'length': {
             'planned_m': _round(planned_m),
-            'as_built_m': _round(as_built_m) if measured else None,
+            'as_built_m': _round(as_built_value),
+            # 'geometry' | 'measurements' | null — where the laid figure came from.
+            'as_built_source': as_built_source,
+            'laid_geometry_m': _round(laid_m) if laid_features else None,
+            'laid_features': laid_features,
             'delta_m': _round(length_delta),
             'delta_pct': _round(
                 (length_delta / planned_m * 100)
-                if (measured and planned_m and length_delta is not None)
+                if (planned_m and length_delta is not None)
                 else None,
                 2,
             ),
@@ -511,6 +540,9 @@ class ProjectAsBuiltReportAPIView(APIView):
                     ),
                     'as_built_length_m': _round(
                         sum(layer['length']['as_built_m'] or 0.0 for layer in layers)
+                    ),
+                    'as_built_features': sum(
+                        layer['length']['laid_features'] or 0 for layer in layers
                     ),
                 },
                 'layers': layers,

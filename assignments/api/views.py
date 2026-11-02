@@ -631,6 +631,10 @@ class FeatureFieldMeasurementsAPIView(APIView):
 
         field_measurements = request.data.get('field_measurements')
         comparison_notes = request.data.get('comparison_notes')
+        # Where the crew actually laid it. Submitted beside the readings so one
+        # field visit writes one record; it lands in its own column and never
+        # touches the design geometry.
+        as_built_geometry = request.data.get('as_built_geometry')
 
         if field_measurements is not None:
             if not isinstance(field_measurements, dict):
@@ -643,12 +647,27 @@ class FeatureFieldMeasurementsAPIView(APIView):
         if comparison_notes is not None:
             feature.comparison_notes = comparison_notes
 
+        if as_built_geometry is not None:
+            if not isinstance(as_built_geometry, dict) or not as_built_geometry.get('type'):
+                return Response(
+                    {'detail': 'as_built_geometry must be a GeoJSON geometry object'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            coordinates = as_built_geometry.get('coordinates')
+            if not isinstance(coordinates, list | tuple):
+                return Response(
+                    {'detail': 'as_built_geometry must contain a coordinates array'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            feature.as_built_geometry = as_built_geometry
+
         feature.save()
 
         return Response(
             {
                 'id': str(feature.id),
                 'field_measurements': feature.field_measurements,
+                'as_built_geometry': feature.as_built_geometry,
                 'comparison_notes': feature.comparison_notes,
                 'updated_at': feature.updated_at.isoformat(),
             }

@@ -82,6 +82,10 @@ class ProjectMapDataAPIView(APIView):
         geojson: dict[str, dict[str, Any]] = {}
         all_features = []
         seen_layers = set()
+        # Planned and laid are served side by side, never merged: the design
+        # baseline is immutable, so the laid copy is its own collection.
+        as_built_geojson: dict[str, dict[str, Any]] = {}
+        as_built_features = []
 
         for f in features_qs:
             if not f.geometry:
@@ -110,12 +114,32 @@ class ProjectMapDataAPIView(APIView):
             geojson[name]['features'].append(feature)
             all_features.append(feature)
 
+            if f.as_built_geometry:
+                as_built_geojson.setdefault(
+                    name, {'type': 'FeatureCollection', 'features': []}
+                )
+                laid = {
+                    'type': 'Feature',
+                    'geometry': f.as_built_geometry,
+                    'properties': {
+                        'id': str(f.id),
+                        'feature_id': str(f.id),
+                        'layer': name,
+                        'status': f.status,
+                        'as_built': True,
+                    },
+                }
+                as_built_geojson[name]['features'].append(laid)
+                as_built_features.append(laid)
+
         return Response(
             {
                 'project_id': str(project.id),
                 'layers': layers,
                 'features': all_features,
                 'geojson': geojson,
+                'as_built_geojson': as_built_geojson,
+                'as_built_features': as_built_features,
             }
         )
 
