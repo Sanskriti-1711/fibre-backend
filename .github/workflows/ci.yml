@@ -67,6 +67,20 @@ jobs:
       - name: Run Mypy (type check)
         run: mypy --config-file pyproject.toml .
 
+  # The ignore rules cannot catch a file that is already in the index, and
+  # nothing else here looks at the index: a scratch database or an uploaded
+  # media file can sit in the repo indefinitely with every other job green.
+  # The script is POSIX sh with no dependencies, so this is a checkout and
+  # nothing else.
+  hygiene:
+    name: Tracked-but-ignored files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the index against the ignore rules
+        run: sh tools/check_tracked_ignored.sh
+
   tests:
     name: Tests (PostgreSQL + PostGIS)
     runs-on: ubuntu-latest
