@@ -4,22 +4,46 @@ Drives the real URL routes through Django's test client — auth, validation,
 serializers, the map payload and the report — and fails loudly if any step
 breaks. Run from `fiber-backend/`:
 
-    python manage.py shell < tools/e2e_as_built.py
+    python tools/e2e_as_built.py
 
-or import it from a shell. Requires a supervision project with imported
-features and one ENGINEER user; it exits non-zero on the first failure.
+(`manage.py shell <` does not work for this script: the shell is IPython, which
+evaluates the file cell by cell, so names do not survive from one cell to the
+next. The bootstrap below is why it runs as a plain script.)
+
+Requires a supervision project with imported features and one ENGINEER user;
+it exits non-zero on the first failure.
 """
 
 import copy
 import json
+import os
 import sys
 
-from django.test import Client
-from rest_framework_simplejwt.tokens import RefreshToken
+import django
 
-from projects.models import Feature, Project
-from supervision.report import geometry_length_m
-from users.models import User
+# Running as a plain script puts tools/ on sys.path, not the backend root, so
+# `config` would not import. Put the project root in front.
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+django.setup()
+
+# Windows consoles default to cp1252 and these messages use a real minus sign
+# (U+2212), which raised UnicodeEncodeError *after* the checks had passed — a
+# green run reported as a failure. Degrade the character, never the verdict.
+try:
+    sys.stdout.reconfigure(errors='replace')
+except (AttributeError, ValueError):  # pragma: no cover - redirected / older Python
+    pass
+
+from django.test import Client  # noqa: E402  (after django.setup())
+from rest_framework_simplejwt.tokens import RefreshToken  # noqa: E402
+
+from projects.models import Feature, Project  # noqa: E402
+from supervision.report import geometry_length_m  # noqa: E402
+from users.models import User  # noqa: E402
 
 PROJECT_ID = '86d24045-ad07-412a-be13-ded59ba82f32'
 LAYER = 'final_trenches'
