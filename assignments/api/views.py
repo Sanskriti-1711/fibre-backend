@@ -109,222 +109,217 @@ class AssignmentJobSummaryAPIView(APIView):
 
 
 class JobAssignmentsListAPIView(APIView):
+    """One row per assignment job, whatever its scope.
+
+    Built from `AssignmentJob`, not from `Feature`. The previous version walked
+    every imported feature (13,952 on the current database) and ran one
+    aggregate query per project/layer job inside that loop, which is what made a
+    bare request take ~14 s. It also only included project-scope jobs when
+    `engineer` was passed, so "All jobs" came back empty (`count: 0`) while
+    `stats` counted the whole feature table — the page and its counters
+    disagreed.
+
+    Aggregates for project/layer jobs now come from one grouped query, and
+    `stats` describes the features those jobs actually cover, so an empty job
+    list reports zeros.
+    """
+
     def get(self, request):
-        # Get query parameters
-        search = request.query_params.get('search', '').strip().lower()
-        project_id = request.query_params.get('project')
-        status_filter = request.query_params.get('status')
-        engineer_id = request.query_params.get('engineer')
-        scope_filter = request.query_params.get('scope')
-        layer_id = request.query_params.get('layer')
+        params = request.query_params
+        search = params.get('search', '').strip()
+        project_id = params.get('project')
+        status_filter = params.get('status')
+        engineer_id = params.get('engineer')
+        scope_filter = params.get('scope')
+        layer_id = params.get('layer')
 
-        # Base queryset: features that have assignments
-        queryset = Feature.objects.select_related('project').prefetch_related(
-            'assignment_jobs', 'assignment_jobs__assignee'
-        )
+        # Every job that matches the non-status filters. Status is filtered
+        # after the fact because, for a project/layer job, it is an aggregate of
+        # the features under it rather than a column.
+        jobs = list(self._job_queryset(project_id, layer_id, engineer_id, scope_filter, search))
+        counts, layer_names = self._feature_counts(jobs)
 
-        # Apply filters
-        if project_id:
-            queryset = queryset.filter(project_id=project_id)
+        # `stats` keeps describing every job the query matches, so the counters
+        # do not move when a status tab is selected.
+        stats = self._stats(jobs, counts)
 
-        if layer_id:
-            queryset = queryset.filter(layer_id=layer_id)
-
+        rows = [self._job_row(job, counts, layer_names) for job in jobs]
         if status_filter:
-            queryset = queryset.filter(status=status_filter)
+            rows = [row for row in rows if row['status'] == status_filter]
 
-        if engineer_id:
-            queryset = queryset.filter(assignment_jobs__assignee_id=engineer_id)
+        rows.sort(key=lambda row: row['created_at'], reverse=True)
 
-        # Search filter (job ID, project name, or engineer email)
-        if search:
-            queryset = queryset.filter(
-                Q(assignment_jobs__id__icontains=search)
-                | Q(project__name__icontains=search)
-                | Q(assignment_jobs__assignee__email__icontains=search)
-            )
-
-        # Get all features with their assignments
-        features = list(queryset.distinct())
-
-        # Build job assignments list
-        jobs = []
-        seen_assignments = set()
-
-        for feature in features:
-            for job in feature.assignment_jobs.all():
-                # For project/layer scope, group by assignment job
-                if job.scope in [AssignmentJob.SCOPE_PROJECT, AssignmentJob.SCOPE_LAYER]:
-                    if job.id in seen_assignments:
-                        continue
-                    seen_assignments.add(job.id)
-
-                    # For aggregate scopes, get all related features
-                    if job.scope == AssignmentJob.SCOPE_PROJECT:
-                        related_features = Feature.objects.filter(project=job.project)
-                    else:  # SCOPE_LAYER
-                        related_features = Feature.objects.filter(
-                            project=job.project, layer_id=job.layer_id
-                        )
-
-                    # Calculate aggregate status
-                    status_counts = related_features.values('status').annotate(count=Count('id'))
-                    total_features = sum(s['count'] for s in status_counts)
-
-                    # Determine aggregate status (priority: redo > under_review > approved > pending > assigned)
-                    statuses = {s['status']: s['count'] for s in status_counts}
-                    agg_status = self._get_aggregate_status(statuses)
-
-                    # Apply status filter to aggregate
-                    if status_filter and agg_status != status_filter:
-                        continue
-
-                    jobs.append(
-                        {
-                            'id': str(job.id),
-                            'project': {
-                                'id': str(job.project.id),
-                                'name': job.project.name,
-                                'status': job.project.status,
-                            },
-                            'scope': job.scope,
-                            'scope_display': job.get_scope_display(),
-                            'assignee': {
-                                'id': str(job.assignee.id),
-                                'email': job.assignee.email,
-                                'full_name': job.assignee.full_name,
-                            },
-                            'feature_count': total_features,
-                            'status': agg_status,
-                            'status_display': self._get_status_display(agg_status),
-                            'created_at': job.created_at.isoformat(),
-                        }
-                    )
-                else:
-                    # Feature scope - each feature is its own job
-                    jobs.append(
-                        {
-                            'id': str(job.id),
-                            'project': {
-                                'id': str(job.project.id),
-                                'name': job.project.name,
-                            },
-                            'scope': job.scope,
-                            'scope_display': job.get_scope_display(),
-                            'assignee': {
-                                'id': str(job.assignee.id),
-                                'email': job.assignee.email,
-                                'full_name': job.assignee.full_name,
-                            },
-                            'feature': {
-                                'id': str(feature.id),
-                                'status': feature.status,
-                                'layer_id': feature.layer_id,
-                                'layer_name': feature.layer_name,
-                            },
-                            'feature_count': 1,
-                            'status': feature.status,
-                            'status_display': self._get_status_display(feature.status),
-                            'created_at': job.created_at.isoformat(),
-                        }
-                    )
-
-        # Include project-scope assignments (no Feature rows) so an engineer
-        # sees their assigned survey copy in the app's Active Assignments.
-        if engineer_id:
-            project_jobs = AssignmentJob.objects.filter(
-                assignee_id=engineer_id,
-                scope=AssignmentJob.SCOPE_PROJECT,
-            ).select_related('project', 'assignee')
-            seen_project_job_ids = {j['id'] for j in jobs}
-            for pjob in project_jobs:
-                if str(pjob.id) in seen_project_job_ids:
-                    continue
-                seen_project_job_ids.add(str(pjob.id))
-                related_features = Feature.objects.filter(project=pjob.project)
-                status_counts = related_features.values('status').annotate(count=Count('id'))
-                total_features = sum(s['count'] for s in status_counts)
-                agg_status = self._get_aggregate_status(
-                    {s['status']: s['count'] for s in status_counts}
-                )
-                if status_filter and agg_status != status_filter:
-                    continue
-                jobs.append(
-                    {
-                        'id': str(pjob.id),
-                        'project': {
-                            'id': str(pjob.project.id),
-                            'name': pjob.project.name,
-                            'status': pjob.project.status,
-                        },
-                        'scope': pjob.scope,
-                        'scope_display': pjob.get_scope_display(),
-                        'assignee': {
-                            'id': str(pjob.assignee.id),
-                            'email': pjob.assignee.email,
-                            'full_name': pjob.assignee.full_name,
-                        },
-                        'feature_count': total_features,
-                        'status': agg_status,
-                        'status_display': self._get_status_display(agg_status),
-                        'created_at': pjob.created_at.isoformat(),
-                    }
-                )
-
-        # Apply scope filter
-        if scope_filter:
-            jobs = [j for j in jobs if j['scope'] == scope_filter]
-
-        # Calculate stats from all features (not filtered by status)
-        all_features = Feature.objects.all()
-        if project_id:
-            all_features = all_features.filter(project_id=project_id)
-        if engineer_id:
-            all_features = all_features.filter(assignment_jobs__assignee_id=engineer_id)
-
-        stats = all_features.aggregate(
-            total=Count('id'),
-            under_review=Count(
-                Case(When(status=Feature.STATUS_UNDER_REVIEW, then=1), output_field=IntegerField())
-            ),
-            approved=Count(
-                Case(When(status=Feature.STATUS_APPROVED, then=1), output_field=IntegerField())
-            ),
-            redo=Count(Case(When(status=Feature.STATUS_REDO, then=1), output_field=IntegerField())),
-            pending=Count(
-                Case(When(status=Feature.STATUS_PENDING, then=1), output_field=IntegerField())
-            ),
-            assigned=Count(
-                Case(When(status=Feature.STATUS_ASSIGNED, then=1), output_field=IntegerField())
-            ),
-        )
-
-        # Sort by created_at desc
-        jobs.sort(key=lambda x: x['created_at'], reverse=True)
-
-        # Pagination
-        page = int(request.query_params.get('page', 1))
-        page_size = int(request.query_params.get('page_size', 20))
+        page = int(params.get('page', 1))
+        page_size = int(params.get('page_size', 20))
         start = (page - 1) * page_size
-        end = start + page_size
-        paginated_jobs = jobs[start:end]
 
         return Response(
             {
-                'count': len(jobs),
+                'count': len(rows),
                 'page': page,
                 'page_size': page_size,
-                'results': paginated_jobs,
-                'stats': {
-                    'total': stats['total'],
-                    'under_review': stats['under_review'],
-                    'approved': stats['approved'],
-                    'redo': stats['redo'],
-                    'pending': stats['pending'],
-                    'assigned': stats['assigned'],
-                },
+                'results': rows[start : start + page_size],
+                'stats': stats,
             }
         )
+
+    @staticmethod
+    def _job_queryset(project_id, layer_id, engineer_id, scope_filter, search):
+        qs = AssignmentJob.objects.select_related('project', 'assignee', 'feature')
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+        if layer_id:
+            qs = qs.filter(layer_id=layer_id)
+        if engineer_id:
+            qs = qs.filter(assignee_id=engineer_id)
+        if scope_filter:
+            qs = qs.filter(scope=scope_filter)
+        if search:
+            qs = qs.filter(
+                Q(id__icontains=search)
+                | Q(project__name__icontains=search)
+                | Q(assignee__email__icontains=search)
+            )
+        return qs
+
+    @staticmethod
+    def _feature_counts(jobs):
+        """Status counts per project and per (project, layer), in one query.
+
+        A project job's `feature_count`/status is the whole project; a layer
+        job's is its layer. Features whose layer_id differs between rows are
+        summed per (project, layer) pair, so a layer job cannot pick up another
+        layer's features.
+        """
+        project_ids = {job.project_id for job in jobs if job.scope == AssignmentJob.SCOPE_PROJECT}
+        layer_pairs = {
+            (job.project_id, job.layer_id) for job in jobs if job.scope == AssignmentJob.SCOPE_LAYER
+        }
+        by_project: dict = {}
+        by_layer: dict = {}
+        layer_names: dict = {}
+
+        if not project_ids and not layer_pairs:
+            return {'project': by_project, 'layer': by_layer}, layer_names
+
+        rows = (
+            Feature.objects.filter(project_id__in=project_ids | {p for p, _ in layer_pairs})
+            .values('project_id', 'layer_id', 'layer_name', 'status')
+            .annotate(count=Count('id'))
+        )
+        for row in rows:
+            project_key = row['project_id']
+            layer_key = (project_key, row['layer_id'])
+            count = row['count']
+            if project_key in project_ids:
+                per_status = by_project.setdefault(project_key, {})
+                per_status[row['status']] = per_status.get(row['status'], 0) + count
+            if layer_key in layer_pairs:
+                per_status = by_layer.setdefault(layer_key, {})
+                per_status[row['status']] = per_status.get(row['status'], 0) + count
+                layer_names[layer_key] = row['layer_name']
+
+        return {'project': by_project, 'layer': by_layer}, layer_names
+
+    def _job_row(self, job, counts, layer_names):
+        base = {
+            'id': str(job.id),
+            'project': {
+                'id': str(job.project.id),
+                'name': job.project.name,
+            },
+            'scope': job.scope,
+            'scope_display': job.get_scope_display(),
+            'assignee': {
+                'id': str(job.assignee.id),
+                'email': job.assignee.email,
+                'full_name': job.assignee.full_name,
+            },
+            'created_at': job.created_at.isoformat(),
+        }
+
+        if job.scope == AssignmentJob.SCOPE_FEATURE and job.feature:
+            feature = job.feature
+            base['feature'] = {
+                'id': str(feature.id),
+                'status': feature.status,
+                'layer_id': feature.layer_id,
+                'layer_name': feature.layer_name,
+            }
+            base['feature_count'] = 1
+            base['status'] = feature.status
+            base['status_display'] = self._get_status_display(feature.status)
+            return base
+
+        if job.scope == AssignmentJob.SCOPE_PROJECT:
+            base['project']['status'] = job.project.status
+            status_counts = counts['project'].get(job.project_id, {})
+        else:
+            layer_key = (job.project_id, job.layer_id)
+            status_counts = counts['layer'].get(layer_key, {})
+            base['layer'] = {
+                'id': job.layer_id,
+                'name': layer_names.get(layer_key) or job.layer_id,
+            }
+
+        aggregate_status = self._get_aggregate_status(status_counts)
+        base['feature_count'] = sum(status_counts.values())
+        base['status'] = aggregate_status
+        base['status_display'] = self._get_status_display(aggregate_status)
+        return base
+
+    @staticmethod
+    def _stats(jobs, counts):
+        """Status counts over exactly the features the matching jobs cover.
+
+        Project jobs cover their whole project, layer jobs their layer (unless a
+        project job already covers it), feature jobs their feature. Summing that
+        union is what keeps `stats.total` equal to what the table is showing.
+
+        The project/layer half is read from `_feature_counts`, which the rows
+        need anyway — so a page of project jobs costs no extra query, where the
+        previous version ran a second aggregate over the same features.
+        """
+        project_ids = {job.project_id for job in jobs if job.scope == AssignmentJob.SCOPE_PROJECT}
+        layer_pairs = {
+            (job.project_id, job.layer_id)
+            for job in jobs
+            if job.scope == AssignmentJob.SCOPE_LAYER and job.project_id not in project_ids
+        }
+        feature_ids = {
+            job.feature_id
+            for job in jobs
+            if job.scope == AssignmentJob.SCOPE_FEATURE and job.feature_id
+        }
+
+        stats = {
+            'total': 0,
+            Feature.STATUS_UNDER_REVIEW: 0,
+            Feature.STATUS_APPROVED: 0,
+            Feature.STATUS_REDO: 0,
+            Feature.STATUS_PENDING: 0,
+            Feature.STATUS_ASSIGNED: 0,
+        }
+
+        def absorb(status_counts):
+            for status, count in status_counts.items():
+                stats['total'] += count
+                if status in stats:
+                    stats[status] += count
+
+        for project_key in project_ids:
+            absorb(counts['project'].get(project_key, {}))
+        for layer_key in layer_pairs:
+            absorb(counts['layer'].get(layer_key, {}))
+        if feature_ids:
+            rows = (
+                Feature.objects.filter(id__in=feature_ids)
+                .values('status')
+                .annotate(count=Count('id'))
+            )
+            for row in rows:
+                absorb({row['status']: row['count']})
+        return stats
 
     def _get_aggregate_status(self, statuses):
         """Determine aggregate status with priority: redo > under_review > approved > pending > assigned"""
