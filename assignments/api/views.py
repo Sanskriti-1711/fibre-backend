@@ -7,6 +7,7 @@ from django.db.models import (
     Q,
     When,
 )
+from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.response import Response
@@ -494,26 +495,29 @@ class EngineerStatsAPIView(APIView):
             ),
         )
 
-        # Daily breakdown for the period
+        # Daily breakdown for the period, in one grouped query. The previous
+        # version ran `days` aggregates (30 by default) to fill this array,
+        # which is most of the endpoint's latency against a remote database.
         daily_stats = []
-        for day_offset in range(days):
-            day_start = since + timedelta(days=day_offset)
-            day_end = day_start + timedelta(days=1)
-
-            day_features = recent_features.filter(updated_at__gte=day_start, updated_at__lt=day_end)
-
-            day_stat = day_features.aggregate(
+        daily_rows = (
+            recent_features.annotate(day=TruncDate('updated_at'))
+            .values('day')
+            .annotate(
                 updated=Count('id'),
                 approved=Count(
                     Case(When(status=Feature.STATUS_APPROVED, then=1), output_field=IntegerField())
                 ),
             )
-
+        )
+        by_day = {row['day']: row for row in daily_rows}
+        for day_offset in range(days):
+            day = (since + timedelta(days=day_offset)).date()
+            row = by_day.get(day)
             daily_stats.append(
                 {
-                    'date': day_start.date().isoformat(),
-                    'updated': day_stat['updated'],
-                    'approved': day_stat['approved'],
+                    'date': day.isoformat(),
+                    'updated': row['updated'] if row else 0,
+                    'approved': row['approved'] if row else 0,
                 }
             )
 
