@@ -2,6 +2,7 @@ from django.urls import path
 
 from supervision.dashboard import DashboardSummaryAPIView
 from supervision.export import ProjectExportAPIView
+from supervision.report import ProjectAsBuiltReportAPIView
 from supervision.views import (
     FeatureDecisionListView,
     FeaturePhotoDetailView,
@@ -21,6 +22,12 @@ urlpatterns = [
         ProjectFeatureStatusesAPIView.as_view(),
     ),
     path('projects/<uuid:project_id>/export/', ProjectExportAPIView.as_view()),
+    # Stage 8: per-layer planned-vs-as-built totals and the BOQ reconciliation
+    # the handover review reads. Read-only.
+    path(
+        'projects/<uuid:project_id>/as-built-report/',
+        ProjectAsBuiltReportAPIView.as_view(),
+    ),
     # Stage 6: the append-only record of approval-with-deviation. Read only —
     # records are written by the approval path, never by a client.
     path('features/<uuid:feature_id>/decisions/', FeatureDecisionListView.as_view()),
