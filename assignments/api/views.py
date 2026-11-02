@@ -1,3 +1,4 @@
+import contextlib
 from datetime import timedelta
 
 from django.db.models import (
@@ -39,6 +40,26 @@ def engineer_feature_queryset(engineer_id):
     return Feature.objects.filter(condition).distinct()
 
 
+def record_stage_events(project_ids, event, actor=None, entity_id='', metadata=None):
+    """Write one supervision StageEvent per project a bulk action touched.
+
+    Never raises: the action itself has already succeeded, and a timeline row is
+    not worth failing an approval over (the same rule as `ftth_lld._record_event`).
+    """
+    from projects.models.stage_event import StageEvent
+
+    for project_id in {str(pid) for pid in project_ids if pid}:
+        with contextlib.suppress(Exception):
+            StageEvent.objects.create(
+                project_id=project_id,
+                stage=StageEvent.Stage.SUPERVISION,
+                event=event,
+                actor=actor if getattr(actor, 'is_authenticated', False) else None,
+                entity_id=entity_id or '',
+                metadata=metadata or {},
+            )
+
+
 class AssignmentJobListCreateAPIView(generics.ListCreateAPIView):
     queryset = AssignmentJob.objects.select_related('project', 'feature', 'assignee')
 
@@ -64,6 +85,18 @@ class AssignmentJobListCreateAPIView(generics.ListCreateAPIView):
             qs = qs.filter(assignee_id=assignee_id)
 
         return qs.order_by('scope', 'layer_id', 'created_at')
+
+    def perform_create(self, serializer):
+        job = serializer.save()
+        # The assignment is the supervision stage's first event: it is what puts
+        # a feature in front of an engineer (INTEGRATION_PLAN.md §3.4).
+        record_stage_events(
+            [job.project_id],
+            'feature_assigned',
+            actor=self.request.user,
+            entity_id=str(job.feature_id or job.layer_id or job.project_id),
+            metadata={'scope': job.scope, 'assignee': str(job.assignee_id)},
+        )
 
 
 class AssignmentJobDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
@@ -668,10 +701,23 @@ class FeatureSubmitAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Capture the identity before the update: the rows are about to leave the
+        # statuses this queryset is read through, so re-reading it afterwards is
+        # how the approve/reject response used to come back empty.
+        project_ids = list(features.values_list('project_id', flat=True).distinct())
+        submitted_ids = [str(fid) for fid in features.values_list('id', flat=True)]
+
         # Update status to under_review and set submitted_at
         now = timezone.now()
         updated_count = features.filter(status__in=valid_statuses).update(
             status=Feature.STATUS_UNDER_REVIEW, submitted_at=now
+        )
+
+        record_stage_events(
+            project_ids,
+            'feature_submitted',
+            actor=request.user,
+            metadata={'feature_ids': submitted_ids, 'count': updated_count},
         )
 
         return Response(
@@ -713,11 +759,23 @@ class FeatureApproveAPIView(APIView):
         # Capture ids before the update: the queryset is filtered on the old
         # status, so re-reading it after the update returns nothing.
         approved_ids = [str(fid) for fid in features.values_list('id', flat=True)]
+        project_ids = list(features.values_list('project_id', flat=True).distinct())
         now = timezone.now()
         updated_count = features.update(
             status=Feature.STATUS_APPROVED,
             approved_at=now,
             approval_notes=notes or '',
+        )
+
+        record_stage_events(
+            project_ids,
+            'feature_approved',
+            actor=request.user,
+            metadata={
+                'feature_ids': approved_ids,
+                'count': updated_count,
+                'notes': notes or '',
+            },
         )
 
         return Response(
@@ -758,9 +816,21 @@ class FeatureRejectAPIView(APIView):
 
         # Capture ids before the update (see FeatureApproveAPIView).
         rejected_ids = [str(fid) for fid in features.values_list('id', flat=True)]
+        project_ids = list(features.values_list('project_id', flat=True).distinct())
         # Update status to redo and clear submitted_at (for re-submission)
         updated_count = features.update(
             status=Feature.STATUS_REDO, submitted_at=None, comparison_notes=rejection_reason
+        )
+
+        record_stage_events(
+            project_ids,
+            'feature_redo',
+            actor=request.user,
+            metadata={
+                'feature_ids': rejected_ids,
+                'count': updated_count,
+                'reason': rejection_reason,
+            },
         )
 
         return Response(

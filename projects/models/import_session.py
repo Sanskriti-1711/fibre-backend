@@ -12,6 +12,24 @@ class ImportSession(models.Model):
     original_filename = models.TextField()
     stored_file_path = models.TextField()
 
+    # Which source produced this project's features: a contractor GeoPackage /
+    # zip upload, or an LLD run handoff (INTEGRATION_PLAN.md §3 Stage 4.1).
+    # Existing rows are uploads, hence the default; the two kinds coexist on one
+    # project without colliding, so a supervision project opened from a run can
+    # still accept a fallback upload.
+    SOURCE_GPKG = 'gpkg'
+    SOURCE_LLD_RUN = 'lld_run'
+    SOURCE_KIND_CHOICES = [
+        (SOURCE_GPKG, 'GeoPackage / zip upload'),
+        (SOURCE_LLD_RUN, 'LLD run handoff'),
+    ]
+
+    source_kind = models.CharField(
+        max_length=20, choices=SOURCE_KIND_CHOICES, default=SOURCE_GPKG
+    )
+    # The run marker ("<ftth_project_id>:<lld_version>") for an LLD handoff.
+    source_ref = models.CharField(max_length=128, blank=True, default='')
+
     status = models.CharField(
         max_length=20,
         choices=[

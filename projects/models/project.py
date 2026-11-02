@@ -54,6 +54,22 @@ class Project(models.Model):
         db_index=True,
     )
 
+    # When this project is a supervision project opened from a completed LLD
+    # run, this holds that run's identity ("<ftth_project_id>:<lld_version>")
+    # and ``business_meta['origin']`` records how it was created:
+    # ``lld_run`` (handoff) or ``manual_gpkg`` (contractor upload). Both are
+    # additive: survey copies keep NULL here.
+    #
+    # Kept as text rather than an FK because a run lives in the LLD app and the
+    # only thing later stages need is a readable link back to "which design was
+    # this compared against" — INTEGRATION_PLAN.md §3 Stage 3.2.
+    source_lld_run_id = models.CharField(
+        max_length=128,
+        blank=True,
+        null=True,
+        db_index=True,
+    )
+
     standard_completion = models.DecimalField(max_digits=5, decimal_places=2, default=0)
 
     created_at = models.DateTimeField(auto_now_add=True)

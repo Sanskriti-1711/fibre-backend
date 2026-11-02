@@ -905,14 +905,27 @@ class ProjectOverviewView(APIView):
             }
 
         # ── Timeline events ───────────────────────────────────────────
+        # One HLD project owns several Project rows: its survey copy and any
+        # supervision project opened from an LLD run. The timeline is the
+        # project's history, not one row's, so read every linked project —
+        # otherwise supervision activity is invisible here
+        # (INTEGRATION_PLAN.md §3 Stage 3, "shows up in the stage timeline").
         events = []
-        if copy is not None:
-            for e in StageEvent.objects.filter(project=copy).select_related('actor')[:20]:
+        timeline_projects = list(
+            Project.objects.filter(source_ftth_project_id=project_id).values_list('id', flat=True)
+        )
+        if copy is not None and copy.id not in timeline_projects:
+            timeline_projects.append(copy.id)
+        if timeline_projects:
+            for e in StageEvent.objects.filter(project_id__in=timeline_projects).select_related(
+                'actor'
+            )[:20]:
                 events.append(
                     {
                         'stage': e.stage,
                         'event': e.event,
                         'entity_id': e.entity_id,
+                        'project_id': str(e.project_id),
                         'actor': (e.actor.full_name or e.actor.email) if e.actor else None,
                         'created_at': e.created_at.isoformat(),
                     }

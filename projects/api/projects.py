@@ -1,4 +1,6 @@
+import contextlib
 import os
+import uuid
 from datetime import timedelta
 from pathlib import Path
 
@@ -13,6 +15,7 @@ from ftth_hld.pipeline import ftth_project_payloads
 from projects.api.microservice import headers as microservice_headers
 from projects.models.import_session import ImportSession
 from projects.models.project import Project
+from projects.models.stage_event import StageEvent
 
 from .serializers import ProjectSerializer
 
@@ -23,6 +26,48 @@ MICROSERVICE_BASE_URL = os.getenv('MICROSERVICE_BASE_URL', 'http://localhost:818
 # Survey statuses that mark the transition from field survey into the LLD
 # (review + detailed design) stage.
 LLD_STATUSES = {'submitted', 'under_review', 'reviewed', 'accepted', 'completed'}
+
+
+def find_lld_run(source_lld_run_id):
+    """Resolve a `"<ftth_project_id>:<lld_version>"` marker to an LldRun.
+
+    That is the shape the frontend builds on LLD Outputs (`ftth-lld-outputs.html`
+    sets `source_lld_run_id` to `<run.project_id>:<run.lld_version>`), and a bare
+    version is accepted too so a hand-built link still resolves.
+    """
+    from ftth_lld.models import LldRun
+
+    project_part, _, version_part = str(source_lld_run_id or '').partition(':')
+    if not project_part:
+        return None
+
+    if not version_part:
+        return LldRun.objects.filter(lld_version=project_part).first()
+
+    # Filtering a UUID column by a non-UUID string raises, so validate first:
+    # a garbled link must read as "not found", not as a 500.
+    try:
+        uuid.UUID(str(project_part))
+    except (ValueError, AttributeError, TypeError):
+        return None
+    return LldRun.objects.filter(
+        ftth_project_id=project_part, lld_version=version_part
+    ).first()
+
+
+def record_stage_event(project, event, actor=None, entity_id='', metadata=None):
+    """Write one StageEvent to a project's timeline (never raises)."""
+    if project is None:
+        return
+    with contextlib.suppress(Exception):
+        StageEvent.objects.create(
+            project=project,
+            stage=StageEvent.Stage.SUPERVISION,
+            event=event,
+            actor=actor if getattr(actor, 'is_authenticated', False) else None,
+            entity_id=entity_id or '',
+            metadata=metadata or {},
+        )
 
 
 class ProjectListCreateAPIView(APIView):
@@ -133,11 +178,54 @@ class ProjectListCreateAPIView(APIView):
 
     def post(self, request):
         serializer = ProjectSerializer(data=request.data)
-        if serializer.is_valid():
-            project = serializer.save()
-            return Response(ProjectSerializer(project).data, status=status.HTTP_201_CREATED)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        # ── Supervision identity (INTEGRATION_PLAN.md §3 Stage 3) ──────────
+        # A project opened from LLD Outputs carries the run it is supervising.
+        # Rule 1 of §1: only a COMPLETED run may be supervised, so an incomplete
+        # or unknown one is refused here rather than producing a project whose
+        # "planned baseline" points at nothing.
+        source_lld_run_id = (serializer.validated_data.get('source_lld_run_id') or '').strip()
+        run = None
+        if source_lld_run_id:
+            run = find_lld_run(source_lld_run_id)
+            if run is None:
+                return Response(
+                    {'detail': f'LLD run not found: {source_lld_run_id}'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if run.status != run.STATUS_COMPLETED:
+                return Response(
+                    {
+                        'detail': (
+                            f'LLD run {run.lld_version} is {run.status}; only a completed '
+                            'run can be supervised'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        project = serializer.save()
+
+        if source_lld_run_id:
+            # `origin` is derived from what was validated, so it is stamped here
+            # rather than trusted from the request body.
+            project.business_meta = {**(project.business_meta or {}), 'origin': 'lld_run'}
+            project.save(update_fields=['business_meta', 'updated_at'])
+            record_stage_event(
+                project,
+                'supervision_opened',
+                actor=request.user,
+                entity_id=project.source_lld_run_id or '',
+                metadata={
+                    'lld_version': run.lld_version,
+                    'hld_version': run.hld_version,
+                    'ftth_project_id': str(run.ftth_project_id),
+                },
+            )
+
+        return Response(ProjectSerializer(project).data, status=status.HTTP_201_CREATED)
 
 
 class ProjectDetailAPIView(APIView):

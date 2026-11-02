@@ -20,10 +20,15 @@ class StageEvent(models.Model):
         HLD = 'hld', 'HLD'
         SURVEY = 'survey', 'Survey'
         LLD = 'lld', 'LLD'
+        # Construction supervision: the fourth stage, consuming a completed LLD
+        # run read-only (docs/subprojects/FieldSupervision/INTEGRATION_PLAN.md
+        # §3 Stage 3). Additive choice only — no stored value changes.
+        SUPERVISION = 'supervision', 'Supervision'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='stage_events')
-    stage = models.CharField(max_length=10, choices=Stage.choices)
+    # 12, not 10: 'supervision' is 11 characters.
+    stage = models.CharField(max_length=12, choices=Stage.choices)
     event = models.CharField(
         max_length=100
     )  # e.g. hld_completed, survey_submitted, change_approved, lld_completed

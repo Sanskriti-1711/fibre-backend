@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .completion import ProjectCompletionAPIView
+from .handoff import LldHandoffView
 from .import_views import (
     GpkgDiscoverView,
     GpkgImportView,
@@ -66,6 +67,8 @@ urlpatterns = [
         ProjectLayerWeightsAPIView.as_view(),
     ),
     # Import endpoints
+    # LLD → supervision handoff (INTEGRATION_PLAN.md §3 Stage 4)
+    path('projects/<uuid:project_id>/import/from-lld/', LldHandoffView.as_view()),
     path('projects/<uuid:project_id>/import/upload/', GpkgUploadView.as_view()),
     path('projects/<uuid:project_id>/import/discover/', GpkgDiscoverView.as_view()),
     path('projects/<uuid:project_id>/import/import/', GpkgImportView.as_view()),

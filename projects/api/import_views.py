@@ -182,6 +182,7 @@ class GpkgUploadView(APIView):
         # Create or update ImportSession
         import_session, _ = ImportSession.objects.update_or_create(
             project=project,
+            source_kind=ImportSession.SOURCE_GPKG,
             defaults={
                 'original_filename': file_obj.name,
                 'stored_file_path': absolute_path,
@@ -216,7 +217,9 @@ class GpkgDiscoverView(APIView):
 
         # Find the import session for this project
         try:
-            import_session = ImportSession.objects.get(project=project)
+            import_session = ImportSession.objects.get(
+                project=project, source_kind=ImportSession.SOURCE_GPKG
+            )
         except ImportSession.DoesNotExist:
             return Response(
                 {'detail': 'No upload found for this project. Please upload first.'},
@@ -298,7 +301,9 @@ class GpkgImportView(APIView):
 
         # Find the import session
         try:
-            import_session = ImportSession.objects.get(project=project)
+            import_session = ImportSession.objects.get(
+                project=project, source_kind=ImportSession.SOURCE_GPKG
+            )
         except ImportSession.DoesNotExist:
             return Response(
                 {'detail': 'No upload found for this project. Please upload first.'},
@@ -439,7 +444,9 @@ class ImportStatusView(APIView):
             return Response({'detail': 'Project not found'}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            import_session = ImportSession.objects.get(project=project)
+            import_session = ImportSession.objects.get(
+                project=project, source_kind=ImportSession.SOURCE_GPKG
+            )
         except ImportSession.DoesNotExist:
             return Response({'project_id': str(project_id), 'status': 'no_upload'})
 

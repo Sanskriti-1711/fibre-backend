@@ -6,6 +6,12 @@ from projects.models.project import Project
 
 
 class ProjectSerializer(serializers.ModelSerializer):
+    # How this project came to exist: 'lld_run' (opened from LLD Outputs) or
+    # 'manual_gpkg' (contractor upload). Read-only: the create view stamps it,
+    # because the value is a consequence of the source_lld_run_id it validated,
+    # not something a client should be able to assert. INTEGRATION_PLAN.md §3.3.
+    origin = serializers.SerializerMethodField()
+
     class Meta:
         model = Project
         fields = [
@@ -16,10 +22,15 @@ class ProjectSerializer(serializers.ModelSerializer):
             'status',
             'standard_completion',
             'source_ftth_project_id',
+            'source_lld_run_id',
+            'origin',
             'created_at',
             'updated_at',
             'last_activity_at',
         ]
+
+    def get_origin(self, obj):
+        return (obj.business_meta or {}).get('origin') or 'manual_gpkg'
 
 
 class FeatureSerializer(serializers.ModelSerializer):
