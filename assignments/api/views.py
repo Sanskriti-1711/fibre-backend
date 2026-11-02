@@ -711,14 +711,15 @@ class FeatureApproveAPIView(APIView):
         # Update status to approved, set approved_at, and keep the note. The
         # note used to be echoed back and dropped, so "approve with deviation"
         # left no record of why.
+        # Capture ids before the update: the queryset is filtered on the old
+        # status, so re-reading it after the update returns nothing.
+        approved_ids = [str(fid) for fid in features.values_list('id', flat=True)]
         now = timezone.now()
         updated_count = features.update(
             status=Feature.STATUS_APPROVED,
             approved_at=now,
             approval_notes=notes or '',
         )
-
-        approved_ids = [str(f.id) for f in features]
 
         return Response(
             {
@@ -756,6 +757,8 @@ class FeatureRejectAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Capture ids before the update (see FeatureApproveAPIView).
+        rejected_ids = [str(fid) for fid in features.values_list('id', flat=True)]
         # Update status to redo and clear submitted_at (for re-submission)
         updated_count = features.update(
             status=Feature.STATUS_REDO, submitted_at=None, comparison_notes=rejection_reason
@@ -764,7 +767,7 @@ class FeatureRejectAPIView(APIView):
         return Response(
             {
                 'rejected_count': updated_count,
-                'feature_ids': [str(f.id) for f in features],
+                'feature_ids': rejected_ids,
                 'reviewer_id': reviewer_id,
                 'rejection_reason': rejection_reason,
                 'new_status': Feature.STATUS_REDO,
