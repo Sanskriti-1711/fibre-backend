@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 
 from ftth_hld.assign import accept_survey_project
 from ftth_hld.pipeline import ftth_project_payloads
+from projects.api.microservice import headers as microservice_headers
 from projects.models.import_session import ImportSession
 from projects.models.project import Project
 
@@ -159,17 +160,18 @@ class ProjectDetailAPIView(APIView):
         except Project.DoesNotExist:
             return Response({'detail': 'Project not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Delete microservice layers first
+        # Ask the import service to drop its copy, if one exists.
+        #
+        # Best-effort on purpose. The service is local-only (see `.env.example`)
+        # and holds no geometry the platform needs: `Feature.geometry` in this
+        # database is the store. Treating an unreachable service as fatal made
+        # project deletion impossible on any host that cannot reach localhost,
+        # which is every deployment.
         microservice_url = f'{MICROSERVICE_BASE_URL}/geo/projects/{project_id}/layers'
         try:
-            response = requests.delete(microservice_url, timeout=60)
-            if response.status_code not in (200, 202, 204, 404):
-                response.raise_for_status()
-        except requests.RequestException as exc:
-            return Response(
-                {'detail': f'Failed to delete project layers in microservice: {exc}'},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+            requests.delete(microservice_url, headers=microservice_headers(), timeout=10)
+        except requests.RequestException:
+            pass
 
         # Clean up uploaded files from import sessions before cascade delete
         import_sessions = ImportSession.objects.filter(project=project)

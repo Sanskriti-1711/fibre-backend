@@ -12,6 +12,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from projects.api.microservice import headers as microservice_headers
 from projects.models import Feature, ImportSession, Project
 
 # Where the import/geo service runs. Local development starts it on :8180
@@ -253,6 +254,7 @@ class GpkgDiscoverView(APIView):
                 response = requests.post(
                     f'{MICROSERVICE_BASE_URL}/import/gpkg/discover',
                     files={'file': (f'{project_id}.gpkg', f)},
+                    headers=microservice_headers(),
                     timeout=60,
                 )
                 response.raise_for_status()
@@ -351,6 +353,7 @@ class GpkgImportView(APIView):
                     f'{MICROSERVICE_BASE_URL}/import/gpkg',
                     files={'file': (f'{project_id}.gpkg', f)},
                     data={'project_id': str(project_id), 'layers': json.dumps(selected_layers)},
+                    headers=microservice_headers(),
                     timeout=120,
                 )
                 response.raise_for_status()

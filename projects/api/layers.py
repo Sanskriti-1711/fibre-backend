@@ -7,6 +7,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from projects.api.microservice import headers as microservice_headers
 from projects.layer_rules import is_field_survey_layer
 from projects.models import Feature, LayerFieldConfig, Project
 
@@ -290,7 +291,7 @@ class ProjectFeatureDetailAPIView(APIView):
         )
 
         try:
-            response = requests.get(microservice_url, timeout=30)
+            response = requests.get(microservice_url, headers=microservice_headers(), timeout=30)
             response.raise_for_status()
             geojson_payload = response.json()
             geojson_feature = geojson_payload.get('feature')
