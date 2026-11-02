@@ -44,6 +44,10 @@ class Notification(models.Model):
     KIND_LLD_READY = 'lld_ready'
     KIND_LLD_RUN = 'lld_run'
     KIND_PERMIT = 'permit'
+    # Supervision: a reviewer accepted work that does not match the design.
+    # Its own kind, not ``system``, so the bell can be filtered to the as-built
+    # decisions a planner actually has to act on (INTEGRATION_PLAN.md §3 Stage 6).
+    KIND_SUPERVISION_DEVIATION = 'supervision_deviation'
     KIND_SYSTEM = 'system'
 
     KIND_CHOICES = [
@@ -53,6 +57,7 @@ class Notification(models.Model):
         (KIND_LLD_READY, 'Approved Survey Version ready'),
         (KIND_LLD_RUN, 'LLD run'),
         (KIND_PERMIT, 'Permit'),
+        (KIND_SUPERVISION_DEVIATION, 'Supervision deviation'),
         (KIND_SYSTEM, 'System'),
     ]
 

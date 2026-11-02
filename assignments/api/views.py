@@ -1,4 +1,5 @@
 import contextlib
+import logging
 from datetime import timedelta
 
 from django.db.models import (
@@ -17,6 +18,8 @@ from rest_framework.views import APIView
 from assignments.api.serializers import AssignmentJobDetailSerializer, AssignmentJobSerializer
 from assignments.models import AssignmentJob
 from projects.models import Feature
+
+logger = logging.getLogger(__name__)
 
 
 def engineer_feature_queryset(engineer_id):
@@ -758,14 +761,31 @@ class FeatureApproveAPIView(APIView):
         # left no record of why.
         # Capture ids before the update: the queryset is filtered on the old
         # status, so re-reading it after the update returns nothing.
-        approved_ids = [str(fid) for fid in features.values_list('id', flat=True)]
-        project_ids = list(features.values_list('project_id', flat=True).distinct())
+        # Materialise the rows before the update: the deviation comparison needs
+        # each feature's own readings, and this queryset is filtered on the
+        # status the rows are about to leave.
+        reviewed_features = list(features.select_related('project'))
+        approved_ids = [str(feature.id) for feature in reviewed_features]
+        project_ids = sorted({feature.project_id for feature in reviewed_features}, key=str)
         now = timezone.now()
         updated_count = features.update(
             status=Feature.STATUS_APPROVED,
             approved_at=now,
             approval_notes=notes or '',
         )
+
+        # Accepting work outside the design tolerance is a decision, not just a
+        # status change: write it down (INTEGRATION_PLAN.md §3 Stage 6). Never
+        # fatal — the approval itself has already been committed.
+        deviations = []
+        try:
+            from supervision.decisions import record_approval_deviations
+
+            deviations = record_approval_deviations(
+                reviewed_features, actor=request.user, notes=notes
+            )
+        except Exception:
+            logger.exception('Could not record supervision deviations on approval')
 
         record_stage_events(
             project_ids,
@@ -787,6 +807,8 @@ class FeatureApproveAPIView(APIView):
                 'new_status': Feature.STATUS_APPROVED,
                 'status_display': 'Approved',
                 'approved_at': now.isoformat(),
+                'deviation_count': len(deviations),
+                'deviations_recorded': deviations,
             }
         )
 

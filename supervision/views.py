@@ -4,8 +4,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from projects.models import Feature, Project
-from supervision.models import FeaturePhoto
-from supervision.serializers import FeaturePhotoSerializer
+from supervision.models import FeatureDecisionRecord, FeaturePhoto
+from supervision.serializers import FeatureDecisionRecordSerializer, FeaturePhotoSerializer
 
 
 def _validate_photo(upload):
@@ -165,5 +165,75 @@ class ProjectFeatureStatusesAPIView(APIView):
             {
                 'project_id': str(project_id),
                 'features': list(features),
+            }
+        )
+
+
+class FeatureDecisionListView(APIView):
+    """GET /api/features/<feature_id>/decisions/
+
+    The append-only decision history of one feature: every time a reviewer
+    accepted work outside the design tolerance, with the comparison as it stood
+    at that moment. Read-only by design — a decision record is evidence, so
+    there is deliberately no write, edit or delete route (INTEGRATION_PLAN.md
+    §3 Stage 6)."""
+
+    def get(self, request, feature_id):
+        if not Feature.objects.filter(id=feature_id).exists():
+            return Response(
+                {'detail': 'Feature not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        records = FeatureDecisionRecord.objects.filter(
+            feature_id=feature_id
+        ).select_related('feature', 'reviewer')
+
+        return Response(
+            {
+                'feature_id': str(feature_id),
+                'count': records.count(),
+                'results': FeatureDecisionRecordSerializer(records, many=True).data,
+            }
+        )
+
+
+class ProjectDecisionListView(APIView):
+    """GET /api/projects/<project_id>/decisions/
+
+    Every deviation recorded on a supervision project, newest first, so the
+    project page can show what was accepted without walking the features.
+    Optional ``layer`` narrows it to one layer.
+    """
+
+    def get(self, request, project_id):
+        if not Project.objects.filter(id=project_id).exists():
+            return Response(
+                {'detail': 'Project not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        records = FeatureDecisionRecord.objects.filter(
+            project_id=project_id
+        ).select_related('feature', 'reviewer')
+
+        layer_id = (request.GET.get('layer') or '').strip()
+        if layer_id:
+            records = records.filter(feature__layer_id=layer_id)
+
+        total = records.count()
+        try:
+            limit = max(1, min(int(request.GET.get('limit') or 100), 500))
+        except ValueError:
+            return Response(
+                {'detail': 'limit must be an integer'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {
+                'project_id': str(project_id),
+                'count': total,
+                'results': FeatureDecisionRecordSerializer(records[:limit], many=True).data,
             }
         )

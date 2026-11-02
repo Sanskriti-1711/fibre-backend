@@ -27,6 +27,7 @@ import logging
 import re
 import threading
 import time
+import uuid
 from typing import Any
 
 from django.db.models import Prefetch
@@ -41,6 +42,7 @@ from ftth_lld.models import ApprovedSurveyVersion, LldLayer, LldRun
 from permits.rules.engine import run_analysis as run_permit_analysis
 from projects.layer_rules import normalize_layer_id
 from projects.models import Feature, Project, ProjectMember, StageEvent
+from supervision.models import FeatureDecisionRecord
 from survey.models import ApprovalRecord, SurveyFeature
 from users.models import User
 from users.permissions import IsSubadmin
@@ -96,8 +98,22 @@ _RESERVED_APPROVED_PROPS = frozenset(
 
 
 def _survey_copy(ftth_project_id):
-    """The survey copy Project linked to an HLD run, or None."""
-    return Project.objects.filter(source_ftth_project_id=ftth_project_id).first()
+    """The survey copy Project linked to an HLD run, or None.
+
+    A supervision project opened from a completed LLD run carries the same
+    ``source_ftth_project_id`` (INTEGRATION_PLAN.md §3 Stage 4), so it must be
+    excluded here: it is the fourth stage's copy, not the survey copy whose
+    ``Feature`` rows are the frozen HLD baseline. Without this, whichever copy
+    happened to be created first answered for both, and the lineage lookup then
+    fed a supervision feature id into the survey copy's queryset.
+    """
+    return (
+        Project.objects.filter(source_ftth_project_id=ftth_project_id)
+        .exclude(source_lld_run_id__isnull=False)
+        .exclude(source_lld_run_id='')
+        .order_by('created_at')
+        .first()
+    )
 
 
 def _team_members(ftth, copy):
@@ -1063,11 +1079,22 @@ class FeatureLineageView(APIView):
             'survey': None,
             'approval': None,
             'lld': None,
+            'supervision': None,
         }
 
         # ── HLD baseline ───────────────────────────────────────────────
-        if copy is not None:
-            feature = Feature.objects.filter(project=copy, id=feature_id).first()
+        # ``feature_id`` is the design's own key: a UUID for the survey copy, but
+        # a layer-prefixed string (``LLD-final_trenches-…``) for LLD output. The
+        # HLD and survey lookups below can only run for the former, so the key is
+        # parsed once; an LLD key still gets the review, LLD and supervision
+        # blocks instead of a 500.
+        try:
+            feature_uuid: uuid.UUID | None = uuid.UUID(str(feature_id))
+        except (TypeError, ValueError):
+            feature_uuid = None
+
+        if copy is not None and feature_uuid is not None:
+            feature = Feature.objects.filter(project=copy, id=feature_uuid).first()
             if feature:
                 lineage['hld'] = {
                     'feature_id': str(feature.id),
@@ -1080,7 +1107,7 @@ class FeatureLineageView(APIView):
 
             # ── Survey change + approval ───────────────────────────────
             sf = (
-                SurveyFeature.objects.filter(project=copy, original_hld_feature_id=feature_id)
+                SurveyFeature.objects.filter(project=copy, original_hld_feature_id=feature_uuid)
                 .select_related('engineer')
                 .order_by('-updated_at')
                 .first()
@@ -1140,6 +1167,39 @@ class FeatureLineageView(APIView):
                 'layers': layers,
                 'final': final,
             }
+
+        # ── Supervision (as built) ─────────────────────────────────────
+        # The fourth stage never edits the rows above: it appends decision
+        # records beside them. Resolving through `source_ftth_project_id` and
+        # the design's own `feature_id` keeps the one join key the whole
+        # lifecycle uses (INTEGRATION_PLAN.md §5.4).
+        decisions = []
+        for record in FeatureDecisionRecord.objects.filter(
+            project__source_ftth_project_id=project_id
+        ).select_related('feature', 'reviewer')[:200]:
+            properties = record.feature.properties or {}
+            design_id = str(properties.get('feature_id') or '')
+            if design_id != str(feature_id) and str(record.feature_id) != str(feature_id):
+                continue
+            decisions.append(
+                {
+                    'record_id': str(record.id),
+                    'project_id': str(record.project_id),
+                    'feature_id': str(record.feature_id),
+                    'layer_id': record.feature.layer_id,
+                    'decision': record.decision,
+                    'reason': record.reason,
+                    'deviation': record.deviation or {},
+                    'reviewer': (
+                        (record.reviewer.full_name or record.reviewer.email)
+                        if record.reviewer
+                        else None
+                    ),
+                    'created_at': record.created_at.isoformat(),
+                }
+            )
+        if decisions:
+            lineage['supervision'] = {'latest': decisions[0], 'decisions': decisions}
 
         return JsonResponse(lineage)
 

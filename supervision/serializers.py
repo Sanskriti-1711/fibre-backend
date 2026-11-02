@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from supervision.models import FeaturePhoto
+from supervision.models import FeatureDecisionRecord, FeaturePhoto
 
 
 class FeaturePhotoSerializer(serializers.ModelSerializer):
@@ -32,3 +32,33 @@ class FeaturePhotoSerializer(serializers.ModelSerializer):
             return None
         user = obj.uploaded_by
         return user.full_name or user.email
+
+
+class FeatureDecisionRecordSerializer(serializers.ModelSerializer):
+    """One append-only decision record, flattened for the audit and lineage views."""
+
+    feature_id = serializers.UUIDField(read_only=True)
+    layer_id = serializers.CharField(source='feature.layer_id', read_only=True)
+    layer_name = serializers.CharField(source='feature.layer_name', read_only=True)
+    reviewer = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FeatureDecisionRecord
+        fields = [
+            'id',
+            'feature_id',
+            'layer_id',
+            'layer_name',
+            'stage',
+            'decision',
+            'reason',
+            'deviation',
+            'reviewer',
+            'created_at',
+        ]
+        read_only_fields = fields
+
+    def get_reviewer(self, obj):
+        if not obj.reviewer_id:
+            return None
+        return obj.reviewer.full_name or obj.reviewer.email

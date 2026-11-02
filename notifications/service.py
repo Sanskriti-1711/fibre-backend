@@ -383,6 +383,58 @@ def survey_package_submitted(
     )
 
 
+def supervision_deviation(feature, *, feature_ids=(), actor=None, notes='') -> list[Notification]:
+    """Approval accepted work that does not match the design.
+
+    Goes to the project's planners and reviewers — the people who own the
+    design decision, not the engineer whose work was accepted — and falls back
+    to the platform engineers when a project lists neither, so a deviation is
+    never silent. The link opens the audit view for the first affected feature:
+    that is where the planned-vs-as-built comparison is rendered.
+    """
+    from projects.models import ProjectMember
+
+    project = getattr(feature, 'project', None)
+    if project is None:
+        return []
+
+    project_id = str(project.id)
+    ids = [str(fid) for fid in feature_ids] or [str(feature.id)]
+    count = len(ids)
+    layer = getattr(feature, 'layer_name', '') or 'feature'
+
+    recipients = ProjectMember.objects.filter(
+        project=project,
+        role__in=[ProjectMember.Role.PLANNER, ProjectMember.Role.REVIEWER],
+    )
+    if isinstance(actor, User):
+        recipients = recipients.exclude(user=actor)
+    recipient_ids = list(recipients.values_list('user_id', flat=True))
+
+    body = f'{count} {layer} feature(s) approved outside the design tolerance.'
+    if notes:
+        body += f' Reviewer note: {notes}'
+
+    kwargs = dict(
+        kind=Notification.KIND_SUPERVISION_DEVIATION,
+        category=Notification.CATEGORY_DESIGN,
+        severity=Notification.SEVERITY_WARNING,
+        title=f'Approved outside tolerance — {project.name or project_id}',
+        body=body,
+        url=f'audit-detail.html?project_id={project_id}&feature_id={ids[0]}',
+        project_id=project_id,
+        project_name=project.name or '',
+        actor=actor,
+        entity_type='feature',
+        entity_id=ids[0],
+        meta={'feature_ids': ids, 'count': count, 'notes': notes},
+    )
+
+    if recipient_ids:
+        return notify(recipient_ids, **kwargs)
+    return notify_platform(**kwargs)
+
+
 def unread_summary(user) -> dict:
     """Counts for the bell badge, cheap enough to poll."""
     rows = Notification.objects.filter(recipient=user, read_at__isnull=True)

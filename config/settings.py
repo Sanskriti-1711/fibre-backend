@@ -8,6 +8,24 @@ from django.core.exceptions import ImproperlyConfigured
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Local `.env` support. ------------------------------------------------------
+# A deployed host gets configuration as real environment variables; a developer
+# checkout keeps it in the git-ignored root `.env`. Reading that file here means
+# `python manage.py migrate --settings=config.settings` reaches the deployed
+# database without exporting a dozen variables first. Parsed literally — never
+# executed as shell, because the secret key contains `$`, `(`, `)` and `%` — and
+# `setdefault`, so a variable the process already has always wins.
+_ENV_FILE = BASE_DIR.parent / '.env'
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text(encoding='utf-8', errors='replace').splitlines():
+        _line = _line.strip()
+        if not _line or _line.startswith('#') or '=' not in _line:
+            continue
+        _key, _value = _line.split('=', 1)
+        _key = _key.strip()
+        if _key.isidentifier():
+            os.environ.setdefault(_key, _value.strip())
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/

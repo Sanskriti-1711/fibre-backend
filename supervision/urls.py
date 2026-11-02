@@ -3,8 +3,10 @@ from django.urls import path
 from supervision.dashboard import DashboardSummaryAPIView
 from supervision.export import ProjectExportAPIView
 from supervision.views import (
+    FeatureDecisionListView,
     FeaturePhotoDetailView,
     FeaturePhotosView,
+    ProjectDecisionListView,
     ProjectFeatureStatusesAPIView,
 )
 
@@ -19,6 +21,10 @@ urlpatterns = [
         ProjectFeatureStatusesAPIView.as_view(),
     ),
     path('projects/<uuid:project_id>/export/', ProjectExportAPIView.as_view()),
+    # Stage 6: the append-only record of approval-with-deviation. Read only —
+    # records are written by the approval path, never by a client.
+    path('features/<uuid:feature_id>/decisions/', FeatureDecisionListView.as_view()),
+    path('projects/<uuid:project_id>/decisions/', ProjectDecisionListView.as_view()),
     path('features/<uuid:feature_id>/photos/', FeaturePhotosView.as_view()),
     path(
         'features/<uuid:feature_id>/photos/<uuid:photo_id>/',
