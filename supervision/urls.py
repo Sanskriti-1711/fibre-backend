@@ -5,6 +5,7 @@ from supervision.export import ProjectExportAPIView
 from supervision.report import ProjectAsBuiltReportAPIView
 from supervision.views import (
     FeatureDecisionListView,
+    FeatureDesignRevisionView,
     FeaturePhotoDetailView,
     FeaturePhotosView,
     ProjectDecisionListView,
@@ -31,6 +32,12 @@ urlpatterns = [
     # Stage 6: the append-only record of approval-with-deviation. Read only —
     # records are written by the approval path, never by a client.
     path('features/<uuid:feature_id>/decisions/', FeatureDecisionListView.as_view()),
+    # Stage 6.3: the design-change loop. The request is recorded on the LLD
+    # timeline; no design row is written (see supervision/design_change.py).
+    path(
+        'features/<uuid:feature_id>/request-design-revision/',
+        FeatureDesignRevisionView.as_view(),
+    ),
     path('projects/<uuid:project_id>/decisions/', ProjectDecisionListView.as_view()),
     path('features/<uuid:feature_id>/photos/', FeaturePhotosView.as_view()),
     path(

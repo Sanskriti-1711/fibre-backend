@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from projects.models import Feature, Project
+from supervision.design_change import request_design_revision, requests_for
 from supervision.models import FeatureDecisionRecord, FeaturePhoto
 from supervision.serializers import FeatureDecisionRecordSerializer, FeaturePhotoSerializer
 
@@ -182,7 +183,9 @@ class FeatureDecisionListView(APIView):
     §3 Stage 6)."""
 
     def get(self, request, feature_id):
-        if not Feature.objects.filter(id=feature_id).exists():
+        try:
+            feature = Feature.objects.get(id=feature_id)
+        except Feature.DoesNotExist:
             return Response(
                 {'detail': 'Feature not found'},
                 status=status.HTTP_404_NOT_FOUND,
@@ -197,7 +200,55 @@ class FeatureDecisionListView(APIView):
                 'feature_id': str(feature_id),
                 'count': records.count(),
                 'results': FeatureDecisionRecordSerializer(records, many=True).data,
+                # The design-change loop's side of the history: which records
+                # have already been taken to the LLD stage, and when. Read here
+                # rather than in a second request so the audit page can label
+                # each entry on first paint.
+                'revision_requests': requests_for(feature),
             }
+        )
+
+
+class FeatureDesignRevisionView(APIView):
+    """POST /api/features/<feature_id>/request-design-revision/
+
+    The design-change loop's only write (INTEGRATION_PLAN.md §3 Stage 6.3): the
+    reviewer of an accepted deviation asks for the next LLD version. It records
+    the request on the LLD timeline and notifies the planners, then points at
+    the LLD review page; it never creates or edits a design version itself.
+
+    ``409`` when the feature has no approved-with-deviation record — there is
+    nothing for the design stage to act on, and a request without a deviation
+    would be an unexplained timeline entry. Repeating the call for the same
+    record returns the first request with ``duplicate: true`` rather than
+    writing a second one.
+    """
+
+    def post(self, request, feature_id):
+        try:
+            feature = Feature.objects.select_related('project').get(id=feature_id)
+        except Feature.DoesNotExist:
+            return Response(
+                {'detail': 'Feature not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        note = (request.data.get('note') or '').strip()[:2000]
+        payload = request_design_revision(feature, actor=request.user, note=note)
+        if payload is None:
+            return Response(
+                {
+                    'detail': (
+                        'This feature has no approved deviation to revise. A design revision '
+                        'is only meaningful after work was accepted outside the design.'
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        return Response(
+            {**payload, 'requests': requests_for(feature)},
+            status=status.HTTP_200_OK if payload['duplicate'] else status.HTTP_201_CREATED,
         )
 
 

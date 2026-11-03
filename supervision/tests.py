@@ -289,3 +289,172 @@ class MediaServingTests(TestCase):
         self.assertEqual(
             response['Location'], 'https://media.example.com/%s' % self.name
         )
+
+
+class DesignChangeLoopTests(TestCase):
+    """Approved deviation → request for the next LLD version.
+
+    The contract: the request is recorded on the *LLD* timeline, the planners are
+    told, asking twice about one deviation stays one request, and nothing in the
+    design stages is written.
+    """
+
+    def setUp(self):
+        from projects.models import ProjectMember
+
+        self.project = Project.objects.create(
+            name='Design loop test',
+            source_lld_run_id='ftth-proj:LLD-V05',
+        )
+        self.feature = Feature.objects.create(
+            project=self.project,
+            layer_name='final_trenches',
+            layer_id='final_trenches',
+            properties={'depth': 1.2},
+            field_measurements={'depth': {'value': 1.8, 'unit': 'm'}},
+        )
+        self.reviewer = User.objects.create_user(
+            email='reviewer@example.com',
+            password='demo1234',
+            full_name='Reviewer',
+            role=User.Role.SUBADMIN,
+        )
+        self.planner = User.objects.create_user(
+            email='planner@example.com',
+            password='demo1234',
+            full_name='Planner',
+            role=User.Role.SUBADMIN,
+        )
+        ProjectMember.objects.create(
+            project=self.project,
+            user=self.planner,
+            role=ProjectMember.Role.PLANNER,
+        )
+        token = str(RefreshToken.for_user(self.reviewer).access_token)
+        self.auth = {'HTTP_AUTHORIZATION': 'Bearer %s' % token}
+
+    @property
+    def url(self):
+        return '/api/features/%s/request-design-revision/' % self.feature.id
+
+    def record_deviation(self, reason='gas main in the way'):
+        from supervision.models import FeatureDecisionRecord
+
+        return FeatureDecisionRecord.objects.create(
+            feature=self.feature,
+            project=self.project,
+            decision=FeatureDecisionRecord.DECISION_APPROVED_WITH_DEVIATION,
+            reason=reason,
+            deviation={
+                'tolerance': 0.1,
+                'measured': 1,
+                'outside_tolerance': 1,
+                'has_deviation': True,
+                'fields': [
+                    {
+                        'key': 'depth',
+                        'planned': 1.2,
+                        'as_built': 1.8,
+                        'delta': -0.6,
+                        'unit': 'm',
+                        'within_tolerance': False,
+                    }
+                ],
+            },
+            reviewer=self.reviewer,
+        )
+
+    def test_no_deviation_is_a_conflict(self):
+        from projects.models import StageEvent
+
+        response = self.client.post(self.url, {}, **self.auth)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(StageEvent.objects.filter(event='design_revision_requested').exists())
+
+    def test_request_lands_on_the_lld_timeline(self):
+        from projects.models import StageEvent
+
+        record = self.record_deviation()
+        response = self.client.post(self.url, {'note': 'move the chamber east'}, **self.auth)
+
+        self.assertEqual(response.status_code, 201, response.content[:300])
+        body = response.json()
+        self.assertFalse(body['duplicate'])
+        self.assertEqual(body['record_id'], str(record.id))
+        self.assertEqual(body['design_version'], 'ftth-proj:LLD-V05')
+        self.assertIn('ftth-lld-review.html?project_id=%s' % self.project.id, body['review_url'])
+
+        event = StageEvent.objects.get(event='design_revision_requested')
+        self.assertEqual(event.stage, StageEvent.Stage.LLD)
+        self.assertEqual(event.entity_id, str(self.feature.id))
+        self.assertEqual(event.metadata['record_id'], str(record.id))
+        self.assertEqual(event.metadata['fields'], ['depth'])
+        self.assertEqual(event.actor_id, self.reviewer.id)
+
+    def test_planner_is_notified_once(self):
+        from notifications.models import Notification
+
+        self.record_deviation()
+        self.client.post(self.url, {}, **self.auth)
+        self.client.post(self.url, {}, **self.auth)
+
+        rows = Notification.objects.filter(recipient=self.planner)
+        self.assertEqual(rows.count(), 1)
+        row = rows.get()
+        self.assertEqual(row.category, Notification.CATEGORY_DESIGN)
+        self.assertIn('ftth-lld-review.html', row.url)
+        self.assertIn('Design revision requested', row.title)
+
+    def test_asking_twice_is_one_request(self):
+        from projects.models import StageEvent
+
+        self.record_deviation()
+        first = self.client.post(self.url, {}, **self.auth).json()
+        second = self.client.post(self.url, {}, **self.auth)
+
+        self.assertEqual(second.status_code, 200)
+        self.assertTrue(second.json()['duplicate'])
+        self.assertEqual(second.json()['requested_at'], first['requested_at'])
+        self.assertEqual(StageEvent.objects.filter(event='design_revision_requested').count(), 1)
+
+    def test_a_later_deviation_can_be_revised_again(self):
+        from projects.models import StageEvent
+
+        self.record_deviation()
+        self.client.post(self.url, {}, **self.auth)
+        self.record_deviation('second pass, still short')
+
+        response = self.client.post(self.url, {}, **self.auth)
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(StageEvent.objects.filter(event='design_revision_requested').count(), 2)
+
+    def test_decision_list_carries_the_requests(self):
+        record = self.record_deviation()
+        self.client.post(self.url, {}, **self.auth)
+
+        body = self.client.get(
+            '/api/features/%s/decisions/' % self.feature.id, **self.auth
+        ).json()
+
+        self.assertEqual(body['count'], 1)
+        self.assertEqual(len(body['revision_requests']), 1)
+        self.assertEqual(body['revision_requests'][0]['record_id'], str(record.id))
+        self.assertEqual(body['revision_requests'][0]['requested_by'], 'Reviewer')
+
+    def test_the_design_stages_are_not_touched(self):
+        """The request is a proposal: no LLD row, no feature edit."""
+        from ftth_lld.models import LldRun
+
+        self.record_deviation()
+        bid_before = LldRun.objects.count()
+        before = Feature.objects.get(id=self.feature.id)
+
+        self.client.post(self.url, {}, **self.auth)
+
+        after = Feature.objects.get(id=self.feature.id)
+        self.assertEqual(LldRun.objects.count(), bid_before)
+        self.assertEqual(before.properties, after.properties)
+        self.assertEqual(before.field_measurements, after.field_measurements)
+        self.assertEqual(before.status, after.status)

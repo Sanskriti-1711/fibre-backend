@@ -435,6 +435,74 @@ def supervision_deviation(feature, *, feature_ids=(), actor=None, notes='') -> l
     return notify_platform(**kwargs)
 
 
+def design_revision_requested(feature, *, record_id, note='', actor=None) -> list[Notification]:
+    """A reviewer asked the design stage to raise the next LLD version.
+
+    This is the second half of the design-change loop (INTEGRATION_PLAN.md §3
+    Stage 6.3): the deviation record says what was accepted, this says the
+    *design* now has to move. It goes to the same people a deviation goes to —
+    the project's planners and reviewers — and to the platform engineers when a
+    project lists neither, so the request cannot sit unseen.
+
+    ``KIND_LLD_RUN`` rather than a new kind: the request is LLD work and the
+    notification list already groups it under the design category, so reusing
+    the kind avoids a choice-only migration for no reader's benefit.
+
+    ``dedupe_key`` is keyed on the decision record, not the feature: asking
+    twice about the same deviation is one request, while a later redo cycle that
+    produces a second record may legitimately ask again.
+    """
+    from projects.models import ProjectMember
+
+    project = getattr(feature, 'project', None)
+    if project is None:
+        return []
+
+    project_id = str(project.id)
+    layer = getattr(feature, 'layer_name', '') or getattr(feature, 'layer_id', '') or 'feature'
+
+    recipients = ProjectMember.objects.filter(
+        project=project,
+        role__in=[ProjectMember.Role.PLANNER, ProjectMember.Role.REVIEWER],
+    )
+    if isinstance(actor, User):
+        recipients = recipients.exclude(user=actor)
+    recipient_ids = list(recipients.values_list('user_id', flat=True))
+
+    body = (
+        f'Work on a {layer} feature was accepted outside the design, so the next LLD '
+        f'version needs to pick up the change.'
+    )
+    if note:
+        body += f' Reviewer note: {note}'
+
+    kwargs = dict(
+        kind=Notification.KIND_LLD_RUN,
+        category=Notification.CATEGORY_DESIGN,
+        severity=Notification.SEVERITY_WARNING,
+        title=f'Design revision requested — {project.name or project_id}',
+        body=body,
+        url=f'ftth-lld-review.html?project_id={project_id}',
+        project_id=project_id,
+        project_name=project.name or '',
+        actor=actor,
+        entity_type='feature',
+        entity_id=str(feature.id),
+        dedupe_key=f'design-revision:{record_id}',
+        meta={
+            'feature_id': str(feature.id),
+            'record_id': str(record_id),
+            'layer_id': getattr(feature, 'layer_id', ''),
+            'design_version': getattr(project, 'source_lld_run_id', '') or '',
+            'notes': note,
+        },
+    )
+
+    if recipient_ids:
+        return notify(recipient_ids, **kwargs)
+    return notify_platform(**kwargs)
+
+
 def unread_summary(user) -> dict:
     """Counts for the bell badge, cheap enough to poll."""
     rows = Notification.objects.filter(recipient=user, read_at__isnull=True)
