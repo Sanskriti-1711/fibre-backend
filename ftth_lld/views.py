@@ -1527,7 +1527,9 @@ def _run_lld_job(project_id: str, run_id, submit: bool = True, token: str = '') 
     # A run that is already owned by a live poller (or is no longer running)
     # belongs to that poller: attaching a second one would duplicate the ingest.
     if not claim_poller(run.id, token):
-        logger.info('LLD run %s/%s is owned by another poller; not attaching.', project_id, run.lld_version)
+        logger.info(
+            'LLD run %s/%s is owned by another poller; not attaching.', project_id, run.lld_version
+        )
         return
 
     try:
@@ -2012,9 +2014,7 @@ class LldRunStatusView(APIView):
         except Exception as exc:  # noqa: BLE001 - never fail the delete
             logger.warning('LLD cache clear failed for %s: %s', project_id, exc)
 
-        _record_event(
-            _survey_copy(project_id), 'lld', 'lld_deleted', request.user, lld_version
-        )
+        _record_event(_survey_copy(project_id), 'lld', 'lld_deleted', request.user, lld_version)
         return JsonResponse(
             {
                 'deleted': True,

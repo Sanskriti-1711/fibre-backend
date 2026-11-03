@@ -50,9 +50,7 @@ def find_lld_run(source_lld_run_id):
         uuid.UUID(str(project_part))
     except (ValueError, AttributeError, TypeError):
         return None
-    return LldRun.objects.filter(
-        ftth_project_id=project_part, lld_version=version_part
-    ).first()
+    return LldRun.objects.filter(ftth_project_id=project_part, lld_version=version_part).first()
 
 
 def record_stage_event(project, event, actor=None, entity_id='', metadata=None):

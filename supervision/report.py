@@ -71,10 +71,7 @@ def _segment_m(a, b):
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     d_phi = phi2 - phi1
     d_lambda = math.radians(lon2 - lon1)
-    h = (
-        math.sin(d_phi / 2) ** 2
-        + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
-    )
+    h = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
     return 2 * EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(h)))
 
 
@@ -182,9 +179,7 @@ def _layer_report(project, layer_id, layer_name, tolerance, units, weight):
 
         properties = row['properties'] if isinstance(row['properties'], dict) else {}
         measurements = (
-            row['field_measurements']
-            if isinstance(row['field_measurements'], dict)
-            else {}
+            row['field_measurements'] if isinstance(row['field_measurements'], dict) else {}
         )
         reading_m = 0.0
 
@@ -403,12 +398,9 @@ def _boq_report(project, layers):
             if layer['length']['as_built_m'] is not None
         ]
         entry['layers'] = [
-            {'layer_id': layer['layer_id'], 'layer_name': layer['layer_name']}
-            for layer in matched
+            {'layer_id': layer['layer_id'], 'layer_name': layer['layer_name']} for layer in matched
         ]
-        entry['planned_m'] = _round(
-            sum(layer['length']['planned_m'] or 0.0 for layer in matched)
-        )
+        entry['planned_m'] = _round(sum(layer['length']['planned_m'] or 0.0 for layer in matched))
         entry['as_built_m'] = _round(sum(recorded)) if recorded else None
         entry['boq_metres'] = _round(entry['boq_metres'])
         entry['delta_m'] = (

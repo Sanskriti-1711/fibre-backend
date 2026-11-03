@@ -54,7 +54,11 @@ class FeaturePhotoEvidenceTests(TestCase):
     def upload(self, name='site.png', payload=None, content_type='image/png'):
         return self.client.post(
             self.url(),
-            {'photos': SimpleUploadedFile(name, payload if payload is not None else self.payload, content_type)},
+            {
+                'photos': SimpleUploadedFile(
+                    name, payload if payload is not None else self.payload, content_type
+                )
+            },
             **self.auth,
         )
 
@@ -150,7 +154,9 @@ class S3EvidenceStorageTests(TestCase):
             self.calls.append(('delete', kwargs))
 
         def generate_presigned_url(self, operation, Params, ExpiresIn):
-            self.calls.append(('presign', {'operation': operation, **Params, 'ExpiresIn': ExpiresIn}))
+            self.calls.append(
+                ('presign', {'operation': operation, **Params, 'ExpiresIn': ExpiresIn})
+            )
             return 'https://bucket.example/{}?X-Amz-Signature=abc'.format(Params['Key'])
 
     def make_storage(self, **kwargs):
@@ -206,7 +212,10 @@ class S3EvidenceStorageTests(TestCase):
 
         from supervision.storage import reset_evidence_storage
 
-        with override_settings(EVIDENCE_S3_BUCKET='evidence', EVIDENCE_S3_ENDPOINT_URL='https://x.r2.cloudflarestorage.com'):
+        with override_settings(
+            EVIDENCE_S3_BUCKET='evidence',
+            EVIDENCE_S3_ENDPOINT_URL='https://x.r2.cloudflarestorage.com',
+        ):
             reset_evidence_storage()
             self.addCleanup(reset_evidence_storage)
             storage = get_evidence_storage()
@@ -286,9 +295,7 @@ class MediaServingTests(TestCase):
             response = self.get()
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(
-            response['Location'], f'https://media.example.com/{self.name}'
-        )
+        self.assertEqual(response['Location'], f'https://media.example.com/{self.name}')
 
 
 class DesignChangeLoopTests(TestCase):
@@ -434,9 +441,7 @@ class DesignChangeLoopTests(TestCase):
         record = self.record_deviation()
         self.client.post(self.url, {}, **self.auth)
 
-        body = self.client.get(
-            f'/api/features/{self.feature.id}/decisions/', **self.auth
-        ).json()
+        body = self.client.get(f'/api/features/{self.feature.id}/decisions/', **self.auth).json()
 
         self.assertEqual(body['count'], 1)
         self.assertEqual(len(body['revision_requests']), 1)

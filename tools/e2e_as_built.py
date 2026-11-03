@@ -167,7 +167,9 @@ def check_reports_source_badges(layers):
         if source not in rendered:
             fail(
                 'layer {} reports as_built_source={!r}, which the page renders as "—" — '
-                'an unlabelled total is indistinguishable from no evidence'.format(layer['layer_name'], source)
+                'an unlabelled total is indistinguishable from no evidence'.format(
+                    layer['layer_name'], source
+                )
             )
     labels = ', '.join(
         '{}={}'.format(name, source or 'none') for name, source in sorted(seen.items())
@@ -207,7 +209,9 @@ def check_boq_reconciliation(boq, layers):
     ]
     priced = sum(float(row.get('quantity') or 0.0) for row in metre_rows)
     if not close(length['boq_m'], priced, 0.05):
-        fail('boq_m %s != the %d priced metre row(s) %s' % (length['boq_m'], len(metre_rows), priced))
+        fail(
+            'boq_m %s != the %d priced metre row(s) %s' % (length['boq_m'], len(metre_rows), priced)
+        )
     ok('priced total %.2f m is the sum of %d metre row(s)' % (priced, len(metre_rows)))
 
     sections = boq['sections']
@@ -228,11 +232,17 @@ def check_boq_reconciliation(boq, layers):
         name = section['section']
         if section['as_built_m'] is None:
             if section['delta_m'] is not None:
-                fail('section {} has no as-built total but a delta of {}'.format(name, section['delta_m']))
+                fail(
+                    'section {} has no as-built total but a delta of {}'.format(
+                        name, section['delta_m']
+                    )
+                )
             continue
         if not close(section['delta_m'], section['boq_metres'] - section['as_built_m'], 0.05):
             fail(
-                'section {} delta {} != priced {} - as-built {}'.format(name, section['delta_m'], section['boq_metres'], section['as_built_m'])
+                'section {} delta {} != priced {} - as-built {}'.format(
+                    name, section['delta_m'], section['boq_metres'], section['as_built_m']
+                )
             )
         matched = section.get('layers') or []
         if not matched:
@@ -240,28 +250,46 @@ def check_boq_reconciliation(boq, layers):
         for member in matched:
             layer = layer_by_id.get(member['layer_id'])
             if layer is None:
-                fail('section {} matches {!r}, which is not a layer in this report'.format(name, member['layer_id']))
-        expected_planned = sum(layer_by_id[member['layer_id']]['length']['planned_m'] or 0.0 for member in matched)
+                fail(
+                    'section {} matches {!r}, which is not a layer in this report'.format(
+                        name, member['layer_id']
+                    )
+                )
+        expected_planned = sum(
+            layer_by_id[member['layer_id']]['length']['planned_m'] or 0.0 for member in matched
+        )
         if not close(section['planned_m'], expected_planned, 0.05):
             fail(
-                'section {} planned {} != its layer(s) {}'.format(name, section['planned_m'], expected_planned)
+                'section {} planned {} != its layer(s) {}'.format(
+                    name, section['planned_m'], expected_planned
+                )
             )
     measured = sum(1 for section in sections if section['as_built_m'] is not None)
     ok('%d section(s) reconcile priced - as-built against their own totals' % measured)
 
     layer_laid = sum(layer['length']['as_built_m'] or 0.0 for layer in layers)
     if not close(length['as_built_m'], layer_laid, 0.05):
-        fail('boq as_built_m {} != the summed layer totals {}'.format(length['as_built_m'], layer_laid))
+        fail(
+            'boq as_built_m {} != the summed layer totals {}'.format(
+                length['as_built_m'], layer_laid
+            )
+        )
     ok(f'as-built total {layer_laid:.3f} m is the summed layer totals')
 
     delta = length['boq_m'] - length['as_built_m']
     if not close(length['delta_vs_as_built_m'], delta, 0.05):
-        fail('delta_vs_as_built_m {} != priced - as-built {}'.format(length['delta_vs_as_built_m'], delta))
+        fail(
+            'delta_vs_as_built_m {} != priced - as-built {}'.format(
+                length['delta_vs_as_built_m'], delta
+            )
+        )
     expected_pct = round(delta / length['boq_m'] * 100, 2) if length['boq_m'] else None
     if not close(length['delta_pct'], expected_pct, 0.02):
         fail('delta_pct {} != {:.2f}%'.format(length['delta_pct'], expected_pct or 0))
     ok(
-        'headline Δ {:.2f} m ({:.2f}%) = {:.2f} priced - {:.3f} laid'.format(delta, expected_pct or 0.0, length['boq_m'], length['as_built_m'])
+        'headline Δ {:.2f} m ({:.2f}%) = {:.2f} priced - {:.3f} laid'.format(
+            delta, expected_pct or 0.0, length['boq_m'], length['as_built_m']
+        )
     )
 
     # The geometry this run just submitted must reach the BOQ card: the section
@@ -284,7 +312,9 @@ def check_boq_reconciliation(boq, layers):
                 )
             )
         ok(
-            'the submitted geometry reaches the BOQ: {} shows {:.3f} m as-built'.format(section['section'], submitted['length']['as_built_m'])
+            'the submitted geometry reaches the BOQ: {} shows {:.3f} m as-built'.format(
+                section['section'], submitted['length']['as_built_m']
+            )
         )
 
 
@@ -402,7 +432,8 @@ def main():
         fail('the submitted feature is missing from as_built_geojson')
     ok('as_built_geojson carries %d feature(s) in %s' % (len(laid_ids), LAYER))
     design_ids = {
-        f['properties']['feature_id'] for f in (map_data.get('geojson') or {}).get(LAYER, {}).get('features', [])
+        f['properties']['feature_id']
+        for f in (map_data.get('geojson') or {}).get(LAYER, {}).get('features', [])
     }
     if str(feature.id) not in design_ids:
         fail('the design feature vanished from geojson')
@@ -436,7 +467,9 @@ def main():
 
     if abs((length['laid_geometry_m'] or 0) - round(feature_laid, 3)) > 0.5:
         fail(
-            'laid_geometry_m {} != the submitted geometry {}'.format(length['laid_geometry_m'], feature_laid)
+            'laid_geometry_m {} != the submitted geometry {}'.format(
+                length['laid_geometry_m'], feature_laid
+            )
         )
     ok(f'layer laid length {feature_laid:.3f} m equals the submitted geometry')
 

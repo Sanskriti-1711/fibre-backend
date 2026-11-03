@@ -6,7 +6,6 @@ import supervision.storage
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('supervision', '0002_featuredecisionrecord'),
     ]
@@ -30,6 +29,9 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='featurephoto',
             name='image',
-            field=models.ImageField(storage=supervision.storage.get_evidence_storage, upload_to='feature_photos/%Y/%m/%d/'),
+            field=models.ImageField(
+                storage=supervision.storage.get_evidence_storage,
+                upload_to='feature_photos/%Y/%m/%d/',
+            ),
         ),
     ]

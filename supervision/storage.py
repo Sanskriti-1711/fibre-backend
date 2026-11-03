@@ -149,4 +149,3 @@ def reset_evidence_storage():
     """Drop the cached store — used by settings overrides and tests."""
     global _storage
     _storage = None
-
