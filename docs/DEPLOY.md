@@ -396,10 +396,17 @@ about:
    database as compromised. `PGHOST` and `PGUSER` keep their defaults, which is
    harmless: a hostname and a username are not secrets.
 
-Static serving for `MEDIA_ROOT` is also unhandled: `whitenoise` covers `/static/`
-only, and uploads land on the container's ephemeral disk. Photo fields and any
-`MEDIA_ROOT`-backed download will 404, and are lost on redeploy. Fix with object
-storage (S3/R2) or a mounted persistent disk before relying on uploads.
+`/media/` is served by `config/media.py`, mounted unconditionally in
+`config/urls.py`. Django's `static()` helper only mounts `MEDIA_URL` while
+`DEBUG` is on, and `whitenoise` covers `/static/` only, so every evidence photo
+URL answered 404 on the host even though the row existed. The route serves from
+`MEDIA_ROOT` today and redirects to the storage URL (public or presigned) when
+`EVIDENCE_S3_BUCKET` is set.
+
+What that does **not** fix is durability: without `EVIDENCE_S3_BUCKET`, uploads
+land on the container's ephemeral disk and are lost on the next deploy — the
+photo row survives in PostgreSQL and its URL then 404s again. Set the evidence
+bucket (or mount a persistent disk) before relying on uploads.
 
 ---
 

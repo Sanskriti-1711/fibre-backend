@@ -9,15 +9,18 @@ wiring is checked against a recording stub rather than the network.
 
 import hashlib
 import io
+import shutil
+import tempfile
+from pathlib import Path
 
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from PIL import Image
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from projects.models import Feature, Project
 from supervision.models import FeaturePhoto
-from supervision.storage import S3EvidenceStorage, get_evidence_storage
+from supervision.storage import S3EvidenceStorage, get_evidence_storage, reset_evidence_storage
 from users.models import User
 
 
@@ -125,14 +128,22 @@ class S3EvidenceStorageTests(TestCase):
     """The S3 path without a network: a stub records what would be sent."""
 
     class RecordingClient:
-        def __init__(self):
+        def __init__(self, present=True):
             self.calls = []
+            # `head_object` answering for every key makes `exists()` always true,
+            # and Django's `Storage.save()` then walks an endless
+            # "name, name_1, name_2..." loop looking for a free one. A save test
+            # therefore needs the stub to behave like a bucket that does not have
+            # the key yet.
+            self.present = present
 
         def upload_fileobj(self, **kwargs):
             self.calls.append(('upload', kwargs))
 
         def head_object(self, **kwargs):
             self.calls.append(('head', kwargs))
+            if not self.present:
+                raise LookupError('NoSuchKey')
             return {'ContentLength': 42}
 
         def delete_object(self, **kwargs):
@@ -149,11 +160,13 @@ class S3EvidenceStorageTests(TestCase):
 
     def test_save_uploads_with_the_content_type(self):
         storage = self.make_storage()
+        storage.client.present = False
         upload = SimpleUploadedFile('site.png', png_bytes(), content_type='image/png')
 
         name = storage.save('feature_photos/2026/11/02/site.png', upload)
 
-        operation, kwargs = storage.client.calls[0]
+        # The name-availability probe (`head`) comes first; the upload is last.
+        operation, kwargs = storage.client.calls[-1]
         self.assertEqual(operation, 'upload')
         self.assertEqual(kwargs['Bucket'], 'evidence')
         self.assertEqual(kwargs['Key'], name)
@@ -201,3 +214,78 @@ class S3EvidenceStorageTests(TestCase):
         self.assertIsInstance(storage, S3EvidenceStorage)
         self.assertEqual(storage.bucket, 'evidence')
         self.assertEqual(storage.endpoint_url, 'https://x.r2.cloudflarestorage.com')
+
+
+class MediaServingTests(TestCase):
+    """The route that makes a stored photo's URL resolve on the deployed host.
+
+    Django mounts MEDIA_URL from `static()` only while DEBUG is on, so the host
+    answered 404 for files it was holding. These tests pin the replacement route,
+    including the DEBUG=false case that was broken.
+    """
+
+    def setUp(self):
+        self.media_root = Path(tempfile.mkdtemp(prefix='evidence-media-'))
+        self.addCleanup(shutil.rmtree, self.media_root, ignore_errors=True)
+        self.name = 'feature_photos/2026/11/02/site.png'
+        target = self.media_root / self.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(png_bytes())
+
+    def get(self, path=None, **kwargs):
+        with override_settings(MEDIA_ROOT=self.media_root):
+            return self.client.get('/media/%s' % (path or self.name), **kwargs)
+
+    def head(self, path=None):
+        with override_settings(MEDIA_ROOT=self.media_root):
+            return self.client.head('/media/%s' % (path or self.name))
+
+    def test_a_stored_photo_is_served_with_debug_off(self):
+        with override_settings(DEBUG=False):
+            response = self.get()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b''.join(response.streaming_content), png_bytes())
+        self.assertEqual(response['Content-Type'], 'image/png')
+        self.assertEqual(response['Cache-Control'], 'private, max-age=86400')
+
+    def test_head_returns_headers_but_no_body(self):
+        with override_settings(DEBUG=False):
+            response = self.head()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'image/png')
+
+    def test_a_missing_file_is_404_not_a_crash(self):
+        with override_settings(DEBUG=False):
+            response = self.client.get('/media/feature_photos/nope.png')
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_traversal_cannot_read_outside_media_root(self):
+        with override_settings(DEBUG=False):
+            response = self.client.get('/media/..%2Fconfig%2Fsettings.py')
+
+        # Django rejects the path before the view (400) or safe_join does (404);
+        # either way the file must not come back.
+        self.assertIn(response.status_code, (400, 404))
+        self.assertNotIn(b'SECRET_KEY', response.content)
+
+    def test_writes_are_refused(self):
+        response = self.client.post('/media/%s' % self.name)
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_object_storage_redirects_instead_of_streaming(self):
+        with override_settings(
+            EVIDENCE_S3_BUCKET='evidence',
+            EVIDENCE_PUBLIC_BASE_URL='https://media.example.com',
+        ):
+            reset_evidence_storage()
+            self.addCleanup(reset_evidence_storage)
+            response = self.get()
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response['Location'], 'https://media.example.com/%s' % self.name
+        )

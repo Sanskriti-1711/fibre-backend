@@ -1,9 +1,8 @@
-from django.conf import settings
-from django.conf.urls.static import static
 from django.contrib import admin
-from django.urls import include, path
+from django.urls import include, path, re_path
 
 from config.health import engine_health, healthz
+from config.media import serve_media
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -21,8 +20,9 @@ urlpatterns = [
     path('api/', include('permits.urls')),
     path('api/survey/', include('survey.urls')),
     path('api/', include('notifications.urls')),
+    # Uploaded evidence, in every environment. Django's `static()` helper only
+    # mounts MEDIA_URL when DEBUG is on, which is why every photo URL 404'd on
+    # the deployed host. Mounted unconditionally so development and the host
+    # answer from the same code — see config/media.py.
+    re_path(r'^media/(?P<path>.*)$', serve_media, name='serve-media'),
 ]
-
-# Serve media files in development
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
