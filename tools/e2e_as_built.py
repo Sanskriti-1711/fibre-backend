@@ -60,6 +60,12 @@ def ok(message):
 
 
 FE_PAGE = os.path.join(os.path.dirname(BASE_DIR), 'fiber-fe', 'audit-detail.html')
+REPORTS_PAGE = os.path.join(os.path.dirname(BASE_DIR), 'fiber-fe', 'reports.html')
+
+# Restated here rather than imported from supervision.report so the harness
+# checks the contract independently: if someone narrows the metric-unit set in
+# the report, this row list no longer adds up to its total and the run fails.
+METRE_UNITS = {'m', 'meter', 'meters', 'metre', 'metres'}
 
 
 def function_body(source, name):
@@ -117,6 +123,173 @@ def check_audit_delta_sign():
     if 'Δ is planned minus as-built' not in page:
         fail('the comparison caption no longer states the Δ direction')
     ok('the caption states the same Δ direction')
+
+
+def close(left, right, tolerance):
+    return left is not None and right is not None and abs(float(left) - float(right)) <= tolerance
+
+
+def check_reports_source_badges(layers):
+    """Every as-built total in the reports table says where it came from.
+
+    A layer total summed from drawn geometry and one summed from typed length
+    readings are different evidence: the first is where the span went, the
+    second is what someone said it was. `report.py` labels each layer with
+    `as_built_source` ('geometry' | 'measurements' | None); this proves the page
+    can render every value the backend can emit, so no total is left unlabelled
+    in the one table a reviewer uses to sign work off.
+    """
+    if not os.path.exists(REPORTS_PAGE):
+        fail('%s not found - run this from the workspace checkout' % REPORTS_PAGE)
+    with open(REPORTS_PAGE, encoding='utf-8') as handle:
+        page = handle.read()
+
+    body = function_body(page, 'asBuiltSource')
+    if not body:
+        fail('reports.html no longer defines asBuiltSource')
+    if "source === 'geometry'" not in body:
+        fail('asBuiltSource no longer handles source=geometry')
+    if 'Laid geometry' not in body:
+        fail('the geometry badge lost its label')
+    if "source === 'measurements'" not in body:
+        fail('asBuiltSource no longer handles source=measurements')
+    if 'Length readings' not in body:
+        fail('the measurements badge lost its label')
+    ok('reports page maps geometry -> "Laid geometry" and measurements -> "Length readings"')
+
+    rendered = {'geometry', 'measurements', None}
+    seen = {}
+    for layer in layers:
+        source = layer['length']['as_built_source']
+        seen[layer['layer_name']] = source
+        if source not in rendered:
+            fail(
+                'layer %s reports as_built_source=%r, which the page renders as "—" — '
+                'an unlabelled total is indistinguishable from no evidence'
+                % (layer['layer_name'], source)
+            )
+    labels = ', '.join(
+        '%s=%s' % (name, source or 'none') for name, source in sorted(seen.items())
+    )
+    ok('every layer source in this report is one the page labels (%s)' % labels)
+
+    if 'asBuiltSource(length.as_built_source, length)' not in page:
+        fail('the layer table no longer renders the source badge')
+    ok('the layer table renders the badge from the served source')
+
+    if 'delta_vs_as_built_m' not in page:
+        fail('the BOQ card no longer prints the as-built delta')
+    if 'section.delta_m' not in page:
+        fail('the BOQ section table no longer prints its own delta')
+    ok('the BOQ card prints the numbers checked below')
+
+
+def check_boq_reconciliation(boq, layers):
+    """The BOQ block must add up the way the reports page states it.
+
+    The card prints "<x> m priced in the BOQ · <y> m recorded as laid · Δ". A
+    reviewer compares that against what the crew laid, so each figure has to be
+    derivable from the rows in the same payload: the total from the priced metre
+    rows, each section delta from its own priced total, and the as-built side
+    from the layer totals that the geometry check above just proved.
+    """
+    if not boq['available']:
+        if not (boq.get('reason') or '').strip():
+            fail('BOQ is unavailable but the report gives the page no reason to show')
+        ok('BOQ unavailable, with a reason the card can print: %s' % boq['reason'][:80])
+        return
+
+    length = boq['length']
+
+    metre_rows = [
+        row for row in boq['rows'] if str(row.get('unit') or '').strip().lower() in METRE_UNITS
+    ]
+    priced = sum(float(row.get('quantity') or 0.0) for row in metre_rows)
+    if not close(length['boq_m'], priced, 0.05):
+        fail('boq_m %s != the %d priced metre row(s) %s' % (length['boq_m'], len(metre_rows), priced))
+    ok('priced total %.2f m is the sum of %d metre row(s)' % (priced, len(metre_rows)))
+
+    sections = boq['sections']
+    section_priced = sum(float(section['boq_metres'] or 0.0) for section in sections)
+    if not close(section_priced, length['boq_m'], 0.05):
+        fail('section totals %s != boq_m %s' % (section_priced, length['boq_m']))
+    ok('%d section(s) add up to the priced total' % len(sections))
+
+    if sum(section['items'] for section in sections) != len(boq['rows']):
+        fail(
+            'section item counts %d != %d rows'
+            % (sum(section['items'] for section in sections), len(boq['rows']))
+        )
+    ok('section item counts add up to all %d priced row(s)' % len(boq['rows']))
+
+    layer_by_id = {layer['layer_id']: layer for layer in layers}
+    for section in sections:
+        name = section['section']
+        if section['as_built_m'] is None:
+            if section['delta_m'] is not None:
+                fail('section %s has no as-built total but a delta of %s' % (name, section['delta_m']))
+            continue
+        if not close(section['delta_m'], section['boq_metres'] - section['as_built_m'], 0.05):
+            fail(
+                'section %s delta %s != priced %s - as-built %s'
+                % (name, section['delta_m'], section['boq_metres'], section['as_built_m'])
+            )
+        matched = section.get('layers') or []
+        if not matched:
+            fail('section %s carries an as-built total but matches no layer' % name)
+        for member in matched:
+            layer = layer_by_id.get(member['layer_id'])
+            if layer is None:
+                fail('section %s matches %r, which is not a layer in this report' % (name, member['layer_id']))
+        expected_planned = sum(layer_by_id[member['layer_id']]['length']['planned_m'] or 0.0 for member in matched)
+        if not close(section['planned_m'], expected_planned, 0.05):
+            fail(
+                'section %s planned %s != its layer(s) %s'
+                % (name, section['planned_m'], expected_planned)
+            )
+    measured = sum(1 for section in sections if section['as_built_m'] is not None)
+    ok('%d section(s) reconcile priced - as-built against their own totals' % measured)
+
+    layer_laid = sum(layer['length']['as_built_m'] or 0.0 for layer in layers)
+    if not close(length['as_built_m'], layer_laid, 0.05):
+        fail('boq as_built_m %s != the summed layer totals %s' % (length['as_built_m'], layer_laid))
+    ok('as-built total %.3f m is the summed layer totals' % layer_laid)
+
+    delta = length['boq_m'] - length['as_built_m']
+    if not close(length['delta_vs_as_built_m'], delta, 0.05):
+        fail('delta_vs_as_built_m %s != priced - as-built %s' % (length['delta_vs_as_built_m'], delta))
+    expected_pct = round(delta / length['boq_m'] * 100, 2) if length['boq_m'] else None
+    if not close(length['delta_pct'], expected_pct, 0.02):
+        fail('delta_pct %s != %.2f%%' % (length['delta_pct'], expected_pct or 0))
+    ok(
+        'headline Δ %.2f m (%.2f%%) = %.2f priced - %.3f laid'
+        % (delta, expected_pct or 0.0, length['boq_m'], length['as_built_m'])
+    )
+
+    # The geometry this run just submitted must reach the BOQ card: the section
+    # pricing the layer it touches has to show that layer's as-built total.
+    submitted = layer_by_id.get(LAYER)
+    touching = [
+        section
+        for section in sections
+        if any(member['layer_id'] == LAYER for member in (section.get('layers') or []))
+    ]
+    if submitted is not None and submitted['length']['as_built_m'] is not None and touching:
+        section = touching[0]
+        if not close(section['as_built_m'], submitted['length']['as_built_m'], 0.05):
+            fail(
+                'section %s shows %s m as-built but %s laid %s m'
+                % (
+                    section['section'],
+                    section['as_built_m'],
+                    LAYER,
+                    submitted['length']['as_built_m'],
+                )
+            )
+        ok(
+            'the submitted geometry reaches the BOQ: %s shows %.3f m as-built'
+            % (section['section'], submitted['length']['as_built_m'])
+        )
 
 
 def shift_north(geometry, metres=3.0):
@@ -294,6 +467,12 @@ def main():
     # The report above proves the backend's Δ direction. The audit page renders
     # its own Δ twice (live table + decision history) and once disagreed in
     # sign, so the page is checked here too rather than left to a code review.
+    print('== reports page source badges ==')
+    check_reports_source_badges(data['layers'])
+
+    print('== BOQ reconciliation ==')
+    check_boq_reconciliation(data['boq'], data['layers'])
+
     print('== audit page Δ convention ==')
     check_audit_delta_sign()
 
