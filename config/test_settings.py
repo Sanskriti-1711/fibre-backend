@@ -33,3 +33,20 @@ DEBUG = True
 
 # CORS - allow all for testing
 CORS_ALLOW_ALL_ORIGINS = True
+
+# Evidence media stays on local disk for the suite, whatever the developer's
+# `.env` says. With a bucket configured the store talks to the network: an
+# upload writes a real object, and `/media/` answers a redirect to the storage
+# URL instead of serving bytes, so the media tests (404 for a missing file,
+# byte-for-byte compare, HEAD, traversal) would assert against the wrong
+# contract. Pinning it here keeps the suite offline and environment-independent.
+EVIDENCE_S3_BUCKET = ''
+EVIDENCE_S3_ACCESS_KEY_ID = ''
+EVIDENCE_S3_SECRET_ACCESS_KEY = ''
+EVIDENCE_PUBLIC_BASE_URL = ''
+
+# `get_evidence_storage()` caches the store it built; drop anything the import
+# above may have created so the empty bucket above is what the tests see.
+from supervision.storage import reset_evidence_storage  # noqa: E402
+
+reset_evidence_storage()

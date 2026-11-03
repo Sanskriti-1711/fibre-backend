@@ -405,8 +405,50 @@ URL answered 404 on the host even though the row existed. The route serves from
 
 What that does **not** fix is durability: without `EVIDENCE_S3_BUCKET`, uploads
 land on the container's ephemeral disk and are lost on the next deploy — the
-photo row survives in PostgreSQL and its URL then 404s again. Set the evidence
-bucket (or mount a persistent disk) before relying on uploads.
+photo row survives in PostgreSQL and its URL then 404s again.
+
+### Evidence media on Cloudflare R2
+
+The deployment uses a private R2 bucket, so the bytes outlive the container and
+the rows still own their metadata (checksum, size, uploader) in Postgres. Five
+variables switch it on; all five must be present or the store quietly stays on
+local disk:
+
+| Variable | Value |
+|---|---|
+| `EVIDENCE_S3_BUCKET` | `fiber-evidence` |
+| `EVIDENCE_S3_ENDPOINT_URL` | `https://<account-id>.r2.cloudflarestorage.com` |
+| `EVIDENCE_S3_REGION` | `auto` |
+| `EVIDENCE_S3_ACCESS_KEY_ID` | the **token id** Cloudflare shows for the R2 token |
+| `EVIDENCE_S3_SECRET_ACCESS_KEY` | its 64-character Secret Access Key |
+
+The access key id is the trap: the R2 dashboard never calls it that in the
+token list, and the `cfat_…` value beside it is a Cloudflare API token, which
+the S3 endpoint rejects (`400`). The pair that authenticates is
+`token id` + `Secret Access Key`; a wrong pair fails with `403` at
+`HeadBucket`, which is the cheapest way to check a fresh account.
+
+Because the bucket is private, `url()` hands out a one-hour presigned URL
+(`EVIDENCE_PRESIGN_SECONDS`). That is why the photo serializer keeps calling
+`request.build_absolute_uri`: a presigned URL is already absolute and passes
+through, while a local-disk path still gets the host. A public bucket domain
+(or a CDN in front of it) belongs in `EVIDENCE_PUBLIC_BASE_URL` instead.
+
+Rows uploaded before the bucket existed keep working after it is set, but only
+once their bytes are in the bucket — their `storage_backend` column still says
+`local`:
+
+```bash
+python manage.py evidence_to_s3 --dry-run   # what would move
+python manage.py evidence_to_s3             # copy local-disk rows into the bucket
+python manage.py evidence_to_s3 --check     # every row resolves, byte count matches
+```
+
+The command writes the object under the key the row already holds and flips
+`storage_backend` only after the upload succeeds, so a failed run leaves the
+evidence where it was. `--check` compares the object's `ContentLength` with the
+`size_bytes` recorded at upload — the check that would have caught the six rows
+this deployment lost to a redeploy.
 
 ---
 
