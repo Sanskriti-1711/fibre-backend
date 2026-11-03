@@ -12,8 +12,11 @@ def _validate_photo(upload):
     """Return an error string for an unacceptable upload, or None."""
     if upload.content_type not in FeaturePhoto.ALLOWED_CONTENT_TYPES:
         return 'Invalid file type. Only JPEG and PNG are allowed.'
+    if not upload.size:
+        return 'The file is empty.'
     if upload.size > FeaturePhoto.MAX_BYTES:
-        return 'File too large. Maximum size is 10MB.'
+        limit_mb = FeaturePhoto.MAX_BYTES / (1024 * 1024)
+        return f'File too large. Maximum size is {limit_mb:g}MB.'
     return None
 
 

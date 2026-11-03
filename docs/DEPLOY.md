@@ -120,6 +120,11 @@ Environment variables (Render → Environment):
 | `FTTH_ENGINE_WAKE` | `240` (default) | Seconds this backend waits for a sleeping engine to boot before making the call. `0` disables the wait. See "A sleeping engine is waited out" below. |
 | `EXTRA_CORS_ORIGINS` | the deployed frontend origin | e.g. `https://fe.example.com`. Comma-separated for several. |
 | `EXTRA_CSRF_TRUSTED_ORIGINS` | same origin | Required for admin/login POSTs. |
+| `EVIDENCE_S3_BUCKET` | e.g. `fiber-evidence` | Where supervision site photos are stored. **Set this in production.** Unset means local disk inside the container, which Render discards on every deploy — uploaded evidence would quietly disappear. |
+| `EVIDENCE_S3_ENDPOINT_URL` / `EVIDENCE_S3_REGION` | `https://<account-id>.r2.cloudflarestorage.com` / `auto` | Cloudflare R2 (the default choice: evidence is read far more than written and R2 charges no egress). Backblaze B2, Wasabi, MinIO and S3 take their own endpoint and region. |
+| `EVIDENCE_S3_ACCESS_KEY_ID` / `EVIDENCE_S3_SECRET_ACCESS_KEY` | the bucket's keys | Scoped to that bucket only. |
+| `EVIDENCE_PUBLIC_BASE_URL` | optional CDN domain | Serves photos from a public bucket or a CDN. Unset keeps the bucket private and the API hands out 1-hour presigned links. |
+| `EVIDENCE_MAX_BYTES` / `EVIDENCE_PRESIGN_SECONDS` | `10485760` / `3600` | Per-photo cap (20 photos per feature) and link lifetime. Both have these defaults. |
 | `DJANGO_DEBUG` / `CORS_ALLOW_ALL_ORIGINS` | leave unset | Falls back to existing behaviour. |
 
 Do **not** set `FTTH_DB` — leaving it unset selects the production branch of

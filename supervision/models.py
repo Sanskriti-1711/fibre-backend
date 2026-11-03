@@ -1,9 +1,28 @@
+import hashlib
 import uuid
 
 from django.conf import settings
 from django.db import models
 
 from projects.models import Feature, Project
+from supervision.storage import get_evidence_storage
+
+
+def _digest(upload):
+    """(sha256 hex digest, byte count) of an upload, read once and rewound.
+
+    The digest is what makes a photo provable: the same bytes re-uploaded, or a
+    file that changed after review, can be told apart without keeping a second
+    copy. ``upload.chunks()`` streams, so a 10 MB photo is never held twice.
+    """
+    digest = hashlib.sha256()
+    size = 0
+    upload.seek(0)
+    for chunk in upload.chunks():
+        digest.update(chunk)
+        size += len(chunk)
+    upload.seek(0)
+    return digest.hexdigest(), size
 
 
 class FeaturePhoto(models.Model):
@@ -20,7 +39,9 @@ class FeaturePhoto(models.Model):
     """
 
     MAX_PER_FEATURE = 20
-    MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+    # Per-file cap, overridable by EVIDENCE_MAX_BYTES. With MAX_PER_FEATURE it
+    # bounds a feature's evidence at 200 MB by default.
+    MAX_BYTES = getattr(settings, 'EVIDENCE_MAX_BYTES', 10 * 1024 * 1024)
     ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/jpg', 'image/png']
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -29,8 +50,20 @@ class FeaturePhoto(models.Model):
         on_delete=models.CASCADE,
         related_name='photos',
     )
-    image = models.ImageField(upload_to='feature_photos/%Y/%m/%d/')
+    # The bytes go wherever get_evidence_storage() points: an S3-compatible
+    # bucket when one is configured, local disk otherwise. A callable rather
+    # than an instance so the field follows the settings and the migration keeps
+    # referring to the function.
+    image = models.ImageField(
+        upload_to='feature_photos/%Y/%m/%d/',
+        storage=get_evidence_storage,
+    )
     description = models.CharField(max_length=255, blank=True)
+    # Evidence provenance, written once on upload and never recomputed: a
+    # checksum that changes after the fact would prove nothing.
+    sha256 = models.CharField(max_length=64, blank=True, default='', db_index=True)
+    size_bytes = models.PositiveBigIntegerField(default=0)
+    storage_backend = models.CharField(max_length=16, blank=True, default='')
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -47,6 +80,13 @@ class FeaturePhoto(models.Model):
         indexes = [
             models.Index(fields=['feature', 'order']),
         ]
+
+    def save(self, *args, **kwargs):
+        if self.image and not self.sha256:
+            self.sha256, self.size_bytes = _digest(self.image)
+        if not self.storage_backend:
+            self.storage_backend = getattr(self.image.storage, 'label', '')
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f'Photo {self.id} | feature {self.feature_id}'

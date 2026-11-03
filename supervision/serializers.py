@@ -16,6 +16,10 @@ class FeaturePhotoSerializer(serializers.ModelSerializer):
             'uploaded_by',
             'uploaded_at',
             'order',
+            # Provenance: what was uploaded, how big it was and where it went.
+            'sha256',
+            'size_bytes',
+            'storage_backend',
         ]
         read_only_fields = fields
 

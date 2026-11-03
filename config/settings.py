@@ -245,6 +245,27 @@ WHITENOISE_AUTOREFRESH = DEBUG
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# ── Evidence media (supervision photos) ──────────────────────────────────────
+# Rows stay in PostgreSQL; only the bytes move (INTEGRATION_PLAN.md §6.2). With
+# EVIDENCE_S3_BUCKET set they go to any S3-compatible bucket — Cloudflare R2 by
+# default, since evidence is read far more often than written and R2 charges no
+# egress. Left empty they stay on local disk, so dev and CI need no credentials.
+#
+# R2:  EVIDENCE_S3_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
+#      EVIDENCE_S3_REGION=auto
+# B2/Wasabi/S3/MinIO: their endpoint and region.
+EVIDENCE_S3_BUCKET = os.getenv('EVIDENCE_S3_BUCKET', '')
+EVIDENCE_S3_ENDPOINT_URL = os.getenv('EVIDENCE_S3_ENDPOINT_URL', '')
+EVIDENCE_S3_REGION = os.getenv('EVIDENCE_S3_REGION', 'auto')
+EVIDENCE_S3_ACCESS_KEY_ID = os.getenv('EVIDENCE_S3_ACCESS_KEY_ID', '')
+EVIDENCE_S3_SECRET_ACCESS_KEY = os.getenv('EVIDENCE_S3_SECRET_ACCESS_KEY', '')
+# A CDN/public bucket domain (e.g. https://media.example.com); unset means the
+# API hands out short-lived presigned URLs instead of public links.
+EVIDENCE_PUBLIC_BASE_URL = os.getenv('EVIDENCE_PUBLIC_BASE_URL', '')
+EVIDENCE_PRESIGN_SECONDS = int(os.getenv('EVIDENCE_PRESIGN_SECONDS', '3600'))
+# Per-file cap, checked before the bytes are read in full.
+EVIDENCE_MAX_BYTES = int(os.getenv('EVIDENCE_MAX_BYTES', str(10 * 1024 * 1024)))
+
 # CORS Configuration
 CORS_ALLOW_CREDENTIALS = True
 
