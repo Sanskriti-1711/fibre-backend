@@ -4,7 +4,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from projects.models import Feature, Project
-from supervision.design_change import request_design_revision, requests_for
+from supervision.design_change import (
+    REQUEST_PENDING,
+    project_requests,
+    request_design_revision,
+    requests_for,
+)
 from supervision.models import FeatureDecisionRecord, FeaturePhoto
 from supervision.serializers import FeatureDecisionRecordSerializer, FeaturePhotoSerializer
 
@@ -161,9 +166,7 @@ class ProjectFeatureStatusesAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        features = Feature.objects.filter(project_id=project_id).values(
-            'id', 'layer_id', 'status'
-        )
+        features = Feature.objects.filter(project_id=project_id).values('id', 'layer_id', 'status')
 
         return Response(
             {
@@ -191,9 +194,9 @@ class FeatureDecisionListView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        records = FeatureDecisionRecord.objects.filter(
-            feature_id=feature_id
-        ).select_related('feature', 'reviewer')
+        records = FeatureDecisionRecord.objects.filter(feature_id=feature_id).select_related(
+            'feature', 'reviewer'
+        )
 
         return Response(
             {
@@ -252,6 +255,28 @@ class FeatureDesignRevisionView(APIView):
         )
 
 
+class ProjectDesignRevisionRequestsView(APIView):
+    """GET /api/ftth/lld/projects/<project_id>/revision-requests/
+
+    The design-change loop read from the design side: every request raised
+    against this project's designs, with the ones still waiting on a new LLD run
+    first. Registered on the LLD URL space because the reader is the LLD review
+    page, which is keyed by ``FtthProject.pk`` (see
+    ``design_change.project_requests``).
+    """
+
+    def get(self, request, project_id):
+        rows = project_requests(project_id)
+        return Response(
+            {
+                'project_id': str(project_id),
+                'count': len(rows),
+                'pending_count': sum(1 for row in rows if row['status'] == REQUEST_PENDING),
+                'results': rows,
+            }
+        )
+
+
 class ProjectDecisionListView(APIView):
     """GET /api/projects/<project_id>/decisions/
 
@@ -267,9 +292,9 @@ class ProjectDecisionListView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        records = FeatureDecisionRecord.objects.filter(
-            project_id=project_id
-        ).select_related('feature', 'reviewer')
+        records = FeatureDecisionRecord.objects.filter(project_id=project_id).select_related(
+            'feature', 'reviewer'
+        )
 
         layer_id = (request.GET.get('layer') or '').strip()
         if layer_id:

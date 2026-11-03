@@ -29,7 +29,7 @@ import logging
 
 from django.utils import timezone
 
-from projects.models import StageEvent
+from projects.models import Feature, StageEvent
 
 from .models import FeatureDecisionRecord
 
@@ -45,8 +45,20 @@ REQUEST_EVENT = 'design_revision_requested'
 # link (see notifications/service.py) — the frontend resolves its own origin.
 
 
-def design_review_url(project_id):
-    return f'ftth-lld-review.html?project_id={project_id}'
+def ftth_project_id(project):
+    """The FTTH project a supervision project was opened for.
+
+    The LLD pages are keyed by ``FtthProject.pk`` while a supervision project has
+    its own UUID, so handing the review page the supervision id lands on
+    ``get_object_or_404(FtthProject, ...)`` — the link has to cross the same
+    bridge the map-data and lineage reads already cross.
+    """
+    return (getattr(project, 'source_ftth_project_id', '') or '').strip()
+
+
+def design_review_url(project):
+    target = ftth_project_id(project) or str(getattr(project, 'id', project))
+    return f'ftth-lld-review.html?project_id={target}'
 
 
 def latest_deviation(feature):
@@ -88,7 +100,7 @@ def _payload(feature, record, requested_at, *, duplicate, notified=0):
         'record_id': str(record.id),
         'requested_at': requested_at.isoformat() if requested_at else None,
         'design_version': project.source_lld_run_id or '',
-        'review_url': design_review_url(project.id),
+        'review_url': design_review_url(project),
         'notified': notified,
         'duplicate': duplicate,
     }
@@ -153,6 +165,96 @@ def request_design_revision(feature, *, actor=None, note=''):
         logger.exception('Could not notify about a design revision for feature %s', feature.id)
 
     return payload
+
+
+REQUEST_PENDING = 'pending'
+REQUEST_ANSWERED = 'answered'
+
+
+def _completed_runs(project_id):
+    """Completed LLD runs for one FTTH project, oldest first.
+
+    Imported here rather than at module scope: the request module is read by the
+    supervision app, which must not need the LLD app to be installed to import.
+    """
+    from ftth_lld.models import LldRun
+
+    return list(
+        LldRun.objects.filter(
+            ftth_project_id=project_id,
+            status=LldRun.STATUS_COMPLETED,
+        )
+        .order_by('run_date')
+        .values('lld_version', 'run_date')
+    )
+
+
+def project_requests(project_id):
+    """Design-revision requests raised against one FTTH project's designs.
+
+    Keyed by ``FtthProject.pk`` rather than the supervision project's UUID
+    because the reader is the **LLD review page**: a planner opens it for a
+    design and needs to see, in the same place they review survey changes, that
+    the field asked for this design to be rethought.
+
+    A request is ``pending`` until a *completed* LLD run is created after it —
+    that run is the answer, so the row names the version that superseded it.
+    Pending rows come first, newest first, because they are the work.
+    """
+    events = list(
+        StageEvent.objects.filter(
+            project__source_ftth_project_id=project_id,
+            stage=StageEvent.Stage.LLD,
+            event=REQUEST_EVENT,
+        )
+        .select_related('actor', 'project')
+        .order_by('-created_at')
+    )
+    if not events:
+        return []
+
+    feature_ids = {event.entity_id for event in events if event.entity_id}
+    features = {
+        str(row['id']): row
+        for row in Feature.objects.filter(id__in=feature_ids).values('id', 'layer_id', 'layer_name')
+    }
+    runs = _completed_runs(project_id)
+
+    rows = []
+    for event in events:
+        metadata = event.metadata or {}
+        feature = features.get(str(event.entity_id), {})
+        answered_by = next(
+            (run for run in runs if run['run_date'] and run['run_date'] > event.created_at),
+            None,
+        )
+        rows.append(
+            {
+                'feature_id': str(event.entity_id),
+                'layer_id': feature.get('layer_id', metadata.get('layer_id', '')),
+                'layer_name': feature.get('layer_name', ''),
+                'record_id': str(metadata.get('record_id', '')),
+                'supervision_project_id': str(event.project_id),
+                'supervision_project_name': event.project.name if event.project_id else '',
+                'requested_at': event.created_at.isoformat(),
+                'requested_by': (
+                    (event.actor.full_name or event.actor.email) if event.actor_id else None
+                ),
+                'design_version': metadata.get('design_version', ''),
+                'note': metadata.get('note', ''),
+                'outside_tolerance': metadata.get('outside_tolerance', 0) or 0,
+                'fields': metadata.get('fields', []),
+                'status': REQUEST_ANSWERED if answered_by else REQUEST_PENDING,
+                'answered_by': answered_by['lld_version'] if answered_by else '',
+            }
+        )
+
+    # Pending first, then newest first inside each group.
+    pending = [row for row in rows if row['status'] == REQUEST_PENDING]
+    answered = [row for row in rows if row['status'] != REQUEST_PENDING]
+    pending.sort(key=lambda row: row['requested_at'], reverse=True)
+    answered.sort(key=lambda row: row['requested_at'], reverse=True)
+    return pending + answered
 
 
 def requests_for(feature):

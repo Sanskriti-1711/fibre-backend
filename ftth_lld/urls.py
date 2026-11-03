@@ -8,6 +8,8 @@ from the HLD pipeline (``ftth_hld``) and the Survey app.
 
 from django.urls import path
 
+from supervision.views import ProjectDesignRevisionRequestsView
+
 from .views import (
     FeatureLineageView,
     LldApprovedVersionView,
@@ -53,6 +55,14 @@ urlpatterns = [
         'ftth/lld/projects/<str:project_id>/review/',
         LldReviewView.as_view(),
         name='ftth-lld-review',
+    ),
+    # Stage 6.3, read from the design side: the as-built findings that asked for
+    # this design to be revised. Served here (not under supervision's own URL
+    # space) because the reader is this page, keyed by FtthProject.pk.
+    path(
+        'ftth/lld/projects/<str:project_id>/revision-requests/',
+        ProjectDesignRevisionRequestsView.as_view(),
+        name='ftth-lld-revision-requests',
     ),
     path(
         'ftth/lld/projects/<str:project_id>/changes/<str:change_id>/action/',
