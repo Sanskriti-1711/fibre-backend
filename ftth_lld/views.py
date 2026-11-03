@@ -1472,6 +1472,22 @@ class LldApprovedVersionView(APIView):
         )
 
 
+def _close_worker_connection() -> None:
+    """Drop this thread's database connection — but only on a worker thread.
+
+    ``_run_lld_job`` normally owns the daemon thread it runs on, where leaving
+    the connection open leaks one per run. Called inline instead (a management
+    command, or a test that drives the job directly), the caller owns the
+    connection: closing it there pulled the floor out from under the caller and
+    made the next test fail in ``setUp`` with "connection already closed".
+    """
+    if threading.current_thread() is threading.main_thread():
+        return
+    from django.db import close_old_connections
+
+    close_old_connections()
+
+
 def _notify_run_finished(run, *, ok: bool, error: str = '') -> None:
     """Tell the planners how a background LLD run ended.
 
@@ -1480,11 +1496,9 @@ def _notify_run_finished(run, *, ok: bool, error: str = '') -> None:
     crashed.
     """
     try:
-        from django.db import close_old_connections
-
         from notifications import service as notify
 
-        close_old_connections()
+        _close_worker_connection()
         notify.lld_run_finished(run, ok=ok, error=error)
     except Exception:  # noqa: BLE001 — notification is best-effort
         logger.exception('Could not notify planners about LLD run %s', getattr(run, 'pk', '?'))
@@ -1504,8 +1518,6 @@ def _run_lld_job(project_id: str, run_id, submit: bool = True, token: str = '') 
     dies with its worker can be replaced by another process while exactly one
     poller writes the result.
     """
-    from django.db import close_old_connections
-
     try:
         run = LldRun.objects.get(pk=run_id)
     except LldRun.DoesNotExist:
@@ -1742,7 +1754,7 @@ def _run_lld_job(project_id: str, run_id, submit: bool = True, token: str = '') 
             pass
         _notify_run_finished(run, ok=False, error=str(exc))
     finally:
-        close_old_connections()
+        _close_worker_connection()
 
 
 class LldRunView(APIView):

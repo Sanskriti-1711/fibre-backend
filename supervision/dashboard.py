@@ -11,7 +11,6 @@ from projects.models import Feature, Project
 from projects.models.import_session import ImportSession
 from users.models import User
 
-
 LIST_LIMIT = 8
 
 

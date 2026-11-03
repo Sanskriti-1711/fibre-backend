@@ -14,19 +14,21 @@ Requires a supervision project with imported features and one ENGINEER user;
 it exits non-zero on the first failure.
 """
 
+import contextlib
 import copy
 import json
 import os
 import re
 import sys
+from pathlib import Path
 
 import django
 
 # Running as a plain script puts tools/ on sys.path, not the backend root, so
 # `config` would not import. Put the project root in front.
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
@@ -34,10 +36,9 @@ django.setup()
 # Windows consoles default to cp1252 and these messages use a real minus sign
 # (U+2212), which raised UnicodeEncodeError *after* the checks had passed — a
 # green run reported as a failure. Degrade the character, never the verdict.
-try:
+# pragma: no cover - redirected / older Python
+with contextlib.suppress(AttributeError, ValueError):
     sys.stdout.reconfigure(errors='replace')
-except (AttributeError, ValueError):  # pragma: no cover - redirected / older Python
-    pass
 
 from django.test import Client  # noqa: E402  (after django.setup())
 from rest_framework_simplejwt.tokens import RefreshToken  # noqa: E402
@@ -51,16 +52,17 @@ LAYER = 'final_trenches'
 
 
 def fail(message):
-    print('  FAIL  %s' % message)
+    print(f'  FAIL  {message}')
     sys.exit(1)
 
 
 def ok(message):
-    print('  PASS  %s' % message)
+    print(f'  PASS  {message}')
 
 
-FE_PAGE = os.path.join(os.path.dirname(BASE_DIR), 'fiber-fe', 'audit-detail.html')
-REPORTS_PAGE = os.path.join(os.path.dirname(BASE_DIR), 'fiber-fe', 'reports.html')
+WORKSPACE = BASE_DIR.parent
+FE_PAGE = WORKSPACE / 'fiber-fe' / 'audit-detail.html'
+REPORTS_PAGE = WORKSPACE / 'fiber-fe' / 'reports.html'
 
 # Restated here rather than imported from supervision.report so the harness
 # checks the contract independently: if someone narrows the metric-unit set in
@@ -70,7 +72,7 @@ METRE_UNITS = {'m', 'meter', 'meters', 'metre', 'metres'}
 
 def function_body(source, name):
     """The `function <name>(...) { ... }` text, brace-matched; None if absent."""
-    start = source.find('function %s(' % name)
+    start = source.find(f'function {name}(')
     if start < 0:
         return None
     brace = source.find('{', start)
@@ -98,9 +100,9 @@ def check_audit_delta_sign():
     proves they agree on planned minus as-built - the direction the as-built
     report uses and projects/services/deviation.py stores.
     """
-    if not os.path.exists(FE_PAGE):
-        fail('%s not found - run this from the workspace checkout' % FE_PAGE)
-    with open(FE_PAGE, encoding='utf-8') as handle:
+    if not FE_PAGE.exists():
+        fail(f'{FE_PAGE} not found - run this from the workspace checkout')
+    with FE_PAGE.open(encoding='utf-8') as handle:
         page = handle.read()
 
     live = function_body(page, 'deltaCell')
@@ -139,9 +141,9 @@ def check_reports_source_badges(layers):
     can render every value the backend can emit, so no total is left unlabelled
     in the one table a reviewer uses to sign work off.
     """
-    if not os.path.exists(REPORTS_PAGE):
-        fail('%s not found - run this from the workspace checkout' % REPORTS_PAGE)
-    with open(REPORTS_PAGE, encoding='utf-8') as handle:
+    if not REPORTS_PAGE.exists():
+        fail(f'{REPORTS_PAGE} not found - run this from the workspace checkout')
+    with REPORTS_PAGE.open(encoding='utf-8') as handle:
         page = handle.read()
 
     body = function_body(page, 'asBuiltSource')
@@ -164,14 +166,13 @@ def check_reports_source_badges(layers):
         seen[layer['layer_name']] = source
         if source not in rendered:
             fail(
-                'layer %s reports as_built_source=%r, which the page renders as "—" — '
-                'an unlabelled total is indistinguishable from no evidence'
-                % (layer['layer_name'], source)
+                'layer {} reports as_built_source={!r}, which the page renders as "—" — '
+                'an unlabelled total is indistinguishable from no evidence'.format(layer['layer_name'], source)
             )
     labels = ', '.join(
-        '%s=%s' % (name, source or 'none') for name, source in sorted(seen.items())
+        '{}={}'.format(name, source or 'none') for name, source in sorted(seen.items())
     )
-    ok('every layer source in this report is one the page labels (%s)' % labels)
+    ok(f'every layer source in this report is one the page labels ({labels})')
 
     if 'asBuiltSource(length.as_built_source, length)' not in page:
         fail('the layer table no longer renders the source badge')
@@ -196,7 +197,7 @@ def check_boq_reconciliation(boq, layers):
     if not boq['available']:
         if not (boq.get('reason') or '').strip():
             fail('BOQ is unavailable but the report gives the page no reason to show')
-        ok('BOQ unavailable, with a reason the card can print: %s' % boq['reason'][:80])
+        ok('BOQ unavailable, with a reason the card can print: {}'.format(boq['reason'][:80]))
         return
 
     length = boq['length']
@@ -212,7 +213,7 @@ def check_boq_reconciliation(boq, layers):
     sections = boq['sections']
     section_priced = sum(float(section['boq_metres'] or 0.0) for section in sections)
     if not close(section_priced, length['boq_m'], 0.05):
-        fail('section totals %s != boq_m %s' % (section_priced, length['boq_m']))
+        fail('section totals {} != boq_m {}'.format(section_priced, length['boq_m']))
     ok('%d section(s) add up to the priced total' % len(sections))
 
     if sum(section['items'] for section in sections) != len(boq['rows']):
@@ -227,43 +228,40 @@ def check_boq_reconciliation(boq, layers):
         name = section['section']
         if section['as_built_m'] is None:
             if section['delta_m'] is not None:
-                fail('section %s has no as-built total but a delta of %s' % (name, section['delta_m']))
+                fail('section {} has no as-built total but a delta of {}'.format(name, section['delta_m']))
             continue
         if not close(section['delta_m'], section['boq_metres'] - section['as_built_m'], 0.05):
             fail(
-                'section %s delta %s != priced %s - as-built %s'
-                % (name, section['delta_m'], section['boq_metres'], section['as_built_m'])
+                'section {} delta {} != priced {} - as-built {}'.format(name, section['delta_m'], section['boq_metres'], section['as_built_m'])
             )
         matched = section.get('layers') or []
         if not matched:
-            fail('section %s carries an as-built total but matches no layer' % name)
+            fail(f'section {name} carries an as-built total but matches no layer')
         for member in matched:
             layer = layer_by_id.get(member['layer_id'])
             if layer is None:
-                fail('section %s matches %r, which is not a layer in this report' % (name, member['layer_id']))
+                fail('section {} matches {!r}, which is not a layer in this report'.format(name, member['layer_id']))
         expected_planned = sum(layer_by_id[member['layer_id']]['length']['planned_m'] or 0.0 for member in matched)
         if not close(section['planned_m'], expected_planned, 0.05):
             fail(
-                'section %s planned %s != its layer(s) %s'
-                % (name, section['planned_m'], expected_planned)
+                'section {} planned {} != its layer(s) {}'.format(name, section['planned_m'], expected_planned)
             )
     measured = sum(1 for section in sections if section['as_built_m'] is not None)
     ok('%d section(s) reconcile priced - as-built against their own totals' % measured)
 
     layer_laid = sum(layer['length']['as_built_m'] or 0.0 for layer in layers)
     if not close(length['as_built_m'], layer_laid, 0.05):
-        fail('boq as_built_m %s != the summed layer totals %s' % (length['as_built_m'], layer_laid))
-    ok('as-built total %.3f m is the summed layer totals' % layer_laid)
+        fail('boq as_built_m {} != the summed layer totals {}'.format(length['as_built_m'], layer_laid))
+    ok(f'as-built total {layer_laid:.3f} m is the summed layer totals')
 
     delta = length['boq_m'] - length['as_built_m']
     if not close(length['delta_vs_as_built_m'], delta, 0.05):
-        fail('delta_vs_as_built_m %s != priced - as-built %s' % (length['delta_vs_as_built_m'], delta))
+        fail('delta_vs_as_built_m {} != priced - as-built {}'.format(length['delta_vs_as_built_m'], delta))
     expected_pct = round(delta / length['boq_m'] * 100, 2) if length['boq_m'] else None
     if not close(length['delta_pct'], expected_pct, 0.02):
-        fail('delta_pct %s != %.2f%%' % (length['delta_pct'], expected_pct or 0))
+        fail('delta_pct {} != {:.2f}%'.format(length['delta_pct'], expected_pct or 0))
     ok(
-        'headline Δ %.2f m (%.2f%%) = %.2f priced - %.3f laid'
-        % (delta, expected_pct or 0.0, length['boq_m'], length['as_built_m'])
+        'headline Δ {:.2f} m ({:.2f}%) = {:.2f} priced - {:.3f} laid'.format(delta, expected_pct or 0.0, length['boq_m'], length['as_built_m'])
     )
 
     # The geometry this run just submitted must reach the BOQ card: the section
@@ -278,8 +276,7 @@ def check_boq_reconciliation(boq, layers):
         section = touching[0]
         if not close(section['as_built_m'], submitted['length']['as_built_m'], 0.05):
             fail(
-                'section %s shows %s m as-built but %s laid %s m'
-                % (
+                'section {} shows {} m as-built but {} laid {} m'.format(
                     section['section'],
                     section['as_built_m'],
                     LAYER,
@@ -287,8 +284,7 @@ def check_boq_reconciliation(boq, layers):
                 )
             )
         ok(
-            'the submitted geometry reaches the BOQ: %s shows %.3f m as-built'
-            % (section['section'], submitted['length']['as_built_m'])
+            'the submitted geometry reaches the BOQ: {} shows {:.3f} m as-built'.format(section['section'], submitted['length']['as_built_m'])
         )
 
 
@@ -334,24 +330,24 @@ def main():
         .first()
     )
     if feature is None:
-        fail('no %s feature with design geometry' % LAYER)
-    print('  feature %s (%s)' % (feature.id, LAYER))
+        fail(f'no {LAYER} feature with design geometry')
+    print(f'  feature {feature.id} ({LAYER})')
 
     planned = copy.deepcopy(feature.geometry)
     laid = shift_north(planned)
     if laid is None:
-        fail('unsupported design geometry: %s' % planned.get('type'))
-    print('  design geometry: %s' % planned['type'])
+        fail('unsupported design geometry: {}'.format(planned.get('type')))
+    print('  design geometry: {}'.format(planned['type']))
 
     print('== engineer submits as-built geometry ==')
     response = client.patch(
-        '/api/features/%s/field-measurements/' % feature.id,
+        f'/api/features/{feature.id}/field-measurements/',
         data=json.dumps({'as_built_geometry': laid, 'comparison_notes': 'e2e as-built'}),
         content_type='application/json',
-        HTTP_AUTHORIZATION='Bearer %s' % engineer_token,
+        HTTP_AUTHORIZATION=f'Bearer {engineer_token}',
     )
     if response.status_code != 200:
-        fail('PATCH answered %s: %s' % (response.status_code, response.content[:300]))
+        fail(f'PATCH answered {response.status_code}: {response.content[:300]}')
     ok('PATCH accepted')
     if response.json().get('as_built_geometry') != laid:
         fail('response did not echo the stored geometry')
@@ -359,13 +355,13 @@ def main():
 
     print('== validation ==')
     bad = client.patch(
-        '/api/features/%s/field-measurements/' % feature.id,
+        f'/api/features/{feature.id}/field-measurements/',
         data=json.dumps({'as_built_geometry': {'type': 'LineString'}}),
         content_type='application/json',
-        HTTP_AUTHORIZATION='Bearer %s' % engineer_token,
+        HTTP_AUTHORIZATION=f'Bearer {engineer_token}',
     )
     if bad.status_code != 400:
-        fail('malformed geometry answered %s, expected 400' % bad.status_code)
+        fail(f'malformed geometry answered {bad.status_code}, expected 400')
     ok('malformed geometry is refused (400)')
 
     print('== design baseline is untouched ==')
@@ -379,11 +375,11 @@ def main():
 
     print('== feature detail ==')
     detail = client.get(
-        '/api/projects/%s/features/%s/' % (project.id, feature.id),
-        HTTP_AUTHORIZATION='Bearer %s' % admin_token,
+        f'/api/projects/{project.id}/features/{feature.id}/',
+        HTTP_AUTHORIZATION=f'Bearer {admin_token}',
     )
     if detail.status_code != 200:
-        fail('feature detail answered %s' % detail.status_code)
+        fail(f'feature detail answered {detail.status_code}')
     payload = detail.json()
     body = payload.get('feature', payload)
     if body.get('as_built_geometry') != laid:
@@ -392,15 +388,15 @@ def main():
 
     print('== map payload ==')
     map_response = client.get(
-        '/api/projects/%s/map-data/' % project.id,
-        HTTP_AUTHORIZATION='Bearer %s' % admin_token,
+        f'/api/projects/{project.id}/map-data/',
+        HTTP_AUTHORIZATION=f'Bearer {admin_token}',
     )
     if map_response.status_code != 200:
-        fail('map-data answered %s' % map_response.status_code)
+        fail(f'map-data answered {map_response.status_code}')
     map_data = map_response.json()
     as_built = map_data.get('as_built_geojson') or {}
     if not as_built.get(LAYER, {}).get('features'):
-        fail('as_built_geojson has no %s collection' % LAYER)
+        fail(f'as_built_geojson has no {LAYER} collection')
     laid_ids = {f['properties']['feature_id'] for f in as_built[LAYER]['features']}
     if str(feature.id) not in laid_ids:
         fail('the submitted feature is missing from as_built_geojson')
@@ -414,42 +410,41 @@ def main():
 
     print('== report ==')
     report = client.get(
-        '/api/projects/%s/as-built-report/' % project.id,
-        HTTP_AUTHORIZATION='Bearer %s' % admin_token,
+        f'/api/projects/{project.id}/as-built-report/',
+        HTTP_AUTHORIZATION=f'Bearer {admin_token}',
     )
     if report.status_code != 200:
-        fail('as-built report answered %s' % report.status_code)
+        fail(f'as-built report answered {report.status_code}')
     data = report.json()
     layer = next((row for row in data['layers'] if row['layer_name'] == LAYER), None)
     if layer is None:
-        fail('report has no %s layer' % LAYER)
+        fail(f'report has no {LAYER} layer')
     length = layer['length']
-    print('  length block: %s' % json.dumps(length))
+    print(f'  length block: {json.dumps(length)}')
     if length['as_built_source'] != 'geometry':
-        fail('report did not use the laid geometry (source=%s)' % length['as_built_source'])
+        fail('report did not use the laid geometry (source={})'.format(length['as_built_source']))
     ok('report reads the laid geometry')
     if length['laid_features'] < 1:
-        fail('laid_features is %s' % length['laid_features'])
+        fail('laid_features is {}'.format(length['laid_features']))
     # Feature level first: the shift is lateral, so THIS feature's length must be
     # unchanged. That is the proof the geometry round-tripped intact.
     feature_planned = geometry_length_m(planned)
     feature_laid = geometry_length_m(laid)
     if abs(feature_laid - feature_planned) > 0.5:
-        fail('the 3 m lateral shift changed the length: %s -> %s' % (feature_planned, feature_laid))
-    ok('feature length preserved by the shift (%.3f m)' % feature_laid)
+        fail(f'the 3 m lateral shift changed the length: {feature_planned} -> {feature_laid}')
+    ok(f'feature length preserved by the shift ({feature_laid:.3f} m)')
 
     if abs((length['laid_geometry_m'] or 0) - round(feature_laid, 3)) > 0.5:
         fail(
-            'laid_geometry_m %s != the submitted geometry %s'
-            % (length['laid_geometry_m'], feature_laid)
+            'laid_geometry_m {} != the submitted geometry {}'.format(length['laid_geometry_m'], feature_laid)
         )
-    ok('layer laid length %.3f m equals the submitted geometry' % feature_laid)
+    ok(f'layer laid length {feature_laid:.3f} m equals the submitted geometry')
 
     # Layer level: only one feature of this layer was submitted, so the delta is
     # the whole planned length minus that one laid span — not a sign bug.
     remaining = (length['planned_m'] or 0) - (length['laid_geometry_m'] or 0)
     if length['delta_m'] is None or abs(length['delta_m'] - remaining) > 0.5:
-        fail('delta_m %s != planned − laid %s' % (length['delta_m'], remaining))
+        fail('delta_m {} != planned − laid {}'.format(length['delta_m'], remaining))
     ok(
         'layer delta %.3f m = planned %.1f − laid %.1f; %d of %d features submitted'
         % (
@@ -476,7 +471,7 @@ def main():
     print('== audit page Δ convention ==')
     check_audit_delta_sign()
 
-    print('\nAll as-built geometry checks passed for feature %s.' % feature.id)
+    print(f'\nAll as-built geometry checks passed for feature {feature.id}.')
 
 
 main()

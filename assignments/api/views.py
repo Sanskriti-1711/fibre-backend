@@ -339,10 +339,10 @@ class JobAssignmentsListAPIView(APIView):
         }
 
         def absorb(status_counts):
-            for status, count in status_counts.items():
+            for feature_status, count in status_counts.items():
                 stats['total'] += count
-                if status in stats:
-                    stats[status] += count
+                if feature_status in stats:
+                    stats[feature_status] += count
 
         for project_key in project_ids:
             absorb(counts['project'].get(project_key, {}))

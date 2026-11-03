@@ -256,10 +256,8 @@ class ProjectDetailAPIView(APIView):
         # project deletion impossible on any host that cannot reach localhost,
         # which is every deployment.
         microservice_url = f'{MICROSERVICE_BASE_URL}/geo/projects/{project_id}/layers'
-        try:
+        with contextlib.suppress(requests.RequestException):
             requests.delete(microservice_url, headers=microservice_headers(), timeout=10)
-        except requests.RequestException:
-            pass
 
         # Clean up uploaded files from import sessions before cascade delete
         import_sessions = ImportSession.objects.filter(project=project)

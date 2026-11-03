@@ -23,9 +23,8 @@ from .dev_settings import *  # noqa: F401,F403
 # the value is pasted into the connection options string.
 _SCHEMA = os.getenv('SUPERVISION_DB_SCHEMA', 'supervision')  # noqa: F405
 if not _SCHEMA.replace('_', '').isalnum() or _SCHEMA[:1].isdigit():
-    raise ImproperlyConfigured(
-        'SUPERVISION_DB_SCHEMA must be a plain identifier (letters, digits, underscore).'
-    )
+    msg = 'SUPERVISION_DB_SCHEMA must be a plain identifier (letters, digits, underscore).'
+    raise ImproperlyConfigured(msg)
 
 # Same server, same credentials, different search_path. `public` stays on the
 # path only for PostGIS's own catalog tables (geometry_columns,

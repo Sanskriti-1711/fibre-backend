@@ -1,4 +1,5 @@
 import os
+import sys
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # executed as shell, because the secret key contains `$`, `(`, `)` and `%` — and
 # `setdefault`, so a variable the process already has always wins.
 _ENV_FILE = BASE_DIR.parent / '.env'
+_TEST_RUN = 'test' in sys.argv
 if _ENV_FILE.exists():
     for _line in _ENV_FILE.read_text(encoding='utf-8', errors='replace').splitlines():
         _line = _line.strip()
@@ -23,6 +25,12 @@ if _ENV_FILE.exists():
             continue
         _key, _value = _line.split('=', 1)
         _key = _key.strip()
+        # A test run must not inherit this machine's evidence bucket. The suite
+        # asserts local-disk storage, and with a bucket configured the upload
+        # test writes a real object; CI has no `.env`, so skipping it here is
+        # what makes a developer's run behave the same as CI.
+        if _TEST_RUN and _key.startswith('EVIDENCE_'):
+            continue
         if _key.isidentifier():
             os.environ.setdefault(_key, _value.strip())
 
@@ -251,9 +259,9 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # default, since evidence is read far more often than written and R2 charges no
 # egress. Left empty they stay on local disk, so dev and CI need no credentials.
 #
-# R2:  EVIDENCE_S3_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
-#      EVIDENCE_S3_REGION=auto
-# B2/Wasabi/S3/MinIO: their endpoint and region.
+# On R2 the endpoint is the account's r2.cloudflarestorage.com host and the
+# region is `auto`; B2, Wasabi, S3 and MinIO each want their own pair. The full
+# list of variables is in docs/DEPLOY.md.
 EVIDENCE_S3_BUCKET = os.getenv('EVIDENCE_S3_BUCKET', '')
 EVIDENCE_S3_ENDPOINT_URL = os.getenv('EVIDENCE_S3_ENDPOINT_URL', '')
 EVIDENCE_S3_REGION = os.getenv('EVIDENCE_S3_REGION', 'auto')

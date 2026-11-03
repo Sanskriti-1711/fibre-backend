@@ -72,8 +72,11 @@ ignore = [
 "config/settings.py" = ["S101", "S105", "S106"]
 "manage.py" = ["S101"]
 # White-box tests deliberately exercise module-private helpers
-# (entry-hash identity, package internals) — that is their job.
+# (entry-hash identity, package internals) — that is their job. `tests.py` is
+# the same idea for a single-file test module (e.g. supervision/tests.py pokes
+# the storage client to assert the presign contract).
 "**/tests/*.py" = ["SLF001"]
+"**/tests.py" = ["SLF001"]
 # permits/generators reuses its own data-module privates (_as_float, _props)
 # across sibling modules — an established intra-package pattern, not an accident.
 "permits/generators/*.py" = ["SLF001"]

@@ -415,20 +415,20 @@ def supervision_deviation(feature, *, feature_ids=(), actor=None, notes='') -> l
     if notes:
         body += f' Reviewer note: {notes}'
 
-    kwargs = dict(
-        kind=Notification.KIND_SUPERVISION_DEVIATION,
-        category=Notification.CATEGORY_DESIGN,
-        severity=Notification.SEVERITY_WARNING,
-        title=f'Approved outside tolerance — {project.name or project_id}',
-        body=body,
-        url=f'audit-detail.html?project_id={project_id}&feature_id={ids[0]}',
-        project_id=project_id,
-        project_name=project.name or '',
-        actor=actor,
-        entity_type='feature',
-        entity_id=ids[0],
-        meta={'feature_ids': ids, 'count': count, 'notes': notes},
-    )
+    kwargs = {
+        'kind': Notification.KIND_SUPERVISION_DEVIATION,
+        'category': Notification.CATEGORY_DESIGN,
+        'severity': Notification.SEVERITY_WARNING,
+        'title': f'Approved outside tolerance — {project.name or project_id}',
+        'body': body,
+        'url': f'audit-detail.html?project_id={project_id}&feature_id={ids[0]}',
+        'project_id': project_id,
+        'project_name': project.name or '',
+        'actor': actor,
+        'entity_type': 'feature',
+        'entity_id': ids[0],
+        'meta': {'feature_ids': ids, 'count': count, 'notes': notes},
+    }
 
     if recipient_ids:
         return notify(recipient_ids, **kwargs)
@@ -476,27 +476,27 @@ def design_revision_requested(feature, *, record_id, note='', actor=None) -> lis
     if note:
         body += f' Reviewer note: {note}'
 
-    kwargs = dict(
-        kind=Notification.KIND_LLD_RUN,
-        category=Notification.CATEGORY_DESIGN,
-        severity=Notification.SEVERITY_WARNING,
-        title=f'Design revision requested — {project.name or project_id}',
-        body=body,
-        url=f'ftth-lld-review.html?project_id={project_id}',
-        project_id=project_id,
-        project_name=project.name or '',
-        actor=actor,
-        entity_type='feature',
-        entity_id=str(feature.id),
-        dedupe_key=f'design-revision:{record_id}',
-        meta={
+    kwargs = {
+        'kind': Notification.KIND_LLD_RUN,
+        'category': Notification.CATEGORY_DESIGN,
+        'severity': Notification.SEVERITY_WARNING,
+        'title': f'Design revision requested — {project.name or project_id}',
+        'body': body,
+        'url': f'ftth-lld-review.html?project_id={project_id}',
+        'project_id': project_id,
+        'project_name': project.name or '',
+        'actor': actor,
+        'entity_type': 'feature',
+        'entity_id': str(feature.id),
+        'dedupe_key': f'design-revision:{record_id}',
+        'meta': {
             'feature_id': str(feature.id),
             'record_id': str(record_id),
             'layer_id': getattr(feature, 'layer_id', ''),
             'design_version': getattr(project, 'source_lld_run_id', '') or '',
             'notes': note,
         },
-    )
+    }
 
     if recipient_ids:
         return notify(recipient_ids, **kwargs)

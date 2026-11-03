@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import timezone as dt_timezone
+from datetime import UTC
 
 from django.utils import timezone
 from rest_framework.response import Response
@@ -79,7 +79,7 @@ def _segment_m(a, b):
 
 
 def _polyline_m(coords):
-    if not isinstance(coords, (list, tuple)):
+    if not isinstance(coords, list | tuple):
         return 0.0
     return sum(_segment_m(coords[i - 1], coords[i]) for i in range(1, len(coords)))
 
@@ -527,7 +527,7 @@ class ProjectAsBuiltReportAPIView(APIView):
                     'status': project.status,
                     'source_lld_run_id': getattr(project, 'source_lld_run_id', None),
                 },
-                'generated_at': timezone.now().astimezone(dt_timezone.utc).isoformat(),
+                'generated_at': timezone.now().astimezone(UTC).isoformat(),
                 'totals': {
                     'features': total_features,
                     'approved': approved,

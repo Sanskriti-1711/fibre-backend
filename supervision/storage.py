@@ -13,6 +13,8 @@ stores evidence remotely can run its tests without the SDK installed.
 
 from __future__ import annotations
 
+import contextlib
+
 from django.conf import settings
 from django.core.files.storage import FileSystemStorage, Storage
 
@@ -94,10 +96,10 @@ class S3EvidenceStorage(Storage):
         return self.client.head_object(Bucket=self.bucket, Key=name)['ContentLength']
 
     def delete(self, name):
-        try:
+        # Deleting a key that is already gone is the outcome the caller asked
+        # for, so it is not an error to report.
+        with contextlib.suppress(Exception):
             self.client.delete_object(Bucket=self.bucket, Key=name)
-        except Exception:  # noqa: BLE001 - deleting a missing object is a no-op
-            pass
 
     def url(self, name):
         if self.public_base_url:
@@ -147,3 +149,4 @@ def reset_evidence_storage():
     """Drop the cached store — used by settings overrides and tests."""
     global _storage
     _storage = None
+

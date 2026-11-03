@@ -45,11 +45,11 @@ class FeaturePhotoEvidenceTests(TestCase):
             role=User.Role.SUBADMIN,
         )
         token = str(RefreshToken.for_user(self.admin).access_token)
-        self.auth = {'HTTP_AUTHORIZATION': 'Bearer %s' % token}
+        self.auth = {'HTTP_AUTHORIZATION': f'Bearer {token}'}
         self.payload = png_bytes()
 
     def url(self, suffix=''):
-        return '/api/features/%s/photos/%s' % (self.feature.id, suffix)
+        return f'/api/features/{self.feature.id}/photos/{suffix}'
 
     def upload(self, name='site.png', payload=None, content_type='image/png'):
         return self.client.post(
@@ -117,7 +117,7 @@ class FeaturePhotoEvidenceTests(TestCase):
         storage, name = photo.image.storage, photo.image.name
         self.assertTrue(storage.exists(name))
 
-        response = self.client.delete(self.url('%s/' % body['id']), **self.auth)
+        response = self.client.delete(self.url('{}/'.format(body['id'])), **self.auth)
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(FeaturePhoto.objects.filter(id=body['id']).exists())
@@ -151,7 +151,7 @@ class S3EvidenceStorageTests(TestCase):
 
         def generate_presigned_url(self, operation, Params, ExpiresIn):
             self.calls.append(('presign', {'operation': operation, **Params, 'ExpiresIn': ExpiresIn}))
-            return 'https://bucket.example/%s?X-Amz-Signature=abc' % Params['Key']
+            return 'https://bucket.example/{}?X-Amz-Signature=abc'.format(Params['Key'])
 
     def make_storage(self, **kwargs):
         storage = S3EvidenceStorage(bucket='evidence', **kwargs)
@@ -272,7 +272,7 @@ class MediaServingTests(TestCase):
         self.assertNotIn(b'SECRET_KEY', response.content)
 
     def test_writes_are_refused(self):
-        response = self.client.post('/media/%s' % self.name)
+        response = self.client.post(f'/media/{self.name}')
 
         self.assertEqual(response.status_code, 405)
 
@@ -287,7 +287,7 @@ class MediaServingTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(
-            response['Location'], 'https://media.example.com/%s' % self.name
+            response['Location'], f'https://media.example.com/{self.name}'
         )
 
 
@@ -331,11 +331,11 @@ class DesignChangeLoopTests(TestCase):
             role=ProjectMember.Role.PLANNER,
         )
         token = str(RefreshToken.for_user(self.reviewer).access_token)
-        self.auth = {'HTTP_AUTHORIZATION': 'Bearer %s' % token}
+        self.auth = {'HTTP_AUTHORIZATION': f'Bearer {token}'}
 
     @property
     def url(self):
-        return '/api/features/%s/request-design-revision/' % self.feature.id
+        return f'/api/features/{self.feature.id}/request-design-revision/'
 
     def record_deviation(self, reason='gas main in the way'):
         from supervision.models import FeatureDecisionRecord
@@ -383,7 +383,7 @@ class DesignChangeLoopTests(TestCase):
         self.assertFalse(body['duplicate'])
         self.assertEqual(body['record_id'], str(record.id))
         self.assertEqual(body['design_version'], 'ftth-proj:LLD-V05')
-        self.assertIn('ftth-lld-review.html?project_id=%s' % self.project.id, body['review_url'])
+        self.assertIn(f'ftth-lld-review.html?project_id={self.project.id}', body['review_url'])
 
         event = StageEvent.objects.get(event='design_revision_requested')
         self.assertEqual(event.stage, StageEvent.Stage.LLD)
@@ -435,7 +435,7 @@ class DesignChangeLoopTests(TestCase):
         self.client.post(self.url, {}, **self.auth)
 
         body = self.client.get(
-            '/api/features/%s/decisions/' % self.feature.id, **self.auth
+            f'/api/features/{self.feature.id}/decisions/', **self.auth
         ).json()
 
         self.assertEqual(body['count'], 1)

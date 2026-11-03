@@ -17,7 +17,6 @@ from io import BytesIO
 
 from django.db.models import Count, Max, Q
 from django.utils import timezone
-
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -25,7 +24,6 @@ from openpyxl.utils import get_column_letter
 
 from projects.models import Feature, LayerFieldConfig
 from projects.services.completion_service import CompletionService
-
 
 # Audit columns appended after a layer's data columns, with their fixed widths.
 TRAILING_COLUMNS = [
@@ -83,13 +81,13 @@ def flatten(value):
     ``{"value": ..., "unit": ...}``. A report wants the measurement with its
     unit, not the JSON wrapper.
     """
-    if value is None or isinstance(value, (bool, int, float, Decimal)):
+    if value is None or isinstance(value, bool | int | float | Decimal):
         return value
 
-    if isinstance(value, (datetime, date)):
+    if isinstance(value, datetime | date):
         return value
 
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         parts = [flatten(item) for item in value]
         return "; ".join(str(p) for p in parts if p not in (None, ""))
 
@@ -200,7 +198,7 @@ def sheet_title(name, used_titles):
 
 def _order_key(entry):
     order = entry.get("order")
-    return order if isinstance(order, (int, float)) and not isinstance(order, bool) else 0
+    return order if isinstance(order, int | float) and not isinstance(order, bool) else 0
 
 
 def _schema_columns(schema):
