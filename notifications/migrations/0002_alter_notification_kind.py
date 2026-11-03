@@ -4,7 +4,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('notifications', '0001_initial'),
     ]
@@ -13,6 +12,19 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='notification',
             name='kind',
-            field=models.CharField(choices=[('survey_change', 'Survey change submitted'), ('survey_decision', 'Survey change decided'), ('survey_assigned', 'Survey work assigned'), ('lld_ready', 'Approved Survey Version ready'), ('lld_run', 'LLD run'), ('permit', 'Permit'), ('supervision_deviation', 'Supervision deviation'), ('system', 'System')], db_index=True, max_length=32),
+            field=models.CharField(
+                choices=[
+                    ('survey_change', 'Survey change submitted'),
+                    ('survey_decision', 'Survey change decided'),
+                    ('survey_assigned', 'Survey work assigned'),
+                    ('lld_ready', 'Approved Survey Version ready'),
+                    ('lld_run', 'LLD run'),
+                    ('permit', 'Permit'),
+                    ('supervision_deviation', 'Supervision deviation'),
+                    ('system', 'System'),
+                ],
+                db_index=True,
+                max_length=32,
+            ),
         ),
     ]

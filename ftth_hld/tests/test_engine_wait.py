@@ -107,9 +107,7 @@ class WaitBudgetTests(SimpleTestCase):
 
     def test_the_budget_can_still_be_raised_by_environment(self):
         with (
-            mock.patch.dict(
-                os.environ, {'FTTH_RESOLVE_TIMEOUT': '1800', 'FTTH_ENGINE_WAKE': '0'}
-            ),
+            mock.patch.dict(os.environ, {'FTTH_RESOLVE_TIMEOUT': '1800', 'FTTH_ENGINE_WAKE': '0'}),
             mock.patch.object(
                 pipeline.requests,
                 'post',

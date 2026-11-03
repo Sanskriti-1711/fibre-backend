@@ -1013,7 +1013,6 @@ class LldRunsViewTests(LldApiTestCase):
         )
 
 
-
 # ======================================================================
 # GET /api/ftth/lld/projects/<pid>/versions/diff/  — cross-run diff (A24)
 # ======================================================================

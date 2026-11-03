@@ -109,9 +109,7 @@ class LayerFieldConfigAPIView(APIView):
         # Absolute slack that still counts as "as designed" (§3 Stage 5.2).
         # Omitted means 0, the strictest reading: any difference is a deviation.
         try:
-            tolerance = Decimal(str(request.data.get('tolerance', 0))).quantize(
-                Decimal('0.001')
-            )
+            tolerance = Decimal(str(request.data.get('tolerance', 0))).quantize(Decimal('0.001'))
         except (InvalidOperation, TypeError, ValueError):
             return Response(
                 {'detail': 'tolerance must be a number'},

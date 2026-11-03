@@ -148,8 +148,10 @@ def run_pipeline(
                     stack.enter_context(Path(path).open('rb')),
                     'application/octet-stream',
                 )
-        data = {'poly_method': str(poly_method),
-                'use_brownfield': 'true' if use_brownfield else 'false'}
+        data = {
+            'poly_method': str(poly_method),
+            'use_brownfield': 'true' if use_brownfield else 'false',
+        }
         if name:
             data['name'] = name
         if project_id:

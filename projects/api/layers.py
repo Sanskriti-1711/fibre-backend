@@ -115,9 +115,7 @@ class ProjectMapDataAPIView(APIView):
             all_features.append(feature)
 
             if f.as_built_geometry:
-                as_built_geojson.setdefault(
-                    name, {'type': 'FeatureCollection', 'features': []}
-                )
+                as_built_geojson.setdefault(name, {'type': 'FeatureCollection', 'features': []})
                 laid = {
                     'type': 'Feature',
                     'geometry': f.as_built_geometry,
@@ -314,9 +312,7 @@ class ProjectFeatureDetailAPIView(APIView):
         # serves one feature, so the extra lookup for the layer's tolerance is
         # free — the layer lists deliberately do not carry it.
         try:
-            layer_cfg = LayerFieldConfig.objects.get(
-                project=project, layer_id=feature.layer_id
-            )
+            layer_cfg = LayerFieldConfig.objects.get(project=project, layer_id=feature.layer_id)
             tolerance = layer_cfg.tolerance
         except LayerFieldConfig.DoesNotExist:
             tolerance = 0

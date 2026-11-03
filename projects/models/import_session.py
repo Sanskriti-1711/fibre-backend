@@ -24,9 +24,7 @@ class ImportSession(models.Model):
         (SOURCE_LLD_RUN, 'LLD run handoff'),
     ]
 
-    source_kind = models.CharField(
-        max_length=20, choices=SOURCE_KIND_CHOICES, default=SOURCE_GPKG
-    )
+    source_kind = models.CharField(max_length=20, choices=SOURCE_KIND_CHOICES, default=SOURCE_GPKG)
     # The run marker ("<ftth_project_id>:<lld_version>") for an LLD handoff.
     source_ref = models.CharField(max_length=128, blank=True, default='')
 

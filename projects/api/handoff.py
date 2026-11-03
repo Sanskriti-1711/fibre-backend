@@ -112,9 +112,7 @@ def import_lld_run(project, run):
     refers to. A new LLD version gets a new supervision project (§3 Stage 4.4).
     """
     now = timezone.now()
-    existing = dict(
-        Feature.objects.filter(project=project).values_list('id', 'status')
-    )
+    existing = dict(Feature.objects.filter(project=project).values_list('id', 'status'))
 
     to_create: list[Feature] = []
     to_update: dict[uuid.UUID, dict] = {}
@@ -143,10 +141,7 @@ def import_lld_run(project, run):
             'updated_at',
         ]
         Feature.objects.bulk_update(
-            [
-                Feature(id=feature_id, **fields)
-                for feature_id, fields in to_update.items()
-            ],
+            [Feature(id=feature_id, **fields) for feature_id, fields in to_update.items()],
             fields_to_write,
             batch_size=IMPORT_BATCH_SIZE,
         )
@@ -231,4 +226,6 @@ class LldHandoffView(APIView):
             )
 
         result = import_lld_run(project, run)
-        return Response({'project_id': str(project.id), 'source_lld_run_id': source_lld_run_id, **result})
+        return Response(
+            {'project_id': str(project.id), 'source_lld_run_id': source_lld_run_id, **result}
+        )

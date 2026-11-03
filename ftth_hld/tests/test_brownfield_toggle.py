@@ -37,8 +37,7 @@ class BrownfieldToggleTests(TestCase):
             'ftth_hld.api.run_from_area',
             return_value={'project_id': 'p1', 'status': 'queued'},
         ) as engine:
-            response = self.client.post(
-                '/api/ftth/hld/run-from-area/', payload, format='json')
+            response = self.client.post('/api/ftth/hld/run-from-area/', payload, format='json')
         return response, engine
 
     def test_the_toggle_off_is_forwarded(self):
@@ -62,10 +61,8 @@ class BrownfieldToggleTests(TestCase):
         self.assertIs(engine.call_args.kwargs.get('use_brownfield'), True)
 
     def test_the_upload_route_forwards_the_toggle_too(self):
-        excel = SimpleUploadedFile(
-            'addresses.xlsx', b'x', content_type='application/vnd.ms-excel')
-        roads = SimpleUploadedFile(
-            'roads.geojson', b'{}', content_type='application/json')
+        excel = SimpleUploadedFile('addresses.xlsx', b'x', content_type='application/vnd.ms-excel')
+        roads = SimpleUploadedFile('roads.geojson', b'{}', content_type='application/json')
         with mock.patch(
             'ftth_hld.api.run_pipeline',
             return_value={'project_id': 'p1', 'status': 'queued'},
