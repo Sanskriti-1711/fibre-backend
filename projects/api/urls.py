@@ -12,6 +12,7 @@ from .layer_field_config import LayerFieldConfigAPIView
 from .layer_weights import ProjectLayerWeightsAPIView
 from .layers import (
     FeaturePhotoUploadView,
+    ProjectFeatureByDesignAPIView,
     ProjectFeatureDetailAPIView,
     ProjectFeatureUpdateAPIView,
     ProjectLayerDetailAPIView,
@@ -50,6 +51,12 @@ urlpatterns = [
     path(
         'projects/<uuid:project_id>/layers/<str:layer_id>/',
         ProjectLayerDetailAPIView.as_view(),
+    ),
+    # Design ids are engine strings, not UUIDs, so the `<uuid:feature_id>`
+    # pattern below can never swallow this route.
+    path(
+        'projects/<uuid:project_id>/features/by-design/<str:design_id>/',
+        ProjectFeatureByDesignAPIView.as_view(),
     ),
     path(
         'projects/<uuid:project_id>/features/<uuid:feature_id>/',

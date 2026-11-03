@@ -271,6 +271,89 @@ class ProjectLayerDetailAPIView(APIView):
         )
 
 
+class ProjectFeatureByDesignAPIView(APIView):
+    """GET /api/projects/<project_id>/features/by-design/<design_id>/
+
+    Resolves a design (engine) feature id to the supervision row that carries
+    it, together with the assignment covering that row. The design map and the
+    LLD results speak in engine ids while an assignment keys on a
+    ``projects.Feature`` row, so this is the one place the two are joined — the
+    mapping lives in the row's own ``properties``, written by the LLD handoff.
+    """
+
+    def get(self, request, project_id, design_id):
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            return Response(
+                {'detail': 'Project not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not _engineer_can_access(request, project):
+            return _deny()
+
+        feature = (
+            Feature.objects.filter(project=project, properties__feature_id__iexact=str(design_id))
+            .order_by('created_at')
+            .first()
+        )
+        if feature is None:
+            return Response(
+                {
+                    'detail': 'No supervision feature carries this design id.',
+                    'design_id': design_id,
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        from assignments.models import AssignmentJob
+
+        # A feature job is the specific answer; a layer job covers the whole
+        # layer it sits in; a project job covers everything. Narrowest wins.
+        condition = Q(scope=AssignmentJob.SCOPE_FEATURE, feature=feature) | Q(
+            scope=AssignmentJob.SCOPE_PROJECT
+        )
+        if feature.layer_id:
+            condition |= Q(scope=AssignmentJob.SCOPE_LAYER, layer_id=feature.layer_id)
+
+        jobs = list(
+            AssignmentJob.objects.select_related('assignee')
+            .filter(project=project)
+            .filter(condition)
+        )
+        precedence = {
+            AssignmentJob.SCOPE_FEATURE: 0,
+            AssignmentJob.SCOPE_LAYER: 1,
+            AssignmentJob.SCOPE_PROJECT: 2,
+        }
+        job = min(jobs, key=lambda row: precedence[row.scope]) if jobs else None
+
+        return Response(
+            {
+                'design_id': design_id,
+                'feature': {
+                    'id': str(feature.id),
+                    'layer_id': feature.layer_id,
+                    'layer_name': feature.layer_name,
+                    'status': feature.status,
+                },
+                'assignment': None
+                if job is None
+                else {
+                    'id': str(job.id),
+                    'scope': job.scope,
+                    'assignee': {
+                        'id': str(job.assignee_id),
+                        'email': job.assignee.email,
+                        'full_name': job.assignee.full_name,
+                    },
+                    'created_at': job.created_at.isoformat(),
+                },
+            }
+        )
+
+
 class ProjectFeatureDetailAPIView(APIView):
     """GET /api/projects/<project_id>/features/<feature_id>/"""
 
