@@ -98,6 +98,9 @@ class DesignFeatureLookupTests(TestCase):
         response = self.client.get(self.url(DESIGN_ID))
 
         self.assertEqual(response.data['assignment']['scope'], AssignmentJob.SCOPE_LAYER)
+        # Which layer the job is on travels with it, so the map can name the job
+        # instead of only saying "assigned".
+        self.assertEqual(response.data['assignment']['layer_id'], 'spans')
         self.assertEqual(response.data['assignment']['assignee']['email'], 'engineer@example.com')
 
     def test_a_project_job_covers_every_feature(self):

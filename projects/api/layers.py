@@ -343,6 +343,9 @@ class ProjectFeatureByDesignAPIView(APIView):
                 else {
                     'id': str(job.id),
                     'scope': job.scope,
+                    # The scope target, so a client can say which job is
+                    # covering the feature rather than only its kind.
+                    'layer_id': job.layer_id or '',
                     'assignee': {
                         'id': str(job.assignee_id),
                         'email': job.assignee.email,

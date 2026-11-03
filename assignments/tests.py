@@ -14,6 +14,7 @@ Run with:
 from __future__ import annotations
 
 from django.test import TestCase
+from rest_framework.test import APIClient
 
 from assignments.models import AssignmentJob
 from projects.models import Feature
@@ -85,6 +86,26 @@ class AssignmentReleaseTests(TestCase):
         # The project-wide job is gone; the chamber's own job still holds it.
         self.assertEqual(self.status_of(self.span), Feature.STATUS_PENDING)
         self.assertEqual(self.status_of(self.chamber), Feature.STATUS_ASSIGNED)
+
+    def test_delete_endpoint_returns_the_feature_to_pending(self):
+        """The request path, not just the model.
+
+        The release hangs off ``post_delete``, so it only happens if the view
+        really deletes the row. A view that soft-deleted, or marked the job
+        gone with an ``update()``, would leave the feature assigned with no job
+        behind it -- and every model-level test here would still pass.
+        """
+        planner = make_user('planner@example.com', role=User.Role.SUBADMIN)
+        job = self.job(AssignmentJob.SCOPE_FEATURE, feature=self.span)
+        self.assertEqual(self.status_of(self.span), Feature.STATUS_ASSIGNED)
+        client = APIClient()
+        client.force_authenticate(user=planner)
+
+        response = client.delete(f'/api/assignments/{job.id}/')
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(AssignmentJob.objects.filter(pk=job.id).exists())
+        self.assertEqual(self.status_of(self.span), Feature.STATUS_PENDING)
 
     def test_work_past_assignment_is_left_alone(self):
         """Approved work is the engineer's record, not the assignment's."""
