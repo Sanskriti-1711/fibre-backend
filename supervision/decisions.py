@@ -1,13 +1,17 @@
 """Feature Decision Records for supervision (INTEGRATION_PLAN.md §3 Stage 6).
 
-Approving work that does not match the design is a legitimate outcome — a
-chamber landed two metres off because a gas main was in the way, and the
-reviewer accepted it. That decision used to exist only as free text in
-``Feature.approval_notes``: visible on the row, but not attributable to a stage,
-not queryable per project, and easy to overwrite on the next approval.
+Every feature that is reviewed gets a decision record. That is the project's
+review ledger: approved as designed, approved with a deviation, or sent back for
+rework — with the planned-vs-as-built comparison as it stood at that moment.
 
-This module writes the record, the stage event and the notification that make
-the decision durable and visible. It writes nothing to the design stages: a
+A record used to be written only when the work fell outside the layer's
+tolerance, which left the ordinary case invisible: a project could show 2,000
+approved features and no evidence of who approved them or what they measured.
+The ledger is append-only, so re-approving after a redo adds the next record
+rather than replacing the first.
+
+This module writes the record, the stage event and the notification that make a
+deviation durable and visible. It writes nothing to the design stages: a
 deviation is a *proposal for a new design version*, never an edit to the
 existing one (§5.2, §5.3).
 """
@@ -41,55 +45,123 @@ def layer_tolerances(features):
     return {(str(row['project_id']), row['layer_id']): row['tolerance'] for row in rows}
 
 
-def record_approval_deviations(features, *, actor=None, notes=''):
-    """Record a decision for every approved feature outside its tolerance.
+def _reviewer(actor):
+    return actor if getattr(actor, 'is_authenticated', False) else None
 
-    Returns one summary per record so the approval response can tell the
-    reviewer what was written down. Features within tolerance produce no record:
-    "approved as designed" is already the row's own status, and writing a
-    decision record for every approval would turn an exception log into noise.
+
+def _snapshot(feature, tolerances):
+    return feature_deviation(
+        feature, tolerances.get((str(feature.project_id), feature.layer_id), 0)
+    )
+
+
+def _create(feature, decision, *, deviation, reason, actor):
+    return FeatureDecisionRecord.objects.create(
+        feature=feature,
+        project_id=feature.project_id,
+        decision=decision,
+        reason=reason or '',
+        deviation=deviation,
+        reviewer=_reviewer(actor),
+    )
+
+
+def _summary(record, deviation):
+    return {
+        'record_id': str(record.id),
+        'feature_id': str(record.feature_id),
+        'layer_id': record.feature.layer_id,
+        'decision': record.decision,
+        'outside_tolerance': deviation.get('outside_tolerance', 0),
+        'fields': deviation.get('fields', []),
+    }
+
+
+def record_approval_decisions(features, *, actor=None, notes=''):
+    """Write one decision record for every approved feature.
+
+    ``deviation`` is snapshotted for both outcomes, so an approved-as-designed
+    record can still answer "what did the reviewer see?" later. Deviations are
+    published to the project timeline; ordinary approvals already write their
+    own ``feature_approved`` stage event.
+
+    Returns ``{'records': [...], 'deviations': [...]}`` so the caller can report
+    the ledger count and keep the existing deviation summary shape.
+    """
+    features = list(features)
+    if not features:
+        return {'records': [], 'deviations': []}
+
+    tolerances = layer_tolerances(features)
+    records = []
+    deviations = []
+    deviation_pairs = []
+
+    for feature in features:
+        deviation = _snapshot(feature, tolerances)
+        outside = bool(deviation['has_deviation'])
+        record = _create(
+            feature,
+            FeatureDecisionRecord.DECISION_APPROVED_WITH_DEVIATION
+            if outside
+            else FeatureDecisionRecord.DECISION_APPROVED,
+            deviation=deviation,
+            reason=notes or feature.approval_notes or '',
+            actor=actor,
+        )
+        records.append(record)
+        if outside:
+            deviations.append(_summary(record, deviation))
+            deviation_pairs.append((record, deviation))
+
+    if deviation_pairs:
+        _publish(deviation_pairs, actor=actor, notes=notes)
+
+    return {
+        'records': [_summary(record, record.deviation or {}) for record in records],
+        'deviations': deviations,
+    }
+
+
+def record_redo_decisions(features, *, actor=None, reason=''):
+    """Write a redo record for every feature sent back to the engineer.
+
+    The comparison is snapshotted exactly as it was when the reviewer asked for
+    the rework, so the reason can be read later even after the engineer
+    re-submits and the live readings change.
     """
     features = list(features)
     if not features:
         return []
 
     tolerances = layer_tolerances(features)
-    recorded = []
-
+    records = []
     for feature in features:
-        deviation = feature_deviation(
-            feature, tolerances.get((str(feature.project_id), feature.layer_id), 0)
+        deviation = _snapshot(feature, tolerances)
+        records.append(
+            _create(
+                feature,
+                FeatureDecisionRecord.DECISION_REDO,
+                deviation=deviation,
+                reason=reason,
+                actor=actor,
+            )
         )
-        if not deviation['has_deviation']:
-            continue
 
-        record = FeatureDecisionRecord.objects.create(
-            feature=feature,
-            project_id=feature.project_id,
-            decision=FeatureDecisionRecord.DECISION_APPROVED_WITH_DEVIATION,
-            reason=notes or feature.approval_notes or '',
-            deviation=deviation,
-            reviewer=actor if getattr(actor, 'is_authenticated', False) else None,
-        )
-        recorded.append((record, deviation))
+    return [_summary(record, record.deviation or {}) for record in records]
 
-    if recorded:
-        _publish(recorded, actor=actor, notes=notes)
 
-    return [
-        {
-            'record_id': str(record.id),
-            'feature_id': str(record.feature_id),
-            'layer_id': record.feature.layer_id,
-            'outside_tolerance': deviation['outside_tolerance'],
-            'fields': deviation['fields'],
-        }
-        for record, deviation in recorded
-    ]
+def record_approval_deviations(features, *, actor=None, notes=''):
+    """Backward-compatible alias returning only the outside-tolerance records.
+
+    Kept for callers that predate the full ledger; all approvals now write a
+    record, so new code should call :func:`record_approval_decisions` directly.
+    """
+    return record_approval_decisions(features, actor=actor, notes=notes)['deviations']
 
 
 def _publish(recorded, *, actor=None, notes=''):
-    """Write the timeline event and the notification, per project.
+    """Write the deviation timeline event and notification, per project.
 
     Both are secondary: the record itself is the evidence, so a failure here is
     logged rather than raised — a reviewer must not lose an approval because a
@@ -107,7 +179,7 @@ def _publish(recorded, *, actor=None, notes=''):
                 project_id=project_id,
                 stage=StageEvent.Stage.SUPERVISION,
                 event='deviation_raised',
-                actor=actor if getattr(actor, 'is_authenticated', False) else None,
+                actor=_reviewer(actor),
                 entity_id=feature_ids[0],
                 metadata={
                     'feature_ids': feature_ids,

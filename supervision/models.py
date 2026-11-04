@@ -50,6 +50,16 @@ class FeaturePhoto(models.Model):
         on_delete=models.CASCADE,
         related_name='photos',
     )
+    # Denormalised project link. The feature already carries it, but every
+    # supervision table answers "what happened on this project?" directly: an
+    # evidence row found in a project query must not need a join through
+    # features to say which project it belongs to.
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='feature_photos',
+        db_index=True,
+    )
     # The bytes go wherever get_evidence_storage() points: an S3-compatible
     # bucket when one is configured, local disk otherwise. A callable rather
     # than an instance so the field follows the settings and the migration keeps
@@ -82,6 +92,11 @@ class FeaturePhoto(models.Model):
         ]
 
     def save(self, *args, **kwargs):
+        # The project is never supplied by the caller: it is a fact about the
+        # feature, so deriving it here keeps every insert consistent and makes
+        # the old photo-upload call sites correct without a second argument.
+        if not self.project_id and self.feature_id:
+            self.project_id = self.feature.project_id
         if self.image and not self.sha256:
             self.sha256, self.size_bytes = _digest(self.image)
         if not self.storage_backend:
@@ -161,6 +176,11 @@ class FeatureDecisionRecord(models.Model):
         indexes = [
             models.Index(fields=['feature', 'created_at']),
             models.Index(fields=['project', 'created_at']),
+            # The supervision project page reads one project's review ledger.
+            models.Index(
+                fields=['project', 'decision', 'created_at'],
+                name='supervision_proj_dec_idx',
+            ),
         ]
 
     def __str__(self):

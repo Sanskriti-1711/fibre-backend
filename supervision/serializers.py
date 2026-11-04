@@ -6,11 +6,15 @@ from supervision.models import FeatureDecisionRecord, FeaturePhoto
 class FeaturePhotoSerializer(serializers.ModelSerializer):
     url = serializers.SerializerMethodField()
     uploaded_by = serializers.SerializerMethodField()
+    project_id = serializers.UUIDField(read_only=True)
+    project_name = serializers.CharField(source='project.name', read_only=True)
 
     class Meta:
         model = FeaturePhoto
         fields = [
             'id',
+            'project_id',
+            'project_name',
             'url',
             'description',
             'uploaded_by',
@@ -42,6 +46,8 @@ class FeatureDecisionRecordSerializer(serializers.ModelSerializer):
     """One append-only decision record, flattened for the audit and lineage views."""
 
     feature_id = serializers.UUIDField(read_only=True)
+    project_id = serializers.UUIDField(read_only=True)
+    project_name = serializers.CharField(source='project.name', read_only=True)
     layer_id = serializers.CharField(source='feature.layer_id', read_only=True)
     layer_name = serializers.CharField(source='feature.layer_name', read_only=True)
     reviewer = serializers.SerializerMethodField()
@@ -50,6 +56,8 @@ class FeatureDecisionRecordSerializer(serializers.ModelSerializer):
         model = FeatureDecisionRecord
         fields = [
             'id',
+            'project_id',
+            'project_name',
             'feature_id',
             'layer_id',
             'layer_name',

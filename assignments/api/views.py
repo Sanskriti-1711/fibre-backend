@@ -793,18 +793,20 @@ class FeatureApproveAPIView(APIView):
             approval_notes=notes or '',
         )
 
-        # Accepting work outside the design tolerance is a decision, not just a
-        # status change: write it down (INTEGRATION_PLAN.md §3 Stage 6). Never
-        # fatal — the approval itself has already been committed.
-        deviations = []
+        # Every approval is a review decision, not just a status change: write
+        # the ledger row (INTEGRATION_PLAN.md §3 Stage 6). Never fatal — the
+        # approval itself has already been committed.
+        decisions = {'records': [], 'deviations': []}
         try:
-            from supervision.decisions import record_approval_deviations
+            from supervision.decisions import record_approval_decisions
 
-            deviations = record_approval_deviations(
+            decisions = record_approval_decisions(
                 reviewed_features, actor=request.user, notes=notes
             )
         except Exception:
-            logger.exception('Could not record supervision deviations on approval')
+            logger.exception('Could not record supervision decisions on approval')
+
+        deviations = decisions['deviations']
 
         record_stage_events(
             project_ids,
@@ -826,6 +828,7 @@ class FeatureApproveAPIView(APIView):
                 'new_status': Feature.STATUS_APPROVED,
                 'status_display': 'Approved',
                 'approved_at': now.isoformat(),
+                'decision_records_written': len(decisions['records']),
                 'deviation_count': len(deviations),
                 'deviations_recorded': deviations,
             }
@@ -855,13 +858,25 @@ class FeatureRejectAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Capture ids before the update (see FeatureApproveAPIView).
-        rejected_ids = [str(fid) for fid in features.values_list('id', flat=True)]
-        project_ids = list(features.values_list('project_id', flat=True).distinct())
+        # Materialise before the update (see FeatureApproveAPIView): the redo
+        # ledger needs each feature's measurements as the reviewer saw them.
+        reviewed_features = list(features.select_related('project'))
+        rejected_ids = [str(feature.id) for feature in reviewed_features]
+        project_ids = sorted({feature.project_id for feature in reviewed_features}, key=str)
         # Update status to redo and clear submitted_at (for re-submission)
         updated_count = features.update(
             status=Feature.STATUS_REDO, submitted_at=None, comparison_notes=rejection_reason
         )
+
+        redo_records = []
+        try:
+            from supervision.decisions import record_redo_decisions
+
+            redo_records = record_redo_decisions(
+                reviewed_features, actor=request.user, reason=rejection_reason
+            )
+        except Exception:
+            logger.exception('Could not record supervision redo decisions')
 
         record_stage_events(
             project_ids,
@@ -880,6 +895,7 @@ class FeatureRejectAPIView(APIView):
                 'feature_ids': rejected_ids,
                 'reviewer_id': reviewer_id,
                 'rejection_reason': rejection_reason,
+                'decision_records_written': len(redo_records),
                 'new_status': Feature.STATUS_REDO,
                 'status_display': 'Redo',
             }

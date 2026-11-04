@@ -13,6 +13,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from PIL import Image
@@ -20,7 +21,12 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from projects.models import Feature, Project
 from supervision.models import FeaturePhoto
-from supervision.storage import S3EvidenceStorage, get_evidence_storage, reset_evidence_storage
+from supervision.storage import (
+    LocalEvidenceStorage,
+    S3EvidenceStorage,
+    get_evidence_storage,
+    reset_evidence_storage,
+)
 from users.models import User
 
 
@@ -30,8 +36,22 @@ def png_bytes(width=8, height=8):
     return buffer.getvalue()
 
 
+@override_settings(EVIDENCE_S3_BUCKET='', EVIDENCE_PUBLIC_BASE_URL='')
 class FeaturePhotoEvidenceTests(TestCase):
     def setUp(self):
+        # These tests pin the local-disk contract. The developer's shell may
+        # export an evidence bucket, so override it explicitly rather than
+        # depending on how the suite was launched. Django resolves the field's
+        # storage callable at import time, so swap the field itself as well as
+        # resetting the module-level cache.
+        reset_evidence_storage()
+        self.addCleanup(reset_evidence_storage)
+        image_field = FeaturePhoto._meta.get_field('image')
+        original_storage = image_field.storage
+        image_field.storage = LocalEvidenceStorage(
+            location=str(settings.MEDIA_ROOT), base_url=settings.MEDIA_URL
+        )
+        self.addCleanup(setattr, image_field, 'storage', original_storage)
         self.project = Project.objects.create(name='Evidence test')
         self.feature = Feature.objects.create(
             project=self.project,
@@ -225,6 +245,7 @@ class S3EvidenceStorageTests(TestCase):
         self.assertEqual(storage.endpoint_url, 'https://x.r2.cloudflarestorage.com')
 
 
+@override_settings(EVIDENCE_S3_BUCKET='', EVIDENCE_PUBLIC_BASE_URL='')
 class MediaServingTests(TestCase):
     """The route that makes a stored photo's URL resolve on the deployed host.
 
@@ -234,6 +255,8 @@ class MediaServingTests(TestCase):
     """
 
     def setUp(self):
+        reset_evidence_storage()
+        self.addCleanup(reset_evidence_storage)
         self.media_root = Path(tempfile.mkdtemp(prefix='evidence-media-'))
         self.addCleanup(shutil.rmtree, self.media_root, ignore_errors=True)
         self.name = 'feature_photos/2026/11/02/site.png'

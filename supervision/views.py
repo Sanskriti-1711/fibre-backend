@@ -195,7 +195,7 @@ class FeatureDecisionListView(APIView):
             )
 
         records = FeatureDecisionRecord.objects.filter(feature_id=feature_id).select_related(
-            'feature', 'reviewer'
+            'project', 'feature', 'reviewer'
         )
 
         return Response(
@@ -293,7 +293,7 @@ class ProjectDecisionListView(APIView):
             )
 
         records = FeatureDecisionRecord.objects.filter(project_id=project_id).select_related(
-            'feature', 'reviewer'
+            'project', 'feature', 'reviewer'
         )
 
         layer_id = (request.GET.get('layer') or '').strip()
