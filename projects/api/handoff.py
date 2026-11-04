@@ -33,7 +33,7 @@ from projects.layer_rules import normalize_layer_id
 from projects.models import Feature, ImportSession, Project
 
 from .import_views import IMPORT_BATCH_SIZE
-from .projects import find_lld_run
+from .projects import find_lld_run, record_stage_event
 
 # Fixed namespace: the same (project, layer, feature) always maps to the same
 # Feature id, which is what makes the handoff idempotent instead of additive.
@@ -189,6 +189,11 @@ class LldHandoffView(APIView):
     Materialise the planned baseline of the LLD run this supervision project
     was opened from. Safe to call again: only rows still ``pending`` are
     refreshed, so a re-sync after a fix cannot erase approval work.
+
+    The body may carry ``source_lld_run_id`` to re-point the project at a newer
+    completed run before refreshing — the "the design was re-exported" case
+    (INTEGRATION_PLAN.md §3 Stage 4.4). Re-binding is explicit and recorded on
+    the timeline; without it the project keeps the run it was opened from.
     """
 
     def post(self, request, project_id):
@@ -196,7 +201,9 @@ class LldHandoffView(APIView):
         if project is None:
             return Response({'detail': 'Project not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        source_lld_run_id = (project.source_lld_run_id or '').strip()
+        bound_ref = (project.source_lld_run_id or '').strip()
+        requested_ref = str((request.data or {}).get('source_lld_run_id') or '').strip()
+        source_lld_run_id = requested_ref or bound_ref
         if not source_lld_run_id:
             return Response(
                 {
@@ -225,7 +232,28 @@ class LldHandoffView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        rebind = source_lld_run_id != bound_ref
+        if rebind:
+            project.source_lld_run_id = source_lld_run_id
+            project.save(update_fields=['source_lld_run_id', 'updated_at'])
+
         result = import_lld_run(project, run)
+        record_stage_event(
+            project,
+            'supervision_resynced',
+            actor=request.user,
+            entity_id=run.lld_version,
+            metadata={
+                'source_lld_run_id': source_lld_run_id,
+                'rebound_from': bound_ref,
+                **{key: result[key] for key in ('features_created', 'features_updated', 'features_kept')},
+            },
+        )
         return Response(
-            {'project_id': str(project.id), 'source_lld_run_id': source_lld_run_id, **result}
+            {
+                'project_id': str(project.id),
+                'source_lld_run_id': source_lld_run_id,
+                'rebound': rebind,
+                **result,
+            }
         )
