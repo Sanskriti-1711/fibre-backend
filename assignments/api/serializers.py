@@ -70,15 +70,21 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
         layer_id = validated_data.get('layer_id')
         feature = validated_data.get('feature')
 
+        assignee = validated_data.get('assignee')
+        # A project or a layer can be held by several engineers, so only the same
+        # engineer's job is replaced. Deleting the whole target would take the
+        # other engineers' claims with it -- which is what made assigning a layer
+        # to a second engineer look like a reassignment.
         if scope == AssignmentJob.SCOPE_PROJECT and project:
             AssignmentJob.objects.filter(
-                project=project, scope=AssignmentJob.SCOPE_PROJECT
+                project=project, scope=AssignmentJob.SCOPE_PROJECT, assignee=assignee
             ).delete()
         elif scope == AssignmentJob.SCOPE_LAYER and project and layer_id:
             AssignmentJob.objects.filter(
                 project=project,
                 scope=AssignmentJob.SCOPE_LAYER,
                 layer_id=layer_id,
+                assignee=assignee,
             ).delete()
         elif scope == AssignmentJob.SCOPE_FEATURE and feature:
             AssignmentJob.objects.filter(

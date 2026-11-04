@@ -327,7 +327,10 @@ class ProjectFeatureByDesignAPIView(APIView):
             AssignmentJob.SCOPE_LAYER: 1,
             AssignmentJob.SCOPE_PROJECT: 2,
         }
-        job = min(jobs, key=lambda row: precedence[row.scope]) if jobs else None
+        # Several engineers can hold the same layer, so equal scopes need a
+        # stable tiebreak: the earliest claim answers, rather than whichever row
+        # the database happened to return first.
+        job = min(jobs, key=lambda row: (precedence[row.scope], row.created_at)) if jobs else None
 
         return Response(
             {

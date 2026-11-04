@@ -41,7 +41,11 @@ class AssignmentJob(models.Model):
                 name='unique_project_assignment',
             ),
             models.UniqueConstraint(
-                fields=['project', 'layer_id'],
+                # One layer-scope job PER ENGINEER, like the project scope: a
+                # layer is big enough to need several people on it, and the
+                # constraint should stop a duplicate of the same claim rather
+                # than stop a second engineer joining.
+                fields=['project', 'layer_id', 'assignee'],
                 condition=models.Q(scope='layer'),
                 name='unique_layer_assignment',
             ),
@@ -77,15 +81,22 @@ class AssignmentJob(models.Model):
         self._mark_features_assigned(scope)
 
     def _mark_features_assigned(self, scope: str | None) -> None:
+        # Only ``pending`` moves to ``assigned``. ``assigned`` already says it;
+        # ``under_review``, ``approved`` and ``redo`` are the engineer's work,
+        # and an assignment must not erase them -- a layer or project job covers
+        # rows at every stage, so an update that excluded only ``assigned``
+        # quietly reopened approved features and then released them to
+        # ``pending`` when the job was deleted.
         if scope == self.SCOPE_FEATURE and self.feature_id:
-            Feature.objects.filter(pk=self.feature_id).exclude(
-                status=Feature.STATUS_ASSIGNED
+            Feature.objects.filter(
+                pk=self.feature_id, status=Feature.STATUS_PENDING
             ).update(status=Feature.STATUS_ASSIGNED)
         elif scope == self.SCOPE_LAYER and self.layer_id:
             Feature.objects.filter(
                 project=self.project,
                 layer_id=self.layer_id,
-            ).exclude(status=Feature.STATUS_ASSIGNED).update(status=Feature.STATUS_ASSIGNED)
+                status=Feature.STATUS_PENDING,
+            ).update(status=Feature.STATUS_ASSIGNED)
 
     def __str__(self):
         target = self.project.name

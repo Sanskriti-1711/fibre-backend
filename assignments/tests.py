@@ -107,6 +107,51 @@ class AssignmentReleaseTests(TestCase):
         self.assertFalse(AssignmentJob.objects.filter(pk=job.id).exists())
         self.assertEqual(self.status_of(self.span), Feature.STATUS_PENDING)
 
+    def test_a_layer_job_does_not_downgrade_work_in_progress(self):
+        """A layer job covers every stage; it must not reopen finished rows.
+
+        The old update excluded only ``assigned``, so assigning a layer set
+        approved rows back to assigned -- and deleting the job then released
+        them to pending, losing the approval entirely.
+        """
+        Feature.objects.filter(pk=self.span.pk).update(status=Feature.STATUS_APPROVED)
+        Feature.objects.filter(pk=self.chamber.pk).update(status=Feature.STATUS_UNDER_REVIEW)
+
+        self.job(AssignmentJob.SCOPE_LAYER, layer_id='spans')
+        self.job(AssignmentJob.SCOPE_LAYER, layer_id='chambers')
+
+        self.assertEqual(self.status_of(self.span), Feature.STATUS_APPROVED)
+        self.assertEqual(self.status_of(self.chamber), Feature.STATUS_UNDER_REVIEW)
+
+    def test_a_feature_job_does_not_downgrade_approved_work(self):
+        Feature.objects.filter(pk=self.span.pk).update(status=Feature.STATUS_APPROVED)
+
+        self.job(AssignmentJob.SCOPE_FEATURE, feature=self.span, assignee=self.other)
+
+        self.assertEqual(self.status_of(self.span), Feature.STATUS_APPROVED)
+
+    def test_a_layer_accepts_several_engineers(self):
+        """A second engineer joins the layer; they do not replace the first."""
+        planner = make_user('planner@example.com', role=User.Role.SUBADMIN)
+        client = APIClient()
+        client.force_authenticate(user=planner)
+        payload = {
+            'project': str(self.project.id),
+            'scope': AssignmentJob.SCOPE_LAYER,
+            'layer_id': 'spans',
+        }
+
+        first = client.post('/api/assignments/', {**payload, 'assignee': str(self.engineer.id)}, format='json')
+        second = client.post('/api/assignments/', {**payload, 'assignee': str(self.other.id)}, format='json')
+
+        self.assertEqual(first.status_code, 201, first.data)
+        self.assertEqual(second.status_code, 201, second.data)
+        self.assertEqual(
+            AssignmentJob.objects.filter(project=self.project, scope='layer', layer_id='spans').count(),
+            2,
+        )
+        self.assertEqual(self.status_of(self.span), Feature.STATUS_ASSIGNED)
+
     def test_work_past_assignment_is_left_alone(self):
         """Approved work is the engineer's record, not the assignment's."""
         job = self.job(AssignmentJob.SCOPE_FEATURE, feature=self.span)
