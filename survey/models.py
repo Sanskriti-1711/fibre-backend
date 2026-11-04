@@ -4,10 +4,14 @@ Covers: GPS traces, trench classifications, CRM risk assessments,
 hazards, field evidence, and survey change version control.
 """
 
+import hashlib
 import uuid
 
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
+
+from supervision.storage import get_evidence_storage
 
 # ── GPS Trace ──────────────────────────────────────────────────────────────
 
@@ -730,6 +734,84 @@ class SurveyFeature(models.Model):
     def __str__(self):
         hld = str(self.original_hld_feature_id) if self.original_hld_feature_id else 'new'
         return f'SurveyFeature {self.id} — HLD:{hld} — {self.get_survey_status_display()}'
+
+
+def _photo_digest(upload):
+    """(sha256 hex digest, byte count) of an upload, read once and rewound."""
+    digest = hashlib.sha256()
+    size = 0
+    upload.seek(0)
+    for chunk in upload.chunks():
+        digest.update(chunk)
+        size += len(chunk)
+    upload.seek(0)
+    return digest.hexdigest(), size
+
+
+class SurveyFeaturePhoto(models.Model):
+    """One of several site photos a survey engineer attaches to a survey feature.
+
+    Mirrors ``supervision.models.FeaturePhoto``: the single ``SurveyFeature.photo``
+    column is kept for older clients, but a survey point now carries a gallery,
+    because a trench or chamber is rarely evidenced by one frame. Bytes go to the
+    same evidence storage (S3-compatible bucket or local disk).
+    """
+
+    MAX_PER_FEATURE = 20
+    MAX_BYTES = getattr(settings, 'EVIDENCE_MAX_BYTES', 10 * 1024 * 1024)
+    ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/jpg', 'image/png']
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    survey_feature = models.ForeignKey(
+        SurveyFeature,
+        on_delete=models.CASCADE,
+        related_name='photos',
+    )
+    # Denormalised so a project's evidence can be listed without joining
+    # through survey features.
+    project = models.ForeignKey(
+        'projects.Project',
+        on_delete=models.CASCADE,
+        related_name='survey_feature_photos',
+        db_index=True,
+    )
+    image = models.ImageField(
+        upload_to='survey_feature_photos/%Y/%m/%d/',
+        storage=get_evidence_storage,
+    )
+    description = models.CharField(max_length=255, blank=True)
+    # Provenance, written once on upload and never recomputed.
+    sha256 = models.CharField(max_length=64, blank=True, default='', db_index=True)
+    size_bytes = models.PositiveBigIntegerField(default=0)
+    storage_backend = models.CharField(max_length=16, blank=True, default='')
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='survey_feature_photos',
+    )
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'survey_feature_photos'
+        ordering = ['order', 'uploaded_at']
+        indexes = [
+            models.Index(fields=['survey_feature', 'order']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.project_id and self.survey_feature_id:
+            self.project_id = self.survey_feature.project_id
+        if self.image and not self.sha256:
+            self.sha256, self.size_bytes = _photo_digest(self.image)
+        if not self.storage_backend:
+            self.storage_backend = getattr(self.image.storage, 'label', '')
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f'Photo {self.id} | survey feature {self.survey_feature_id}'
 
 
 class ApprovalRecord(models.Model):

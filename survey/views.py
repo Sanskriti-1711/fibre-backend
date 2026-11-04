@@ -20,6 +20,7 @@ from .models import (
     RiskAssessment,
     SurveyEditLog,
     SurveyFeature,
+    SurveyFeaturePhoto,
     SurveyStatus,
     SyncQueueItem,
     TrenchSurvey,
@@ -32,6 +33,7 @@ from .serializers import (
     HazardSerializer,
     RiskAssessmentSerializer,
     SurveyEditLogSerializer,
+    SurveyFeaturePhotoSerializer,
     SurveyFeatureSerializer,
     SurveyStatusSerializer,
     SyncQueueItemSerializer,
@@ -883,6 +885,19 @@ class SurveyFeaturePhotoUploadView(APIView):
 
         sf.save()
 
+        # Keep the legacy single-photo column for older clients, but append the
+        # same bytes to the gallery so a second photo does not replace the first.
+        try:
+            photo.seek(0)
+            SurveyFeaturePhoto.objects.create(
+                survey_feature=sf,
+                image=photo,
+                uploaded_by=request.user if request.user.is_authenticated else None,
+                order=sf.photos.count(),
+            )
+        except Exception:  # noqa: BLE001 — the photo is already saved on the row
+            pass
+
         # Tier-1 A3: field auto-fill suggestions derived from the tags.
         from .auto_fill import autofill_from_tags
 
@@ -895,6 +910,152 @@ class SurveyFeaturePhotoUploadView(APIView):
                 'photo_tags': sf.photo_tags,
                 'suggestions': suggestions,
                 'uploaded_at': sf.updated_at.isoformat(),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+def _can_edit_survey_photos(request, survey_feature):
+    """The owning engineer, or a planner/admin reviewing the survey."""
+    user = getattr(request, 'user', None)
+    if not user or not user.is_authenticated:
+        return False
+    if getattr(user, 'role', None) in ('ADMIN', 'SUBADMIN'):
+        return True
+    return survey_feature.engineer_id == user.id
+
+
+def _validate_survey_photo(upload):
+    """Return an error string for an unacceptable upload, or None."""
+    if upload.content_type not in SurveyFeaturePhoto.ALLOWED_CONTENT_TYPES:
+        return 'Invalid file type. Only JPEG and PNG are allowed.'
+    if not upload.size:
+        return 'The file is empty.'
+    if upload.size > SurveyFeaturePhoto.MAX_BYTES:
+        limit_mb = SurveyFeaturePhoto.MAX_BYTES / (1024 * 1024)
+        return f'File too large. Maximum size is {limit_mb:g}MB.'
+    return None
+
+
+def _attach_survey_photos(survey_feature, uploads, user):
+    """Append uploads to a survey feature's gallery.
+
+    Validates the whole batch first so a bad file in the middle does not leave
+    a half-saved gallery (same contract as the supervision FeaturePhoto view).
+    """
+    existing = survey_feature.photos.count()
+    remaining = SurveyFeaturePhoto.MAX_PER_FEATURE - existing
+    if len(uploads) > remaining:
+        return None, Response(
+            {
+                'detail': (
+                    f'Maximum {SurveyFeaturePhoto.MAX_PER_FEATURE} photos per feature. '
+                    f'{existing} already uploaded, {max(remaining, 0)} slot(s) left.'
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    for upload in uploads:
+        error = _validate_survey_photo(upload)
+        if error:
+            return None, Response(
+                {'detail': f'{upload.name}: {error}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    created = []
+    for offset, upload in enumerate(uploads):
+        created.append(
+            SurveyFeaturePhoto.objects.create(
+                survey_feature=survey_feature,
+                image=upload,
+                uploaded_by=user if user and user.is_authenticated else None,
+                order=existing + offset,
+            )
+        )
+    return created, None
+
+
+class SurveyFeaturePhotosView(APIView):
+    """GET/POST /api/survey/survey-features/<id>/photos/
+
+    A survey point's photo gallery. Reading is open to any signed-in user (the
+    planner review pages see the same evidence); writing is limited to the
+    engineer who owns the survey feature or a planner/admin.
+
+    POST accepts one or more files under ``photos`` (repeat the key); ``photo``
+    is accepted too for clients written against the single-photo endpoint.
+    """
+
+    def get(self, request, feature_id):
+        sf = get_object_or_404(SurveyFeature, id=feature_id)
+        return Response(
+            {
+                'count': sf.photos.count(),
+                'max_photos': SurveyFeaturePhoto.MAX_PER_FEATURE,
+                'results': SurveyFeaturePhotoSerializer(
+                    sf.photos.all(), many=True, context={'request': request}
+                ).data,
+            }
+        )
+
+    def post(self, request, feature_id):
+        sf = get_object_or_404(SurveyFeature, id=feature_id)
+        if not _can_edit_survey_photos(request, sf):
+            return Response(
+                {'detail': 'Not allowed to add photos to this survey feature'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        uploads = request.FILES.getlist('photos') or request.FILES.getlist('photo')
+        if not uploads:
+            return Response(
+                {'detail': 'No photos provided'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        created, error = _attach_survey_photos(sf, uploads, request.user)
+        if error:
+            return error
+
+        return Response(
+            {
+                'count': sf.photos.count(),
+                'max_photos': SurveyFeaturePhoto.MAX_PER_FEATURE,
+                'uploaded': SurveyFeaturePhotoSerializer(
+                    created, many=True, context={'request': request}
+                ).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SurveyFeaturePhotoDetailView(APIView):
+    """DELETE /api/survey/survey-features/<id>/photos/<photo_id>/"""
+
+    def delete(self, request, feature_id, photo_id):
+        sf = get_object_or_404(SurveyFeature, id=feature_id)
+        if not _can_edit_survey_photos(request, sf):
+            return Response(
+                {'detail': 'Not allowed to remove photos from this survey feature'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        photo = SurveyFeaturePhoto.objects.filter(id=photo_id, survey_feature=sf).first()
+        if photo is None:
+            return Response(
+                {'detail': 'Photo not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        photo.image.delete(save=False)
+        photo.delete()
+
+        return Response(
+            {
+                'detail': 'Photo deleted',
+                'count': sf.photos.count(),
             },
             status=status.HTTP_200_OK,
         )

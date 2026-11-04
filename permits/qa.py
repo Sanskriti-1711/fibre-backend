@@ -204,7 +204,9 @@ def _file_issues(docs: list[PermitDocument]) -> list[dict[str, Any]]:
     return issues
 
 
-def qa_for_project(project_id: str, project_name: str | None = None) -> dict[str, Any]:
+def qa_for_project(
+    project_id: str, project_name: str | None = None, *, with_ai: bool = True
+) -> dict[str, Any]:
     """Deterministic QA for one project. Always returns a result dict.
 
     Levels: pass | warn | fail. Issues carry code/message/hint for the UI.
@@ -453,27 +455,29 @@ def qa_for_project(project_id: str, project_name: str | None = None) -> dict[str
         'disclaimer': 'Deterministic package QA — rule + package derived, not a model. AI paragraph is advisory only.',
     }
 
-    # Optional AI paragraph (advisory — never changes level/counts)
-    # Keep prompt short; failures fall back to deterministic.
-    try:
-        if issues:
-            issue_lines = '\n'.join(
-                f"- [{i['level']}] {i['code']}: {i['message']}" for i in issues[:8]
+    # Optional AI paragraph (advisory — never changes level/counts).
+    # Keep prompt short; failures fall back to deterministic. Cross-project
+    # summaries pass with_ai=False: one call per project would take minutes.
+    if with_ai:
+        try:
+            if issues:
+                issue_lines = '\n'.join(
+                    f"- [{i['level']}] {i['code']}: {i['message']}" for i in issues[:8]
+                )
+            else:
+                issue_lines = 'No issues — package looks complete.'
+            ai_text = chat_completion(
+                'You are a QA assistant for fibre permit packages. You summarize deterministic QA findings in one short paragraph (2-3 sentences) for a planner. Do not invent missing documents; only summarize the findings provided. Be concrete about the next fix.',
+                f"Project: {project_name} ({project_id})\nPackage v{version or 'none'} — level {overall}, {len(docs)} docs, kinds {actual_by_kind}\nExpected: drawings {expected.get('drawings')} / cross {expected.get('cross_sections')} / tmp {expected.get('tmps')} / forms {expected.get('forms')} / hdd {expected.get('hdd')}\nFindings:\n{issue_lines}\n\nWrite one paragraph.",
+                max_tokens=320,
+                temperature=0.2,
             )
-        else:
-            issue_lines = 'No issues — package looks complete.'
-        ai_text = chat_completion(
-            'You are a QA assistant for fibre permit packages. You summarize deterministic QA findings in one short paragraph (2-3 sentences) for a planner. Do not invent missing documents; only summarize the findings provided. Be concrete about the next fix.',
-            f"Project: {project_name} ({project_id})\nPackage v{version or 'none'} — level {overall}, {len(docs)} docs, kinds {actual_by_kind}\nExpected: drawings {expected.get('drawings')} / cross {expected.get('cross_sections')} / tmp {expected.get('tmps')} / forms {expected.get('forms')} / hdd {expected.get('hdd')}\nFindings:\n{issue_lines}\n\nWrite one paragraph.",
-            max_tokens=320,
-            temperature=0.2,
-        )
-        if ai_text:
-            result['ai_paragraph'] = ai_text.strip()
-            result['is_ai_generated'] = True
-            result['disclaimer'] = AI_DISCLAIMER
-    except Exception:
-        pass
+            if ai_text:
+                result['ai_paragraph'] = ai_text.strip()
+                result['is_ai_generated'] = True
+                result['disclaimer'] = AI_DISCLAIMER
+        except Exception:
+            pass
 
     return result
 
@@ -519,7 +523,7 @@ def qa_summary(project_id: str | None = None) -> dict[str, Any]:
     total_issues = total_errors = total_warns = 0
     for pid in sorted(all_pids):
         try:
-            one = qa_for_project(str(pid))
+            one = qa_for_project(str(pid), with_ai=False)
         except Exception as exc:  # pragma: no cover
             one = {
                 'project_id': str(pid),

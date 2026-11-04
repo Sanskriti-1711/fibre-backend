@@ -12,6 +12,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from projects.api.field_schema import derive_field_schema
 from projects.api.microservice import headers as microservice_headers
 from projects.models import Feature, ImportSession, Project
 
@@ -112,10 +113,7 @@ def import_zip_layers(project, file_path, selected_layers):
             if features:
                 first_props = features[0].get('properties', {})
                 if isinstance(first_props, dict):
-                    field_schema = [
-                        {'key': k, 'label': k.replace('_', ' ').title(), 'type': 'text'}
-                        for k in first_props
-                    ]
+                    field_schema = derive_field_schema(first_props)
 
             for feature_payload in features:
                 geom = feature_payload.get('geometry')

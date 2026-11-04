@@ -4,6 +4,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from projects.api.field_schema import derive_field_schema, has_editable
 from projects.models import Feature, LayerFieldConfig, Project
 
 # Map an admin-chosen input "type" to the (role, widget, unit) the clients use.
@@ -21,13 +22,25 @@ def _layer_name(project, layer_id):
 
 
 def _derived_schema(project, layer_id):
-    """The auto-derived schema captured at import from any feature in the layer."""
+    """The auto-derived schema for a layer, from any feature that carries one.
+
+    Rows imported before the editable heuristic existed hold a schema whose
+    fields are all read-only. Serving that would show the admin an empty form
+    for a layer the engineer is meant to measure, so those rows are re-derived
+    from the feature's own attributes.
+    """
     f = (
         Feature.objects.filter(project=project, layer_id=layer_id)
         .exclude(field_schema__isnull=True)
         .first()
     )
-    return f.field_schema if f and f.field_schema else []
+    if f is None:
+        return []
+
+    stored = f.field_schema or []
+    if has_editable(stored):
+        return stored
+    return derive_field_schema(f.properties) or stored
 
 
 class LayerFieldConfigAPIView(APIView):

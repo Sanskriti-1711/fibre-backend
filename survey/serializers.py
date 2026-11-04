@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError
 from rest_framework import serializers
 
 from projects.models import Feature
+from survey.models import SurveyFeaturePhoto
 
 from .models import (
     ExistingAsset,
@@ -355,3 +356,41 @@ class SurveyFeatureSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         read_only_fields = ['id', 'engineer', 'created_at', 'updated_at']
+
+
+class SurveyFeaturePhotoSerializer(serializers.ModelSerializer):
+    """One photo in a survey feature's gallery (SurveyFeaturePhoto)."""
+
+    url = serializers.SerializerMethodField()
+    uploaded_by = serializers.SerializerMethodField()
+    project_id = serializers.UUIDField(read_only=True)
+
+    class Meta:
+        model = SurveyFeaturePhoto
+        fields = [
+            'id',
+            'project_id',
+            'url',
+            'description',
+            'uploaded_by',
+            'uploaded_at',
+            'order',
+            'sha256',
+            'size_bytes',
+            'storage_backend',
+        ]
+        read_only_fields = fields
+
+    def get_url(self, obj):
+        if not obj.image:
+            return None
+        request = self.context.get('request')
+        if request:
+            return request.build_absolute_uri(obj.image.url)
+        return obj.image.url
+
+    def get_uploaded_by(self, obj):
+        if not obj.uploaded_by_id:
+            return None
+        user = obj.uploaded_by
+        return user.full_name or user.email

@@ -323,10 +323,14 @@ def risk_for_row(
     required: bool,
     blocks_construction: bool,
     permit_group: str = '',
+    *,
+    with_ai: bool = True,
 ) -> dict[str, Any]:
     """Deterministic risk level + reasons, optionally enriched by an LLM sentence.
 
     `level` is one of high|medium|low, driven by permit type and blocking.
+    Pass ``with_ai=False`` for rollups: the level/counts are deterministic and
+    one LLM call per row would make a project overview take minutes.
     """
     base = RISK_BY_PERMIT_TYPE.get(
         permit_type, {'level': 'medium', 'reasons': ['Check authority-specific conditions']}
@@ -357,21 +361,22 @@ def risk_for_row(
         'is_ai_generated': False,
         'disclaimer': 'Heuristic — rule-based, not a model. Treat as planning guidance.',
     }
-    ai_text = chat_completion(
-        'You explain construction/permit risk for fibre civil works in one short paragraph. Be specific about what causes delay and what de-risks it. Do not promise timelines.',
-        (
-            f"Permit: {permit_type} ({permit_group or 'street pending'}), status {status}, "
-            f"required={required}, blocks_construction={blocks_construction}, readiness {readiness_pct}%. "
-            f"Deterministic reasons: {'; '.join(reasons)}\n\n"
-            "Write one concise paragraph (2–3 sentences) for a planner."
-        ),
-        max_tokens=280,
-        temperature=0.25,
-    )
-    if ai_text:
-        out['ai_paragraph'] = ai_text.strip()
-        out['is_ai_generated'] = True
-        out['disclaimer'] = AI_DISCLAIMER
+    if with_ai:
+        ai_text = chat_completion(
+            'You explain construction/permit risk for fibre civil works in one short paragraph. Be specific about what causes delay and what de-risks it. Do not promise timelines.',
+            (
+                f"Permit: {permit_type} ({permit_group or 'street pending'}), status {status}, "
+                f"required={required}, blocks_construction={blocks_construction}, readiness {readiness_pct}%. "
+                f"Deterministic reasons: {'; '.join(reasons)}\n\n"
+                "Write one concise paragraph (2–3 sentences) for a planner."
+            ),
+            max_tokens=280,
+            temperature=0.25,
+        )
+        if ai_text:
+            out['ai_paragraph'] = ai_text.strip()
+            out['is_ai_generated'] = True
+            out['disclaimer'] = AI_DISCLAIMER
     return out
 
 
@@ -391,6 +396,7 @@ def project_risk_overview(
             int(r.get('readiness_pct') or 0),
             bool(r.get('required')),
             bool(r.get('blocks_construction')),
+            with_ai=False,
         )
         counts[rr['level']] = counts.get(rr['level'], 0) + 1
         for reason in rr['reasons']:
@@ -413,6 +419,7 @@ def project_risk_overview(
         'top_reasons': top_reasons[:6],
         'summary': summary,
         'is_ai_generated': False,
+        'disclaimer': 'Deterministic project rollup — row levels are rule-based; not a model.',
     }
 
 

@@ -17,7 +17,9 @@ from .views import (
     SurveyFeatureApprovalAPIView,
     SurveyFeatureDetailAPIView,
     SurveyFeatureListCreateAPIView,
+    SurveyFeaturePhotoDetailView,
     SurveyFeaturePhotoUploadView,
+    SurveyFeaturePhotosView,
     SurveyFeatureUpsertAPIView,
     SurveyStatusAPIView,
     SyncQueueListCreateAPIView,
@@ -53,6 +55,11 @@ urlpatterns = [
     path('survey-features/', SurveyFeatureListCreateAPIView.as_view()),
     path('survey-features/upsert/', SurveyFeatureUpsertAPIView.as_view()),
     path('survey-features/<uuid:feature_id>/upload-photo/', SurveyFeaturePhotoUploadView.as_view()),
+    path('survey-features/<uuid:feature_id>/photos/', SurveyFeaturePhotosView.as_view()),
+    path(
+        'survey-features/<uuid:feature_id>/photos/<uuid:photo_id>/',
+        SurveyFeaturePhotoDetailView.as_view(),
+    ),
     path('survey-features/<uuid:feature_id>/approval/', SurveyFeatureApprovalAPIView.as_view()),
     path('survey-features/<uuid:feature_id>/', SurveyFeatureDetailAPIView.as_view()),
     # Tier-1 analytics: risk-ranked change queue + completion forecast

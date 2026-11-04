@@ -7,6 +7,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from projects.api.field_schema import derive_field_schema, has_editable
 from projects.api.microservice import headers as microservice_headers
 from projects.layer_rules import is_field_survey_layer
 from projects.models import Feature, LayerFieldConfig, Project
@@ -393,7 +394,13 @@ class ProjectFeatureDetailAPIView(APIView):
             cfg = LayerFieldConfig.objects.get(project=project, layer_id=feature.layer_id)
             feature_data['field_schema'] = cfg.schema
         except LayerFieldConfig.DoesNotExist:
-            pass
+            # No admin configuration yet. A schema captured before the editable
+            # heuristic existed asks the engineer for nothing, which renders an
+            # empty form, so derive the schema from this feature's attributes.
+            if not has_editable(feature_data.get('field_schema')):
+                derived = derive_field_schema(feature.properties)
+                if derived:
+                    feature_data['field_schema'] = derived
         except Exception:
             pass
 
