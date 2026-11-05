@@ -693,10 +693,11 @@ class FeatureSubmitAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Verify engineer has access to these features
-        features = Feature.objects.filter(
-            id__in=feature_ids, assignment_jobs__assignee_id=engineer_id
-        )
+        # ``engineer_feature_queryset`` expands all three scopes. The old join on
+        # ``assignment_jobs__assignee_id`` only matched feature-scope jobs, so a
+        # supervision job covering the whole project or one layer always answered
+        # 403 — the same gap the layers endpoint had.
+        features = engineer_feature_queryset(engineer_id).filter(id__in=feature_ids)
 
         if features.count() != len(feature_ids):
             found_ids = {str(f.id) for f in features}
@@ -706,12 +707,16 @@ class FeatureSubmitAPIView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Only allow submission from certain statuses
-        valid_statuses = [Feature.STATUS_ASSIGNED, Feature.STATUS_REDO]
+        # Only allow submission from certain statuses. Supervision features are
+        # created ``pending`` by the LLD handoff, so they become submittable once
+        # the engineer has recorded at least one reading; without a reading there
+        # is nothing for the planner to review.
+        valid_statuses = [Feature.STATUS_PENDING, Feature.STATUS_ASSIGNED, Feature.STATUS_REDO]
         invalid_features = [
             {'id': str(f.id), 'status': f.status}
             for f in features
             if f.status not in valid_statuses
+            or (f.status == Feature.STATUS_PENDING and not f.field_measurements)
         ]
 
         if invalid_features:
