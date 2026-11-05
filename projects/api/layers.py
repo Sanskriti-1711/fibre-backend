@@ -30,7 +30,14 @@ _GEOM_NAMES = {
 
 
 def _engineer_can_access(request, project):
-    """Engineers may only access projects they are assigned to (project-scope job).
+    """Engineers may only access projects they hold an assignment job on.
+
+    Any scope grants read access: supervision work is normally assigned per
+    layer or per feature (a 473-duct layer, one span), and requiring a
+    project-scope job made every one of those engineers 403 on the project's
+    layers and features - the pages they were sent to inspect. The project
+    list has always treated every scope as "works on that project", so this is
+    the same rule applied to the layer endpoints.
 
     Defense-in-depth: anonymous users are already blocked by the DRF default
     IsAuthenticated permission, but we never let a non-authenticated request
@@ -45,7 +52,6 @@ def _engineer_can_access(request, project):
 
     return AssignmentJob.objects.filter(
         project=project,
-        scope=AssignmentJob.SCOPE_PROJECT,
         assignee=request.user,
     ).exists()
 
