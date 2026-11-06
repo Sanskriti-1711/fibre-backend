@@ -22,12 +22,16 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
             'project',
             'layer_id',
             'feature',
+            'polygon',
+            'polygon_id',
+            'polygon_name',
+            'covered_feature_ids',
             'assignee',
             'scope',
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at', 'covered_feature_ids']
 
     def validate(self, attrs):
         instance = getattr(self, 'instance', None)
@@ -54,6 +58,31 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(msg)
             attrs['project'] = feature.project
             attrs['layer_id'] = feature.layer_id
+        elif scope == AssignmentJob.SCOPE_POLYGON:
+            polygon_id = attrs.get('polygon_id') or getattr(instance, 'polygon_id', None)
+            if not polygon_id:
+                msg = 'Polygon ID is required for polygon scope'
+                raise serializers.ValidationError(msg)
+            attrs['feature'] = None
+            attrs['layer_id'] = None
+            attrs['polygon_id'] = polygon_id
+            polygon = attrs.get('polygon') or getattr(instance, 'polygon', None)
+            if not isinstance(polygon, dict):
+                from assignments.coverage import resolve_polygon_geometry
+
+                polygon, name = resolve_polygon_geometry(project, polygon_id)
+                if not polygon:
+                    msg = (
+                        'Polygon geometry is required, or polygon_id must name a '
+                        'polygon feature in this project'
+                    )
+                    raise serializers.ValidationError(msg)
+                attrs['polygon'] = polygon
+                if name and not attrs.get('polygon_name'):
+                    attrs['polygon_name'] = name
+            if polygon.get('type') not in ('Polygon', 'MultiPolygon'):
+                msg = 'Polygon must be a GeoJSON Polygon or MultiPolygon'
+                raise serializers.ValidationError(msg)
         else:
             msg = 'Invalid scope'
             raise serializers.ValidationError(msg)
@@ -91,6 +120,13 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
                 scope=AssignmentJob.SCOPE_FEATURE,
                 feature=feature,
             ).delete()
+        elif scope == AssignmentJob.SCOPE_POLYGON and project and validated_data.get('polygon_id'):
+            AssignmentJob.objects.filter(
+                project=project,
+                scope=AssignmentJob.SCOPE_POLYGON,
+                polygon_id=validated_data['polygon_id'],
+                assignee=assignee,
+            ).delete()
 
         return super().create(validated_data)
 
@@ -117,5 +153,12 @@ class AssignmentJobDetailSerializer(AssignmentJobSerializer):
             data['feature'] = {
                 'id': str(instance.feature_id),
                 'status': instance.feature.status,
+            }
+        if instance.scope == AssignmentJob.SCOPE_POLYGON:
+            data['polygon'] = {
+                'id': instance.polygon_id or '',
+                'name': instance.polygon_name or instance.polygon_id or 'Assigned area',
+                'geometry': instance.polygon,
+                'feature_count': len(instance.covered_feature_ids or []),
             }
         return data

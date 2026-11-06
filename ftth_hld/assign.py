@@ -38,7 +38,7 @@ from projects.layer_rules import is_field_survey_layer
 from projects.models import Feature, ImportSession, Project
 from users.models import User
 
-from .models import FtthProject
+from .models import FtthLayer, FtthProject
 from .pipeline import generate_survey_package
 
 SURVEY_SUFFIX = ' - Survey'
@@ -194,13 +194,202 @@ def find_survey_copy(ftth_project_id: str):
     return Project.objects.filter(source_ftth_project_id=ftth_project_id).first()
 
 
-def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
+def _area_specs(areas, survey=None) -> list[dict]:
+    """Validate the planner's selection and return the areas with geometry.
+
+    Each entry is a GeoJSON Polygon/MultiPolygon (or the id of one in the
+    imported copy). Geometry is what a job stores and what coverage is measured
+    against, so an entry that names only an id is resolved from the survey copy.
+    The preview passes ``survey=None`` for a run that has no copy yet, where it
+    can only accept entries that already carry a geometry.
+    """
+    from assignments.coverage import PolygonArea, resolve_polygon_geometry
+
+    resolved: list[dict] = []
+    seen: set[str] = set()
+    for raw in areas:
+        if isinstance(raw, str):
+            raw = {'feature_id': raw}
+        if not isinstance(raw, dict):
+            msg = 'Each area must be an object with a GeoJSON geometry or an area id'
+            raise ValueError(msg)
+        if raw.get('type') == 'Feature':
+            raw = {
+                **raw,
+                'geometry': raw.get('geometry'),
+                'properties': raw.get('properties') or {},
+            }
+        properties = raw.get('properties') if isinstance(raw.get('properties'), dict) else {}
+        geometry = raw.get('geometry')
+        area_id = str(
+            raw.get('polygon_id')
+            or properties.get('POLYGON_ID')
+            or properties.get('MFG_ID')
+            or properties.get('POLYGON_I')
+            or ''
+        ).strip()
+        name = str(
+            raw.get('name')
+            or properties.get('name')
+            or properties.get('NAME')
+            or properties.get('AREA_NAME')
+            or properties.get('MFG_NAME')
+            or ''
+        ).strip()
+
+        if not geometry:
+            lookup = raw.get('feature_id') or area_id or raw.get('id')
+            if survey is None:
+                msg = (
+                    f'Area {lookup or "(unnamed)"} has no geometry; send the polygon '
+                    'geometry to preview the coverage of a run that has no survey copy'
+                )
+                raise ValueError(msg)
+            geometry, found_name = resolve_polygon_geometry(survey, str(lookup or ''))
+            if not geometry:
+                msg = (
+                    f'Area {lookup or "(unnamed)"} has no geometry and no polygon '
+                    'with that id exists in this survey copy'
+                )
+                raise ValueError(msg)
+            name = name or found_name
+            area_id = area_id or str(lookup or '')
+
+        if not isinstance(geometry, dict) or geometry.get('type') not in ('Polygon', 'MultiPolygon'):
+            msg = 'Area geometry must be a GeoJSON Polygon or MultiPolygon'
+            raise ValueError(msg)
+        area = PolygonArea(geometry, area_id)
+        if not area.valid:
+            msg = 'Area geometry has no usable ring'
+            raise ValueError(msg)
+
+        polygon_id = area_id or str(raw.get('feature_id') or raw.get('id') or '').strip()
+        if not polygon_id:
+            polygon_id = f'AREA-{len(resolved) + 1}'
+        if polygon_id in seen:
+            continue
+        seen.add(polygon_id)
+        resolved.append(
+            {
+                'polygon_id': polygon_id,
+                'name': name or polygon_id,
+                'geometry': geometry,
+            }
+        )
+
+    if not resolved:
+        msg = 'At least one area is required for a polygon assignment'
+        raise ValueError(msg)
+    return resolved
+
+
+def _resolve_areas(survey, areas) -> list[dict]:
+    """Turn the planner's area selection into what a polygon job stores.
+
+    The coverage list is computed here — once per area, not once per engineer.
+    Rows that carry the area's id are covered as well as rows whose geometry
+    falls inside it (see ``assignments.coverage``), which is how an MFG service
+    area takes its cabinet and every span drawn inside it.
+    """
+    from assignments.coverage import feature_ids_in_polygon
+
+    return [
+        {
+            **area,
+            'covered_feature_ids': feature_ids_in_polygon(
+                survey.id, area['geometry'], area['polygon_id']
+            ),
+        }
+        for area in _area_specs(areas, survey)
+    ]
+
+
+def preview_area_coverage(ftth_project_id: str, areas=None) -> dict:
+    """How many features the selected areas cover, before anything is written.
+
+    The assign page uses this for its summary. It measures the Survey copy when
+    one exists — the rows the edit guard and the map actually read — and falls
+    back to the run's persisted field layers, which are what the copy will be
+    imported from. Geometry only: no rows are created or changed.
+    """
+    from assignments.coverage import PolygonArea, feature_ids_in_polygon
+    from projects.layer_rules import is_field_survey_layer
+
+    try:
+        hld = FtthProject.objects.get(pk=ftth_project_id)
+    except FtthProject.DoesNotExist as err:
+        msg = f'HLD project {ftth_project_id} not found'
+        raise ValueError(msg) from err
+
+    survey = find_survey_copy(ftth_project_id)
+    specs = _area_specs(list(areas or []), survey)
+    counts = [0] * len(specs)
+
+    if survey is not None:
+        for index, spec in enumerate(specs):
+            counts[index] = len(
+                feature_ids_in_polygon(survey.id, spec['geometry'], spec['polygon_id'])
+            )
+        source = 'survey'
+    else:
+        # Same layers `_field_layers` imports, so the number the planner sees is
+        # the number of rows the assignment will consider.
+        parsed = [
+            (index, PolygonArea(spec['geometry'], spec['polygon_id']))
+            for index, spec in enumerate(specs)
+        ]
+        rows = FtthLayer.objects.filter(ftth_project=hld).only('name', 'geojson')
+        for layer in rows.iterator():
+            if not is_field_survey_layer(layer.name):
+                continue
+            for feature in (layer.geojson or {}).get('features') or []:
+                if not isinstance(feature, dict):
+                    continue
+                properties = feature.get('properties') if isinstance(feature.get('properties'), dict) else {}
+                feature_id = str(
+                    properties.get('feature_id')
+                    or properties.get('fid')
+                    or properties.get('id')
+                    or feature.get('id')
+                    or ''
+                )
+                geometry = feature.get('geometry')
+                for index, area in parsed:
+                    if area.carries_id(properties, feature_id) or area.covers(geometry):
+                        counts[index] += 1
+        source = 'run'
+
+    return {
+        'areas': [
+            {
+                'polygon_id': spec['polygon_id'],
+                'name': spec['name'],
+                'feature_count': counts[index],
+            }
+            for index, spec in enumerate(specs)
+        ],
+        'feature_count': sum(counts),
+        'source': source,
+        'survey_project_id': str(survey.id) if survey is not None else None,
+    }
+
+
+def assign_hld_project(ftth_project_id: str, engineer_ids, areas=None) -> dict:
     """Assign a completed HLD run to one or more field engineers.
 
-    Creates (or reuses) the Survey copy, imports the survey package into it,
-    and creates one project-scope AssignmentJob per engineer. Returns a
-    summary dict.
+    Creates (or reuses) the Survey copy and imports the survey package into it.
+    ``areas`` are the polygons/MFG service areas a planner picked on the HLD
+    output; it writes one polygon-scope AssignmentJob per engineer per area and
+    marks only the features those areas cover as assigned — the rest of the copy
+    stays pending and read-only for that engineer. An empty selection is refused:
+    there is no project-wide survey assignment.
     """
+    # Survey assignment is area-based: a planner hands over the polygons / MFG
+    # service areas the engineer may edit, never the whole run.
+    areas = list(areas or [])
+    if isinstance(areas, (str, dict)):
+        msg = 'areas must be a list of area objects'
+        raise ValueError(msg)
     if isinstance(engineer_ids, str):
         engineer_ids = [engineer_ids]
     engineer_ids = list(engineer_ids)
@@ -250,6 +439,20 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
                 source_ftth_project_id=ftth_project_id,
             )
         else:
+            survey.name = f'{hld.name or ftth_project_id}{SURVEY_SUFFIX}'
+            survey.status = 'assigned'
+            survey.save(update_fields=['name', 'status', 'updated_at'])
+
+        # ── 2. The survey package: built once, then reused ───────────────
+        session = ImportSession.objects.filter(project=survey).first()
+        imported_from = session.stored_file_path if session else None
+        session, full_path, package_hash = _survey_package(survey, ftth_project_id, session)
+        # A copy that already holds this exact package is not re-imported, so
+        # adding a second area later is safe even after the engineer started
+        # working. Only a re-import replaces the rows field work points at, and
+        # that is what the data-safety guard below refuses.
+        keeps_rows = _holds_this_import(survey, imported_from, package_hash)
+        if not keeps_rows and _holds_field_data(survey):
             # Data-safety guard: re-assigning replaces the copy's features, so
             # it must not happen once anything has been recorded against them --
             # a survey change, a typed field row, a GPS trace, an approval.
@@ -260,21 +463,12 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
             # from this page at all (only the mobile app can undo an
             # acceptance). Measured 2026-10-13 on the live copy: accepted by the
             # engineer, and zero rows in every table an edit would write.
-            if _holds_field_data(survey):
-                msg = (
-                    f"Survey copy '{survey.name}' already holds field-survey data; "
-                    're-assigning would replace the features it was recorded against. '
-                    'Re-assign only before the engineer records work.'
-                )
-                raise ValueError(msg)
-            survey.name = f'{hld.name or ftth_project_id}{SURVEY_SUFFIX}'
-            survey.status = 'assigned'
-            survey.save(update_fields=['name', 'status', 'updated_at'])
-
-        # ── 2. The survey package: built once, then reused ───────────────
-        session = ImportSession.objects.filter(project=survey).first()
-        imported_from = session.stored_file_path if session else None
-        session, full_path, package_hash = _survey_package(survey, ftth_project_id, session)
+            msg = (
+                f"Survey copy '{survey.name}' already holds field-survey data; "
+                're-assigning would replace the features it was recorded against. '
+                'Re-assign only before the engineer records work.'
+            )
+            raise ValueError(msg)
 
         # ── 3. Import the WGS84 GeoJSON layers as Feature rows ───────────
         from projects.api.import_views import discover_zip_layers, import_zip_layers
@@ -282,7 +476,7 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
         layers = discover_zip_layers(full_path)
         layer_names = _field_layers(layers)
 
-        if _holds_this_import(survey, imported_from, package_hash):
+        if keeps_rows:
             # The copy was imported from these exact bytes, so re-importing it
             # produces the rows that are already there. Measured 2026-10-13:
             # dropping and re-inserting 2,164 features is 5.74s of Django
@@ -304,31 +498,56 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
             Feature.objects.filter(project=survey).delete()
             features_created = import_zip_layers(survey, full_path, layer_names)
 
-        # Features imported as pending; a project-scope assignment marks the
-        # whole project as assigned (matches existing assignment semantics).
-        if features_created:
-            Feature.objects.filter(project=survey).exclude(status=Feature.STATUS_ASSIGNED).update(
+        # ── 4. Polygon jobs for the selection (PK preserved) ────────────
+        resolved_areas = _resolve_areas(survey, areas)
+        jobs = []
+        # Only the features the chosen areas cover become the engineer's work;
+        # the rest of the copy stays pending and read-only for them, which is
+        # what the map greys out.
+        covered = sorted(
+            {feature_id for area in resolved_areas for feature_id in area['covered_feature_ids']}
+        )
+        if covered:
+            Feature.objects.filter(id__in=covered, status=Feature.STATUS_PENDING).update(
                 status=Feature.STATUS_ASSIGNED
             )
-
-        # ── 4. Project-scope AssignmentJob per engineer (PK preserved) ───
-        existing_jobs = list(
-            AssignmentJob.objects.filter(project=survey, scope=AssignmentJob.SCOPE_PROJECT)
-        )
-        jobs = []
-        for eng in engineers:
-            job, _ = AssignmentJob.objects.update_or_create(
-                project=survey,
-                scope=AssignmentJob.SCOPE_PROJECT,
-                assignee=eng,
-                defaults={},
-            )
-            jobs.append(job)
-        # Drop jobs for engineers no longer assigned
-        keep_assignees = {eng.id for eng in engineers}
-        for job in existing_jobs:
-            if job.assignee_id not in keep_assignees:
-                job.delete()
+        area_ids = [area['polygon_id'] for area in resolved_areas]
+        for area in resolved_areas:
+            for eng in engineers:
+                job = AssignmentJob.objects.filter(
+                    project=survey,
+                    scope=AssignmentJob.SCOPE_POLYGON,
+                    polygon_id=area['polygon_id'],
+                    assignee=eng,
+                ).first()
+                if job is None:
+                    job = AssignmentJob(
+                        project=survey,
+                        scope=AssignmentJob.SCOPE_POLYGON,
+                        polygon_id=area['polygon_id'],
+                        assignee=eng,
+                    )
+                job.polygon = area['geometry']
+                job.polygon_name = area['name']
+                job.covered_feature_ids = area['covered_feature_ids']
+                # Resolved once per area above; do not walk the copy again for
+                # every engineer holding the same area.
+                job._coverage_precomputed = True
+                job.save()
+                jobs.append(job)
+        # An engineer this request no longer names loses this area.
+        AssignmentJob.objects.filter(
+            project=survey,
+            scope=AssignmentJob.SCOPE_POLYGON,
+            polygon_id__in=area_ids,
+        ).exclude(assignee__in=engineers).delete()
+        # Retire the old whole-run survey handover. A project-scope job grants
+        # every feature, so leaving one behind would make the area guard
+        # meaningless; the post-delete release puts its uncovered rows back to
+        # pending. Feature/layer jobs are supervision scopes and stay.
+        AssignmentJob.objects.filter(
+            project=survey, scope=AssignmentJob.SCOPE_PROJECT
+        ).delete()
 
     # ── 5. Record assignment on the HLD run ──────────────────────────────
     hld.assigned_engineer = primary_engineer
@@ -352,14 +571,27 @@ def assign_hld_project(ftth_project_id: str, engineer_ids) -> dict:
         'assignment_job_ids': [str(j.id) for j in jobs],
         'layers': layer_names,
         'features_created': features_created,
+        'scope': 'polygon',
+        'areas': [
+            {
+                'polygon_id': area['polygon_id'],
+                'name': area['name'],
+                'feature_count': len(area['covered_feature_ids']),
+            }
+            for area in resolved_areas
+        ],
+        'assigned_feature_count': sum(
+            len(area['covered_feature_ids']) for area in resolved_areas
+        ),
     }
 
 
 def accept_survey_project(project_id: str, user) -> dict:
     """Engineer accepts an assigned Survey copy → status becomes active.
 
-    Only the assigned engineer (project-scope AssignmentJob) or a SUBADMIN
-    may accept. Returns the updated project summary.
+    Any assignment scope grants acceptance: survey work is handed over as
+    polygons, so requiring a project-scope job would lock every area-assigned
+    engineer out of their own copy.
     """
     try:
         survey = Project.objects.get(pk=project_id)
@@ -367,11 +599,7 @@ def accept_survey_project(project_id: str, user) -> dict:
         msg = f'Survey project {project_id} not found'
         raise ValueError(msg) from err
 
-    is_engineer = AssignmentJob.objects.filter(
-        project=survey,
-        scope=AssignmentJob.SCOPE_PROJECT,
-        assignee=user,
-    ).exists()
+    is_engineer = AssignmentJob.objects.filter(project=survey, assignee=user).exists()
     is_admin = getattr(user, 'role', None) == User.Role.SUBADMIN
     if not (is_engineer or is_admin):
         msg = 'Only the assigned engineer can accept this project'
@@ -396,8 +624,9 @@ def accept_survey_project(project_id: str, user) -> dict:
 def submit_survey_project(project_id: str, user) -> dict:
     """Engineer submits their finished Survey copy → status becomes submitted.
 
-    Only an engineer assigned to the project (project-scope AssignmentJob)
-    or a SUBADMIN may submit. Status must currently be ``active``.
+    Any assignment scope grants submission (see ``accept_survey_project``):
+    area-assigned engineers hold no project-scope job. Status must currently be
+    ``active``.
     """
     try:
         survey = Project.objects.get(pk=project_id)
@@ -405,11 +634,7 @@ def submit_survey_project(project_id: str, user) -> dict:
         msg = f'Survey project {project_id} not found'
         raise ValueError(msg) from err
 
-    is_engineer = AssignmentJob.objects.filter(
-        project=survey,
-        scope=AssignmentJob.SCOPE_PROJECT,
-        assignee=user,
-    ).exists()
+    is_engineer = AssignmentJob.objects.filter(project=survey, assignee=user).exists()
     is_admin = getattr(user, 'role', None) == User.Role.SUBADMIN
     if not (is_engineer or is_admin):
         msg = 'Only the assigned engineer can submit this project'

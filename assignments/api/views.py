@@ -18,6 +18,9 @@ from rest_framework.views import APIView
 from assignments.api.serializers import AssignmentJobDetailSerializer, AssignmentJobSerializer
 from assignments.models import AssignmentJob
 from projects.models import Feature
+from supervision.models import FeaturePhoto
+from users.models import User
+from users.permissions import IsSubadmin
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,17 @@ def engineer_feature_queryset(engineer_id):
     condition |= Q(id__in=jobs.filter(scope=AssignmentJob.SCOPE_FEATURE).values('feature_id'))
     for pair in jobs.filter(scope=AssignmentJob.SCOPE_LAYER).values('project_id', 'layer_id'):
         condition |= Q(project_id=pair['project_id'], layer_id=pair['layer_id'])
+
+    # A polygon job is already resolved to feature ids when the job is saved
+    # (see assignments.coverage); expanding the stored snapshot here keeps the
+    # access rule identical to what the map paints as editable.
+    polygon_feature_ids: set[str] = set()
+    for feature_ids in jobs.filter(scope=AssignmentJob.SCOPE_POLYGON).values_list(
+        'covered_feature_ids', flat=True
+    ):
+        polygon_feature_ids.update(feature_ids or [])
+    if polygon_feature_ids:
+        condition |= Q(id__in=polygon_feature_ids)
 
     return Feature.objects.filter(condition).distinct()
 
@@ -65,6 +79,14 @@ def record_stage_events(project_ids, event, actor=None, entity_id='', metadata=N
 
 class AssignmentJobListCreateAPIView(generics.ListCreateAPIView):
     queryset = AssignmentJob.objects.select_related('project', 'feature', 'assignee')
+
+    def get_permissions(self):
+        # Reading the job list is how the planners' board and the engineers'
+        # "My projects" stay in sync; creating one is an assignment, which only
+        # a planner makes.
+        if self.request.method == 'POST':
+            return [IsSubadmin()]
+        return super().get_permissions()
 
     def get_serializer_class(self):
         if self.request.method == 'GET':
@@ -105,6 +127,14 @@ class AssignmentJobListCreateAPIView(generics.ListCreateAPIView):
 class AssignmentJobDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
     queryset = AssignmentJob.objects.select_related('project', 'feature', 'assignee')
 
+    def get_permissions(self):
+        # Reassigning or deleting a job is a planner action. Without this the
+        # view was a plain RetrieveUpdateDestroyAPIView over every job, so any
+        # engineer could delete another planner's assignment by uuid.
+        if self.request.method in ('PUT', 'PATCH', 'DELETE'):
+            return [IsSubadmin()]
+        return super().get_permissions()
+
     def get_serializer_class(self):
         if self.request.method == 'GET':
             return AssignmentJobDetailSerializer
@@ -132,9 +162,9 @@ class AssignmentJobSummaryAPIView(APIView):
         assignments = assignments.order_by('scope', 'layer_id', 'created_at')
 
         serializer = AssignmentJobDetailSerializer(assignments, many=True)
-        grouped: dict[str, list] = {'project': [], 'layer': [], 'feature': []}
+        grouped: dict[str, list] = {'project': [], 'layer': [], 'feature': [], 'polygon': []}
         for record in serializer.data:
-            grouped[record['scope']].append(record)
+            grouped.setdefault(record['scope'], []).append(record)
 
         return Response(
             {
@@ -175,12 +205,13 @@ class JobAssignmentsListAPIView(APIView):
         # the features under it rather than a column.
         jobs = list(self._job_queryset(project_id, layer_id, engineer_id, scope_filter, search))
         counts, layer_names = self._feature_counts(jobs)
+        progress = self._field_progress(jobs)
 
         # `stats` keeps describing every job the query matches, so the counters
         # do not move when a status tab is selected.
         stats = self._stats(jobs, counts)
 
-        rows = [self._job_row(job, counts, layer_names) for job in jobs]
+        rows = [self._job_row(job, counts, layer_names, progress) for job in jobs]
         if status_filter:
             rows = [row for row in rows if row['status'] == status_filter]
 
@@ -221,12 +252,13 @@ class JobAssignmentsListAPIView(APIView):
 
     @staticmethod
     def _feature_counts(jobs):
-        """Status counts per project and per (project, layer), in one query.
+        """Status counts per project, per (project, layer) and per polygon job.
 
         A project job's `feature_count`/status is the whole project; a layer
-        job's is its layer. Features whose layer_id differs between rows are
-        summed per (project, layer) pair, so a layer job cannot pick up another
-        layer's features.
+        job's is its layer. A polygon job counts exactly the features its area
+        covered when it was saved. Features whose layer_id differs between rows
+        are summed per (project, layer) pair, so a layer job cannot pick up
+        another layer's features.
         """
         project_ids = {job.project_id for job in jobs if job.scope == AssignmentJob.SCOPE_PROJECT}
         layer_pairs = {
@@ -234,10 +266,21 @@ class JobAssignmentsListAPIView(APIView):
         }
         by_project: dict = {}
         by_layer: dict = {}
+        by_polygon: dict = {}
         layer_names: dict = {}
 
+        for job in jobs:
+            if job.scope != AssignmentJob.SCOPE_POLYGON or not job.covered_feature_ids:
+                continue
+            rows = (
+                Feature.objects.filter(id__in=job.covered_feature_ids)
+                .values('status')
+                .annotate(count=Count('id'))
+            )
+            by_polygon[job.id] = {row['status']: row['count'] for row in rows}
+
         if not project_ids and not layer_pairs:
-            return {'project': by_project, 'layer': by_layer}, layer_names
+            return {'project': by_project, 'layer': by_layer, 'polygon': by_polygon}, layer_names
 
         rows = (
             Feature.objects.filter(project_id__in=project_ids | {p for p, _ in layer_pairs})
@@ -256,9 +299,112 @@ class JobAssignmentsListAPIView(APIView):
                 per_status[row['status']] = per_status.get(row['status'], 0) + count
                 layer_names[layer_key] = row['layer_name']
 
-        return {'project': by_project, 'layer': by_layer}, layer_names
+        return {'project': by_project, 'layer': by_layer, 'polygon': by_polygon}, layer_names
 
-    def _job_row(self, job, counts, layer_names):
+    @staticmethod
+    def _expected_readings(feature):
+        """How many readings the layer's field schema asks for."""
+        schema = feature.field_schema
+        if isinstance(schema, (list, dict)):
+            return len(schema)
+        properties = feature.properties if isinstance(feature.properties, dict) else {}
+        return len(properties)
+
+    @classmethod
+    def _field_progress(cls, jobs):
+        """Readings and site photos recorded, per project, layer and feature.
+
+        A layer or project job has no single set of readings to report, so its
+        row says how many of the features it covers carry evidence at all. All
+        of it comes from grouped queries — one for the aggregate readings, one
+        for their photos, one for the single-feature jobs on the page — rather
+        than a query per row.
+        """
+        project_ids = {
+            job.project_id for job in jobs if job.scope == AssignmentJob.SCOPE_PROJECT
+        }
+        layer_pairs = {
+            (job.project_id, job.layer_id)
+            for job in jobs
+            if job.scope == AssignmentJob.SCOPE_LAYER
+        }
+        feature_ids = [
+            job.feature_id
+            for job in jobs
+            if job.scope == AssignmentJob.SCOPE_FEATURE and job.feature_id
+        ]
+
+        progress = {'project': {}, 'layer': {}, 'feature': {}, 'polygon': {}}
+        measured = Q(field_measurements__isnull=False) & ~Q(field_measurements={})
+        scoped_project_ids = project_ids | {project_id for project_id, _ in layer_pairs}
+
+        def bucket(kind, key):
+            return progress[kind].setdefault(
+                key, {'features': 0, 'measured_features': 0, 'photos': 0}
+            )
+
+        if scoped_project_ids:
+            rows = (
+                Feature.objects.filter(project_id__in=scoped_project_ids)
+                .values('project_id', 'layer_id')
+                .annotate(total=Count('id'), measured=Count('id', filter=measured))
+            )
+            for row in rows:
+                if row['project_id'] in project_ids:
+                    entry = bucket('project', row['project_id'])
+                    entry['features'] += row['total']
+                    entry['measured_features'] += row['measured']
+                layer_key = (row['project_id'], row['layer_id'])
+                if layer_key in layer_pairs:
+                    entry = bucket('layer', layer_key)
+                    entry['features'] += row['total']
+                    entry['measured_features'] += row['measured']
+
+            photo_rows = (
+                FeaturePhoto.objects.filter(feature__project_id__in=scoped_project_ids)
+                .values('feature__project_id', 'feature__layer_id')
+                .annotate(photos=Count('id'))
+            )
+            for row in photo_rows:
+                project_key = row['feature__project_id']
+                if project_key in project_ids:
+                    bucket('project', project_key)['photos'] += row['photos']
+                layer_key = (project_key, row['feature__layer_id'])
+                if layer_key in layer_pairs:
+                    bucket('layer', layer_key)['photos'] += row['photos']
+
+        for job in jobs:
+            if job.scope != AssignmentJob.SCOPE_POLYGON or not job.covered_feature_ids:
+                continue
+            polygon_features = Feature.objects.filter(id__in=job.covered_feature_ids)
+            progress['polygon'][job.id] = {
+                'features': polygon_features.count(),
+                'measured_features': polygon_features.filter(measured).count(),
+                'photos': FeaturePhoto.objects.filter(
+                    feature_id__in=job.covered_feature_ids
+                ).count(),
+            }
+
+        if feature_ids:
+            photo_counts = dict(
+                FeaturePhoto.objects.filter(feature_id__in=feature_ids)
+                .values_list('feature_id')
+                .annotate(count=Count('id'))
+            )
+            for feature in Feature.objects.filter(id__in=feature_ids):
+                readings = feature.field_measurements if isinstance(feature.field_measurements, dict) else {}
+                counted = len(readings)
+                progress['feature'][feature.id] = {
+                    'features': 1,
+                    'measured_features': 1 if counted else 0,
+                    'readings': counted,
+                    'expected_readings': cls._expected_readings(feature),
+                    'photos': photo_counts.get(feature.id, 0),
+                }
+
+        return progress
+
+    def _job_row(self, job, counts, layer_names, progress):
         base = {
             'id': str(job.id),
             'project': {
@@ -284,16 +430,34 @@ class JobAssignmentsListAPIView(APIView):
                 'layer_name': feature.layer_name,
             }
             base['feature_count'] = 1
+            base['field_progress'] = progress['feature'].get(feature.id) or {
+                'features': 1,
+                'measured_features': 0,
+                'readings': 0,
+                'expected_readings': self._expected_readings(feature),
+                'photos': 0,
+            }
             base['status'] = feature.status
             base['status_display'] = self._get_status_display(feature.status)
             return base
 
-        if job.scope == AssignmentJob.SCOPE_PROJECT:
+        if job.scope == AssignmentJob.SCOPE_POLYGON:
+            base['polygon'] = {
+                'id': job.polygon_id or '',
+                'name': job.polygon_name or job.polygon_id or 'Assigned area',
+                'geometry': job.polygon,
+                'feature_count': len(job.covered_feature_ids or []),
+            }
+            status_counts = counts['polygon'].get(job.id, {})
+            covered = progress['polygon'].get(job.id, {})
+        elif job.scope == AssignmentJob.SCOPE_PROJECT:
             base['project']['status'] = job.project.status
             status_counts = counts['project'].get(job.project_id, {})
+            covered = progress['project'].get(job.project_id, {})
         else:
             layer_key = (job.project_id, job.layer_id)
             status_counts = counts['layer'].get(layer_key, {})
+            covered = progress['layer'].get(layer_key, {})
             base['layer'] = {
                 'id': job.layer_id,
                 'name': layer_names.get(layer_key) or job.layer_id,
@@ -301,6 +465,13 @@ class JobAssignmentsListAPIView(APIView):
 
         aggregate_status = self._get_aggregate_status(status_counts)
         base['feature_count'] = sum(status_counts.values())
+        base['field_progress'] = {
+            'features': base['feature_count'],
+            'measured_features': covered.get('measured_features', 0),
+            'readings': None,
+            'expected_readings': None,
+            'photos': covered.get('photos', 0),
+        }
         base['status'] = aggregate_status
         base['status_display'] = self._get_status_display(aggregate_status)
         return base
@@ -323,6 +494,11 @@ class JobAssignmentsListAPIView(APIView):
             for job in jobs
             if job.scope == AssignmentJob.SCOPE_LAYER and job.project_id not in project_ids
         }
+        polygon_jobs = [
+            job
+            for job in jobs
+            if job.scope == AssignmentJob.SCOPE_POLYGON and job.covered_feature_ids
+        ]
         feature_ids = {
             job.feature_id
             for job in jobs
@@ -348,6 +524,8 @@ class JobAssignmentsListAPIView(APIView):
             absorb(counts['project'].get(project_key, {}))
         for layer_key in layer_pairs:
             absorb(counts['layer'].get(layer_key, {}))
+        for job in polygon_jobs:
+            absorb(counts['polygon'].get(job.id, {}))
         if feature_ids:
             rows = (
                 Feature.objects.filter(id__in=feature_ids)
@@ -473,6 +651,12 @@ class EngineerActivityAPIView(APIView):
             return {'type': 'project', 'name': job.project.name}
         if job.scope == AssignmentJob.SCOPE_LAYER:
             return {'type': 'layer', 'layer_id': job.layer_id}
+        if job.scope == AssignmentJob.SCOPE_POLYGON:
+            return {
+                'type': 'polygon',
+                'id': job.polygon_id,
+                'name': job.polygon_name or job.polygon_id,
+            }
         return {'type': 'feature', 'id': str(job.feature.id) if job.feature else None}
 
     def _get_status_display(self, status):
@@ -618,7 +802,11 @@ class EngineerStatsAPIView(APIView):
 
 
 class FeatureFieldMeasurementsAPIView(APIView):
-    """Update field measurements for a feature."""
+    """Update field measurements for a feature.
+
+    An engineer may only write readings for work they are assigned — the same
+    project/layer/feature scopes ``engineer_feature_queryset`` expands.
+    """
 
     def patch(self, request, pk):
         try:
@@ -627,6 +815,14 @@ class FeatureFieldMeasurementsAPIView(APIView):
             return Response(
                 {'detail': 'Feature not found'},
                 status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if getattr(request.user, 'role', None) == User.Role.ENGINEER and not (
+            engineer_feature_queryset(request.user.id).filter(pk=feature.pk).exists()
+        ):
+            return Response(
+                {'detail': 'You do not have access to this feature.'},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         field_measurements = request.data.get('field_measurements')
@@ -675,11 +871,18 @@ class FeatureFieldMeasurementsAPIView(APIView):
 
 
 class FeatureSubmitAPIView(APIView):
-    """Submit feature(s) for review."""
+    """Submit feature(s) for review.
+
+    The engineer is the caller, not a body field: the previous version trusted
+    ``engineer`` from the request, so it checked whether *that other person* had
+    a job on these features instead of whether the caller may submit them. A
+    SUBADMIN may still name an engineer, which is the legitimate
+    "submit on their behalf" case.
+    """
 
     def post(self, request):
         feature_ids = request.data.get('feature_ids', [])
-        engineer_id = request.data.get('engineer')
+        engineer = request.user
 
         if not feature_ids:
             return Response(
@@ -687,22 +890,21 @@ class FeatureSubmitAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not engineer_id:
-            return Response(
-                {'detail': 'engineer is required'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        requested_engineer = request.data.get('engineer')
+        if requested_engineer and getattr(request.user, 'role', None) == User.Role.SUBADMIN:
+            engineer = User.objects.filter(id=requested_engineer).first() or request.user
 
-        # Verify engineer has access to these features
-        features = Feature.objects.filter(
-            id__in=feature_ids, assignment_jobs__assignee_id=engineer_id
-        )
+        # ``engineer_feature_queryset`` expands all three scopes. The old join on
+        # ``assignment_jobs__assignee_id`` matched twice when a feature had two
+        # jobs for the same engineer (project scope plus layer scope), so a
+        # valid submission answered 403 with an empty "missing" set.
+        features = engineer_feature_queryset(engineer.id).filter(id__in=feature_ids)
 
-        if features.count() != len(feature_ids):
-            found_ids = {str(f.id) for f in features}
-            missing = set(feature_ids) - found_ids
+        found_ids = {str(feature.id) for feature in features}
+        missing = {str(feature_id) for feature_id in feature_ids} - found_ids
+        if missing:
             return Response(
-                {'detail': f'Features not found or not assigned: {missing}'},
+                {'detail': f'Features not found or not assigned: {sorted(missing)}'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -753,7 +955,14 @@ class FeatureSubmitAPIView(APIView):
 
 
 class FeatureApproveAPIView(APIView):
-    """Approve feature(s) - admin only."""
+    """Approve feature(s) - admin only.
+
+    The docstring promised a rule nothing enforced: the class had no
+    ``permission_classes``, so any engineer — including the one who submitted
+    the work — could approve it.
+    """
+
+    permission_classes = [IsSubadmin]
 
     def post(self, request):
         feature_ids = request.data.get('feature_ids', [])
@@ -837,6 +1046,8 @@ class FeatureApproveAPIView(APIView):
 
 class FeatureRejectAPIView(APIView):
     """Reject feature(s) and send back to redo - admin only."""
+
+    permission_classes = [IsSubadmin]
 
     def post(self, request):
         feature_ids = request.data.get('feature_ids', [])

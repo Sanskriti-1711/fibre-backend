@@ -29,7 +29,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from .assign import assign_hld_project
+from .assign import assign_hld_project, preview_area_coverage
 from .boq import (
     generate_snapshot,
     render_boq_xlsx,
@@ -1432,8 +1432,9 @@ class FtthProjectAssignView(APIView):
     """Assign a completed HLD run to a field engineer.
 
     Creates (or reuses) the Survey copy of the HLD run, auto-imports the
-    generated survey package into it, creates the project-scope AssignmentJob
-    and marks the engineer on the HLD project. SUBADMIN only.
+    generated survey package into it, and creates one polygon-scope
+    AssignmentJob per selected area per engineer, so the engineer may edit only
+    what those areas cover. SUBADMIN only.
     """
 
     permission_classes = [IsAuthenticated]
@@ -1457,8 +1458,37 @@ class FtthProjectAssignView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # The planner can hand over the whole run (no areas) or only the
+        # polygons / MFG service areas they picked on the HLD output. Areas may
+        # arrive as objects with a GeoJSON geometry, as ids already present in
+        # the run, or as a comma-separated ``polygon_ids`` field (the link the
+        # results page builds).
+        areas = request.data.get('areas') or request.data.get('polygons') or []
+        if isinstance(areas, str):
+            try:
+                areas = json.loads(areas)
+            except (TypeError, ValueError):
+                return JsonResponse(
+                    {'detail': 'areas must be a JSON list of area objects.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        if not isinstance(areas, list):
+            return JsonResponse(
+                {'detail': 'areas must be a list of area objects.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        areas = [dict(area) for area in areas if isinstance(area, dict)]
+
+        polygon_ids = request.data.get('polygon_ids') or request.POST.get('polygon_ids') or ''
+        if isinstance(polygon_ids, str):
+            polygon_ids = [pid.strip() for pid in polygon_ids.split(',') if pid.strip()]
+        for polygon_id in polygon_ids or []:
+            areas.append({'polygon_id': str(polygon_id)})
+
+        # Survey assignment is area-based; an empty selection is refused by the
+        # service rather than quietly handing over the whole run.
         try:
-            result = assign_hld_project(project_id, engineer_ids)
+            result = assign_hld_project(project_id, engineer_ids, areas=areas)
         except ValueError as exc:
             return JsonResponse({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except FileNotFoundError as exc:
@@ -1489,3 +1519,37 @@ class FtthProjectAssignView(APIView):
             logger.exception('Could not notify assigned engineers for %s', project_id)
 
         return JsonResponse(result, status=status.HTTP_201_CREATED)
+
+
+# ======================================================================
+# POST /api/ftth/hld/projects/<project_id>/areas/coverage/
+# ======================================================================
+
+
+class FtthAreaCoverageView(APIView):
+    """Preview the features the selected areas cover before assigning them.
+
+    The Assign jobs summary uses this so the planner reads the real coverage
+    (“N features from these areas”) before the copy is created. It measures the
+    survey copy when one exists, otherwise the run's persisted field layers;
+    nothing is written. SUBADMIN only, matching the assignment itself.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+        if getattr(request.user, 'role', None) != 'SUBADMIN':
+            return JsonResponse(
+                {'detail': 'Only SUBADMIN can preview area coverage.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        areas = request.data.get('areas') or []
+        if not isinstance(areas, list):
+            return JsonResponse(
+                {'detail': 'areas must be a list of area objects.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            return JsonResponse(preview_area_coverage(project_id, areas))
+        except ValueError as exc:
+            return JsonResponse({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)

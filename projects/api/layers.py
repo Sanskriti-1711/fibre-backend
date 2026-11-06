@@ -7,6 +7,9 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from config.media import media_url
+from projects.api.access import deny as _deny
+from projects.api.access import engineer_can_access as _engineer_can_access
 from projects.api.field_schema import derive_field_schema, has_editable
 from projects.api.microservice import headers as microservice_headers
 from projects.layer_rules import is_field_survey_layer
@@ -19,6 +22,49 @@ from .serializers import FeatureSerializer, FeatureUpdateSerializer
 # (see dev/start.sh); a deployment overrides this with its own host.
 MICROSERVICE_BASE_URL = os.getenv('MICROSERVICE_BASE_URL', 'http://localhost:8180')
 
+def editable_feature_ids(request, project):
+    """Feature ids the caller may edit, or ``None`` when edit is unrestricted.
+
+    A planner/admin is not restricted. An engineer is restricted to the rows
+    their assignment scopes expand to; a polygon job expands only to the
+    features inside that area, which is what makes the rest of the map read-only.
+    """
+    if getattr(request.user, 'role', None) != 'ENGINEER':
+        return None
+    from assignments.api.views import engineer_feature_queryset
+
+    return {
+        str(feature_id)
+        for feature_id in engineer_feature_queryset(request.user.id)
+        .filter(project=project)
+        .values_list('id', flat=True)
+    }
+
+
+def assignment_polygons(request, project):
+    """The polygons the calling engineer was assigned, for the map highlight."""
+    if getattr(request.user, 'role', None) != 'ENGINEER':
+        return []
+    from assignments.models import AssignmentJob
+
+    jobs = AssignmentJob.objects.filter(
+        project=project,
+        assignee=request.user,
+        scope=AssignmentJob.SCOPE_POLYGON,
+    ).order_by('created_at')
+    return [
+        {
+            'id': str(job.id),
+            'polygon_id': job.polygon_id or '',
+            'name': job.polygon_name or job.polygon_id or 'Assigned area',
+            'geometry': job.polygon,
+            'feature_count': len(job.covered_feature_ids or []),
+        }
+        for job in jobs
+        if job.polygon
+    ]
+
+
 _GEOM_NAMES = {
     'Point': 'Point',
     'MultiPoint': 'Point',
@@ -27,34 +73,6 @@ _GEOM_NAMES = {
     'Polygon': 'Polygon',
     'MultiPolygon': 'Polygon',
 }
-
-
-def _engineer_can_access(request, project):
-    """Engineers may only access projects they are assigned to (project-scope job).
-
-    Defense-in-depth: anonymous users are already blocked by the DRF default
-    IsAuthenticated permission, but we never let a non-authenticated request
-    through here regardless of role.
-    """
-    if not getattr(request.user, 'is_authenticated', False):
-        return False
-    role = getattr(request.user, 'role', None)
-    if role != 'ENGINEER':
-        return True
-    from assignments.models import AssignmentJob
-
-    return AssignmentJob.objects.filter(
-        project=project,
-        scope=AssignmentJob.SCOPE_PROJECT,
-        assignee=request.user,
-    ).exists()
-
-
-def _deny():
-    return Response(
-        {'detail': 'You do not have access to this project.'},
-        status=status.HTTP_403_FORBIDDEN,
-    )
 
 
 class ProjectMapDataAPIView(APIView):
@@ -78,6 +96,8 @@ class ProjectMapDataAPIView(APIView):
             return _deny()
 
         features_qs = Feature.objects.filter(project=project).order_by('layer_name', 'created_at')
+        editable_ids = editable_feature_ids(request, project)
+        polygons = assignment_polygons(request, project)
 
         layers = []
         geojson: dict[str, dict[str, Any]] = {}
@@ -110,6 +130,7 @@ class ProjectMapDataAPIView(APIView):
                     'feature_id': str(f.id),
                     'layer': name,
                     'status': f.status,
+                    'editable': editable_ids is None or str(f.id) in editable_ids,
                 },
             }
             geojson[name]['features'].append(feature)
@@ -137,6 +158,10 @@ class ProjectMapDataAPIView(APIView):
                 'layers': layers,
                 'features': all_features,
                 'geojson': geojson,
+                'editable_feature_ids': None
+                if editable_ids is None
+                else sorted(editable_ids),
+                'assignment_polygons': polygons,
                 'as_built_geojson': as_built_geojson,
                 'as_built_features': as_built_features,
             }
@@ -250,7 +275,13 @@ class ProjectLayerDetailAPIView(APIView):
             redo_count=Count('id', filter=Q(status=Feature.STATUS_REDO)),
         )
 
+        editable_ids = editable_feature_ids(request, project)
         serialized_features = FeatureSerializer(layer_features, many=True).data
+        editable_count = 0
+        for entry in serialized_features:
+            editable = editable_ids is None or str(entry['id']) in editable_ids
+            entry['editable'] = editable
+            editable_count += 1 if editable else 0
 
         return Response(
             {
@@ -259,6 +290,7 @@ class ProjectLayerDetailAPIView(APIView):
                     'layer_id': layer_id,
                     'layer_name': first_feature.layer_name,
                     'feature_count': aggregations['feature_count'],
+                    'editable_count': editable_count,
                     'status_counts': {
                         'pending': aggregations['pending_count'],
                         'assigned': aggregations['assigned_count'],
@@ -385,6 +417,8 @@ class ProjectFeatureDetailAPIView(APIView):
             )
 
         feature_data = FeatureSerializer(feature, context={'request': request}).data
+        editable_ids = editable_feature_ids(request, project)
+        feature_data['editable'] = editable_ids is None or str(feature.id) in editable_ids
 
         # If an admin has configured this layer's fields, serve that schema
         # instead of the auto-derived one so the engineer clients use it.
@@ -481,6 +515,16 @@ class ProjectFeatureUpdateAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Project access is not edit access: an engineer assigned to one
+        # polygon must not patch a feature outside it. 403 (not 404) so the
+        # client can tell "not yours to edit" from "does not exist".
+        editable_ids = editable_feature_ids(request, project)
+        if editable_ids is not None and str(feature.id) not in editable_ids:
+            return Response(
+                {'detail': 'This feature is outside your assigned area.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         serializer = FeatureUpdateSerializer(
             feature,
             data=request.data,
@@ -511,6 +555,34 @@ class ProjectFeatureUpdateAPIView(APIView):
         )
 
 
+class ProjectAssignmentPolygonsAPIView(APIView):
+    """GET /api/projects/<project_id>/assignment-polygons/
+
+    The areas this engineer was assigned. The survey app draws them over the
+    site so the editable part of the project is visible at a glance; everything
+    outside is rendered grey and refuses edits.
+    """
+
+    def get(self, request, project_id):
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            return Response(
+                {'detail': 'Project not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not _engineer_can_access(request, project):
+            return _deny()
+
+        return Response(
+            {
+                'project_id': str(project.id),
+                'polygons': assignment_polygons(request, project),
+            }
+        )
+
+
 class FeaturePhotoUploadView(APIView):
     """POST /api/features/{feature_id}/upload-photo/"""
 
@@ -525,6 +597,13 @@ class FeaturePhotoUploadView(APIView):
 
         if not _engineer_can_access(request, feature.project):
             return _deny()
+
+        editable_ids = editable_feature_ids(request, feature.project)
+        if editable_ids is not None and str(feature.id) not in editable_ids:
+            return Response(
+                {'detail': 'This feature is outside your assigned area.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         if 'photo' not in request.FILES:
             return Response(
@@ -558,7 +637,7 @@ class FeaturePhotoUploadView(APIView):
             {
                 'id': str(feature.id),
                 'photo_url': (
-                    request.build_absolute_uri(feature.photo.url) if feature.photo else None
+                    request.build_absolute_uri(media_url(feature.photo)) if feature.photo else None
                 ),
                 'uploaded_at': feature.updated_at.isoformat(),
             },
