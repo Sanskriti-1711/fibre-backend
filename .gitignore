@@ -12,6 +12,9 @@ db.sqlite3-journal
 # Local dev database used by config.dev_settings (dev/setup.sh)
 db_dev.sqlite3
 db_dev.sqlite3-journal
+# Any other scratch SQLite file a local command leaves behind
+*.sqlite3
+*.sqlite3-journal
 
 # Migrations (optional � see note below)
 # **/migrations/**
@@ -58,4 +61,5 @@ run_lld_once.py
 permits/classify_labels.jsonl
 .mypy_cache/
 
-# Python type-checker cache (untracked; regenerated on every run)
+# Python linter/type-checker caches (regenerated on every run)
+.ruff_cache/
