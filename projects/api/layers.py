@@ -7,7 +7,6 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from config.media import media_url
 from projects.api.access import deny as _deny
 from projects.api.access import engineer_can_access as _engineer_can_access
 from projects.api.field_schema import derive_field_schema, has_editable
@@ -637,7 +636,7 @@ class FeaturePhotoUploadView(APIView):
             {
                 'id': str(feature.id),
                 'photo_url': (
-                    request.build_absolute_uri(media_url(feature.photo)) if feature.photo else None
+                    request.build_absolute_uri(feature.photo.url) if feature.photo else None
                 ),
                 'uploaded_at': feature.updated_at.isoformat(),
             },

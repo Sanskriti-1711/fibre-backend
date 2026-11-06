@@ -895,9 +895,11 @@ class FeatureSubmitAPIView(APIView):
             engineer = User.objects.filter(id=requested_engineer).first() or request.user
 
         # ``engineer_feature_queryset`` expands all three scopes. The old join on
-        # ``assignment_jobs__assignee_id`` matched twice when a feature had two
-        # jobs for the same engineer (project scope plus layer scope), so a
-        # valid submission answered 403 with an empty "missing" set.
+        # ``engineer_feature_queryset`` expands every scope (project, layer,
+        # feature and polygon). Joining ``assignment_jobs__assignee_id``
+        # instead missed project/layer jobs and matched twice when a feature
+        # had two jobs for the same engineer, so a valid submission could
+        # answer 403 with an empty "missing" set.
         features = engineer_feature_queryset(engineer.id).filter(id__in=feature_ids)
 
         found_ids = {str(feature.id) for feature in features}
@@ -908,12 +910,16 @@ class FeatureSubmitAPIView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Only allow submission from certain statuses
-        valid_statuses = [Feature.STATUS_ASSIGNED, Feature.STATUS_REDO]
+        # Only allow submission from certain statuses. Supervision features are
+        # created ``pending`` by the LLD handoff, so they become submittable once
+        # the engineer has recorded at least one reading; without a reading there
+        # is nothing for the planner to review.
+        valid_statuses = [Feature.STATUS_PENDING, Feature.STATUS_ASSIGNED, Feature.STATUS_REDO]
         invalid_features = [
             {'id': str(f.id), 'status': f.status}
             for f in features
             if f.status not in valid_statuses
+            or (f.status == Feature.STATUS_PENDING and not f.field_measurements)
         ]
 
         if invalid_features:
