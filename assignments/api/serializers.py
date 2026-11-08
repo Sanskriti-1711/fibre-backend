@@ -14,6 +14,13 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
     # embedded object via SerializerMethodField (a Field subclass), which a
     # narrower declaration would reject as an incompatible override.
     assignee: serializers.Field = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
+    # Span jobs arrive with their components explicit. The id alone cannot name
+    # them: only the layer properties say which span a duct, cable or PDP
+    # belongs to, so the client that grouped the span sends the list and this
+    # serializer checks every row is really a feature of the project.
+    feature_ids = serializers.ListField(
+        child=serializers.UUIDField(), required=False, write_only=True
+    )
 
     class Meta:
         model = AssignmentJob
@@ -25,6 +32,8 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
             'polygon',
             'polygon_id',
             'polygon_name',
+            'span_id',
+            'feature_ids',
             'covered_feature_ids',
             'assignee',
             'scope',
@@ -83,6 +92,19 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
             if polygon.get('type') not in ('Polygon', 'MultiPolygon'):
                 msg = 'Polygon must be a GeoJSON Polygon or MultiPolygon'
                 raise serializers.ValidationError(msg)
+        elif scope == AssignmentJob.SCOPE_SPAN:
+            span_id = attrs.get('span_id') or getattr(instance, 'span_id', None)
+            if not span_id:
+                msg = 'Span ID is required for span scope'
+                raise serializers.ValidationError(msg)
+            attrs['span_id'] = str(span_id).strip()
+            attrs['feature'] = None
+            attrs['layer_id'] = None
+            attrs['polygon'] = None
+            attrs['polygon_id'] = None
+            sent = attrs.pop('feature_ids', None)
+            if sent is not None:
+                attrs['covered_feature_ids'] = self._span_feature_ids(project, sent)
         else:
             msg = 'Invalid scope'
             raise serializers.ValidationError(msg)
@@ -92,6 +114,32 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(msg)
 
         return attrs
+
+    @staticmethod
+    def _span_feature_ids(project, raw_ids):
+        """The span's components, kept only if they belong to this project.
+
+        A span id is a free-text string out of a layer property, so the list the
+        client sends is not trusted on its own: a stale id or a hand-made request
+        would otherwise hand an engineer features from another project.
+        """
+        ids = [str(raw) for raw in raw_ids]
+        if not ids:
+            return []
+        if not project:
+            msg = 'Project is required for span scope'
+            raise serializers.ValidationError(msg)
+        known = {
+            str(value)
+            for value in Feature.objects.filter(project=project, id__in=ids).values_list(
+                'id', flat=True
+            )
+        }
+        missing = [value for value in ids if value not in known]
+        if missing:
+            msg = f'{len(missing)} span component(s) are not features of this project'
+            raise serializers.ValidationError(msg)
+        return ids
 
     def create(self, validated_data):
         scope = validated_data.get('scope')
@@ -127,6 +175,13 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
                 polygon_id=validated_data['polygon_id'],
                 assignee=assignee,
             ).delete()
+        elif scope == AssignmentJob.SCOPE_SPAN and project and validated_data.get('span_id'):
+            AssignmentJob.objects.filter(
+                project=project,
+                scope=AssignmentJob.SCOPE_SPAN,
+                span_id=validated_data['span_id'],
+                assignee=assignee,
+            ).delete()
 
         return super().create(validated_data)
 
@@ -153,6 +208,11 @@ class AssignmentJobDetailSerializer(AssignmentJobSerializer):
             data['feature'] = {
                 'id': str(instance.feature_id),
                 'status': instance.feature.status,
+            }
+        if instance.scope == AssignmentJob.SCOPE_SPAN:
+            data['span'] = {
+                'id': instance.span_id or '',
+                'feature_count': len(instance.covered_feature_ids or []),
             }
         if instance.scope == AssignmentJob.SCOPE_POLYGON:
             data['polygon'] = {

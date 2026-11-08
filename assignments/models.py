@@ -14,12 +14,14 @@ class AssignmentJob(models.Model):
     SCOPE_LAYER = 'layer'
     SCOPE_FEATURE = 'feature'
     SCOPE_POLYGON = 'polygon'
+    SCOPE_SPAN = 'span'
 
     SCOPE_CHOICES = [
         (SCOPE_PROJECT, 'Project'),
         (SCOPE_LAYER, 'Layer'),
         (SCOPE_FEATURE, 'Feature'),
         (SCOPE_POLYGON, 'Polygon'),
+        (SCOPE_SPAN, 'Span'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -36,6 +38,13 @@ class AssignmentJob(models.Model):
     polygon = models.JSONField(null=True, blank=True)
     polygon_id = models.CharField(max_length=255, blank=True, null=True)
     polygon_name = models.CharField(max_length=255, blank=True, default='')
+    # A span is the chamber-to-chamber unit of supervision work: one trench and
+    # every duct, chamber, cable or PDP that belongs to it. ``span_id`` is the
+    # key the package carries (SPAN_ID where the import stamps one, TRENCH_ID /
+    # PARENT_TRENCH on older civil layers) and ``covered_feature_ids`` holds the
+    # components that shared it when the job was saved. One span is one job, so
+    # a 78-component span no longer becomes 78 rows on an engineer's list.
+    span_id = models.CharField(max_length=255, blank=True, null=True)
     covered_feature_ids = models.JSONField(default=list, blank=True)
     assignee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='assignment_jobs')
     scope = models.CharField(max_length=20, choices=SCOPE_CHOICES)
@@ -72,6 +81,13 @@ class AssignmentJob(models.Model):
                 condition=models.Q(scope='polygon'),
                 name='unique_polygon_assignment',
             ),
+            models.UniqueConstraint(
+                # One span, one engineer: the same claim is replaced, while a
+                # second engineer can still join the same span (like a layer).
+                fields=['project', 'span_id', 'assignee'],
+                condition=models.Q(scope='span'),
+                name='unique_span_assignment',
+            ),
             # ``condition`` is the Django 5 argument; django-stubs 5.0.0 still
             # types the older ``check`` kwarg, so this is stub drift, not a bug.
             models.CheckConstraint(  # type: ignore[call-arg]
@@ -79,6 +95,13 @@ class AssignmentJob(models.Model):
                     models.Q(scope='project', layer_id__isnull=True, feature__isnull=True)
                     | models.Q(scope='layer', layer_id__isnull=False, feature__isnull=True)
                     | models.Q(scope='feature', feature__isnull=False)
+                    | models.Q(
+                        scope='span',
+                        layer_id__isnull=True,
+                        feature__isnull=True,
+                        polygon__isnull=True,
+                        span_id__isnull=False,
+                    )
                     | models.Q(
                         scope='polygon',
                         layer_id__isnull=True,
@@ -110,6 +133,15 @@ class AssignmentJob(models.Model):
             self.polygon = None
             self.polygon_id = None
             self.covered_feature_ids = []
+        if scope == self.SCOPE_SPAN:
+            # The components are sent with the job: nothing on the span id says
+            # which cables or PDPs belong to it, so there is nothing to resolve
+            # here and the list is kept exactly as the caller built it.
+            self.layer_id = None
+            self.feature = None
+            self.polygon = None
+            self.polygon_id = None
+            self.covered_feature_ids = list(self.covered_feature_ids or [])
         if scope == self.SCOPE_POLYGON:
             self.layer_id = None
             self.feature = None
@@ -148,7 +180,7 @@ class AssignmentJob(models.Model):
                 layer_id=self.layer_id,
                 status=Feature.STATUS_PENDING,
             ).update(status=Feature.STATUS_ASSIGNED)
-        elif scope == self.SCOPE_POLYGON and self.covered_feature_ids:
+        elif scope in (self.SCOPE_POLYGON, self.SCOPE_SPAN) and self.covered_feature_ids:
             Feature.objects.filter(
                 id__in=self.covered_feature_ids,
                 status=Feature.STATUS_PENDING,
@@ -162,6 +194,8 @@ class AssignmentJob(models.Model):
             target = f'{target} / Feature {self.feature.id}'
         elif self.scope == self.SCOPE_POLYGON:
             target = f'{target} / {self.polygon_name or self.polygon_id or "polygon"}'
+        elif self.scope == self.SCOPE_SPAN:
+            target = f'{target} / span {self.span_id or "span"}'
         return f'{target} -> {self.assignee.email}'
 
 
@@ -181,7 +215,7 @@ def _release_assigned_features(job: AssignmentJob) -> None:
         candidates = Feature.objects.filter(project_id=job.project_id, layer_id=job.layer_id)
     elif job.scope == AssignmentJob.SCOPE_PROJECT:
         candidates = Feature.objects.filter(project_id=job.project_id)
-    elif job.scope == AssignmentJob.SCOPE_POLYGON and job.covered_feature_ids:
+    elif job.scope in (AssignmentJob.SCOPE_POLYGON, AssignmentJob.SCOPE_SPAN) and job.covered_feature_ids:
         candidates = Feature.objects.filter(id__in=job.covered_feature_ids)
     else:
         return
@@ -202,7 +236,9 @@ def _release_assigned_features(job: AssignmentJob) -> None:
     covered_features = set(
         remaining.filter(scope=AssignmentJob.SCOPE_FEATURE).values_list('feature_id', flat=True)
     )
-    for polygon_ids in remaining.filter(scope=AssignmentJob.SCOPE_POLYGON).values_list(
+    for polygon_ids in remaining.filter(
+        scope__in=[AssignmentJob.SCOPE_POLYGON, AssignmentJob.SCOPE_SPAN]
+    ).values_list(
         'covered_feature_ids', flat=True
     ):
         covered_features.update(polygon_ids or [])

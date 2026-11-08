@@ -46,10 +46,12 @@ def engineer_feature_queryset(engineer_id):
     # A polygon job is already resolved to feature ids when the job is saved
     # (see assignments.coverage); expanding the stored snapshot here keeps the
     # access rule identical to what the map paints as editable.
+    # A span job is resolved to its components the same way, so both scopes
+    # expand from the snapshot rather than from a second walk of the layers.
     polygon_feature_ids: set[str] = set()
-    for feature_ids in jobs.filter(scope=AssignmentJob.SCOPE_POLYGON).values_list(
-        'covered_feature_ids', flat=True
-    ):
+    for feature_ids in jobs.filter(
+        scope__in=[AssignmentJob.SCOPE_POLYGON, AssignmentJob.SCOPE_SPAN]
+    ).values_list('covered_feature_ids', flat=True):
         polygon_feature_ids.update(feature_ids or [])
     if polygon_feature_ids:
         condition |= Q(id__in=polygon_feature_ids)
@@ -119,7 +121,7 @@ class AssignmentJobListCreateAPIView(generics.ListCreateAPIView):
             [job.project_id],
             'feature_assigned',
             actor=self.request.user,
-            entity_id=str(job.feature_id or job.layer_id or job.project_id),
+            entity_id=str(job.feature_id or job.layer_id or job.span_id or job.project_id),
             metadata={'scope': job.scope, 'assignee': str(job.assignee_id)},
         )
 
@@ -142,6 +144,14 @@ class AssignmentJobDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
 
 
 class AssignmentJobSummaryAPIView(APIView):
+    """Aggregated assignment counts, with the features each job covers.
+
+    Counts alone say how many supervisions exist, not how much work is behind
+    them: a project job and a single-span job both counted as "1". Each record
+    now carries its features (id, layer and status) plus a status breakdown, and
+    the payload carries the totals for the whole response.
+    """
+
     def get(self, request):
         project_id = request.query_params.get('project')
         assignee_id = request.query_params.get('assignee')
@@ -161,18 +171,118 @@ class AssignmentJobSummaryAPIView(APIView):
 
         assignments = assignments.order_by('scope', 'layer_id', 'created_at')
 
-        serializer = AssignmentJobDetailSerializer(assignments, many=True)
-        grouped: dict[str, list] = {'project': [], 'layer': [], 'feature': [], 'polygon': []}
-        for record in serializer.data:
+        jobs = list(assignments)
+        serializer = AssignmentJobDetailSerializer(jobs, many=True)
+        covered = self._covered_features(jobs)
+
+        grouped: dict[str, list] = {
+            'project': [],
+            'layer': [],
+            'feature': [],
+            'polygon': [],
+            'span': [],
+        }
+        status_by_id: dict[str, str] = {}
+        for job, record in zip(jobs, serializer.data):
+            features = covered.get(str(job.id), [])
+            record['feature_count'] = len(features)
+            record['features'] = features
+            record['feature_status_counts'] = self._status_counts(features)
+            for feature in features:
+                status_by_id[feature['id']] = feature['status']
             grouped.setdefault(record['scope'], []).append(record)
+
+        stats: dict[str, int] = {'total': len(status_by_id)}
+        for feature_status in status_by_id.values():
+            stats[feature_status] = stats.get(feature_status, 0) + 1
 
         return Response(
             {
                 'project_id': project_id,
                 'counts': {k: len(v) for k, v in grouped.items()},
+                'feature_total': len(status_by_id),
+                'stats': stats,
                 'assignments': grouped,
             }
         )
+
+    @staticmethod
+    def _covered_features(jobs):
+        """The feature rows each assignment covers, from one query.
+
+        A project job covers its whole project, a layer job its layer, a feature
+        job that row, and a polygon job the snapshot taken when it was saved —
+        the same expansion ``engineer_feature_queryset`` uses for access, so the
+        summary cannot disagree with what an engineer can open.
+        """
+        project_ids: set = set()
+        layer_pairs: set = set()
+        feature_ids: set = set()
+        polygon_ids: set = set()
+        for job in jobs:
+            if job.scope == AssignmentJob.SCOPE_PROJECT:
+                project_ids.add(job.project_id)
+            elif job.scope == AssignmentJob.SCOPE_LAYER and job.layer_id:
+                layer_pairs.add((job.project_id, job.layer_id))
+            elif job.scope == AssignmentJob.SCOPE_FEATURE and job.feature_id:
+                feature_ids.add(job.feature_id)
+            elif job.scope in (AssignmentJob.SCOPE_POLYGON, AssignmentJob.SCOPE_SPAN):
+                polygon_ids.update(job.covered_feature_ids or [])
+
+        if not (project_ids or layer_pairs or feature_ids or polygon_ids):
+            return {}
+
+        condition = Q(pk__in=[])
+        if project_ids:
+            condition |= Q(project_id__in=project_ids)
+        for project_key, layer_key in layer_pairs:
+            condition |= Q(project_id=project_key, layer_id=layer_key)
+        if feature_ids:
+            condition |= Q(id__in=feature_ids)
+        if polygon_ids:
+            condition |= Q(id__in=polygon_ids)
+
+        rows = Feature.objects.filter(condition).values(
+            'id', 'project_id', 'layer_id', 'layer_name', 'status'
+        )
+        by_project: dict = {}
+        by_layer: dict = {}
+        by_feature: dict = {}
+        by_id: dict = {}
+        for row in rows:
+            entry = {
+                'id': str(row['id']),
+                'layer_id': row['layer_id'],
+                'layer_name': row['layer_name'],
+                'status': row['status'],
+            }
+            by_project.setdefault(row['project_id'], []).append(entry)
+            by_layer.setdefault((row['project_id'], row['layer_id']), []).append(entry)
+            by_feature.setdefault(row['id'], []).append(entry)
+            by_id[row['id']] = entry
+
+        covered: dict[str, list] = {}
+        for job in jobs:
+            if job.scope == AssignmentJob.SCOPE_PROJECT:
+                covered[str(job.id)] = by_project.get(job.project_id, [])
+            elif job.scope == AssignmentJob.SCOPE_LAYER:
+                covered[str(job.id)] = by_layer.get((job.project_id, job.layer_id), [])
+            elif job.scope == AssignmentJob.SCOPE_FEATURE:
+                covered[str(job.id)] = by_feature.get(job.feature_id, [])
+            else:
+                covered[str(job.id)] = [
+                    by_id[feature_id]
+                    for feature_id in (job.covered_feature_ids or [])
+                    if feature_id in by_id
+                ]
+        return covered
+
+    @staticmethod
+    def _status_counts(features):
+        counts: dict[str, int] = {}
+        for feature in features:
+            counts[feature['status']] = counts.get(feature['status'], 0) + 1
+        return counts
 
 
 class JobAssignmentsListAPIView(APIView):
@@ -270,7 +380,7 @@ class JobAssignmentsListAPIView(APIView):
         layer_names: dict = {}
 
         for job in jobs:
-            if job.scope != AssignmentJob.SCOPE_POLYGON or not job.covered_feature_ids:
+            if job.scope not in (AssignmentJob.SCOPE_POLYGON, AssignmentJob.SCOPE_SPAN) or not job.covered_feature_ids:
                 continue
             rows = (
                 Feature.objects.filter(id__in=job.covered_feature_ids)
@@ -374,7 +484,7 @@ class JobAssignmentsListAPIView(APIView):
                     bucket('layer', layer_key)['photos'] += row['photos']
 
         for job in jobs:
-            if job.scope != AssignmentJob.SCOPE_POLYGON or not job.covered_feature_ids:
+            if job.scope not in (AssignmentJob.SCOPE_POLYGON, AssignmentJob.SCOPE_SPAN) or not job.covered_feature_ids:
                 continue
             polygon_features = Feature.objects.filter(id__in=job.covered_feature_ids)
             progress['polygon'][job.id] = {
@@ -441,7 +551,15 @@ class JobAssignmentsListAPIView(APIView):
             base['status_display'] = self._get_status_display(feature.status)
             return base
 
-        if job.scope == AssignmentJob.SCOPE_POLYGON:
+        if job.scope == AssignmentJob.SCOPE_SPAN:
+            base['span'] = {
+                'id': job.span_id or '',
+                'name': job.span_id or 'Assigned span',
+                'feature_count': len(job.covered_feature_ids or []),
+            }
+            status_counts = counts['polygon'].get(job.id, {})
+            covered = progress['polygon'].get(job.id, {})
+        elif job.scope == AssignmentJob.SCOPE_POLYGON:
             base['polygon'] = {
                 'id': job.polygon_id or '',
                 'name': job.polygon_name or job.polygon_id or 'Assigned area',
@@ -497,7 +615,8 @@ class JobAssignmentsListAPIView(APIView):
         polygon_jobs = [
             job
             for job in jobs
-            if job.scope == AssignmentJob.SCOPE_POLYGON and job.covered_feature_ids
+            if job.scope in (AssignmentJob.SCOPE_POLYGON, AssignmentJob.SCOPE_SPAN)
+            and job.covered_feature_ids
         ]
         feature_ids = {
             job.feature_id
