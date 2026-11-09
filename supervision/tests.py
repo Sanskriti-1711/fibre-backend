@@ -19,6 +19,7 @@ from django.test import TestCase, override_settings
 from PIL import Image
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from config.media import signed_media_url
 from projects.models import Feature, Project
 from supervision.models import FeaturePhoto
 from supervision.storage import (
@@ -266,11 +267,11 @@ class MediaServingTests(TestCase):
 
     def get(self, path=None, **kwargs):
         with override_settings(MEDIA_ROOT=self.media_root):
-            return self.client.get('/media/%s' % (path or self.name), **kwargs)
+            return self.client.get(signed_media_url(path or self.name), **kwargs)
 
     def head(self, path=None):
         with override_settings(MEDIA_ROOT=self.media_root):
-            return self.client.head('/media/%s' % (path or self.name))
+            return self.client.head(signed_media_url(path or self.name))
 
     def test_a_stored_photo_is_served_with_debug_off(self):
         with override_settings(DEBUG=False):
@@ -290,17 +291,23 @@ class MediaServingTests(TestCase):
 
     def test_a_missing_file_is_404_not_a_crash(self):
         with override_settings(DEBUG=False):
-            response = self.client.get('/media/feature_photos/nope.png')
+            response = self.client.get(signed_media_url('feature_photos/nope.png'))
 
         self.assertEqual(response.status_code, 404)
 
+    def test_an_unsigned_link_is_refused(self):
+        with override_settings(DEBUG=False):
+            response = self.client.get(f'/media/{self.name}')
+
+        self.assertEqual(response.status_code, 403)
+
     def test_traversal_cannot_read_outside_media_root(self):
         with override_settings(DEBUG=False):
-            response = self.client.get('/media/..%2Fconfig%2Fsettings.py')
+            response = self.client.get(signed_media_url('../config/settings.py'))
 
-        # Django rejects the path before the view (400) or safe_join does (404);
-        # either way the file must not come back.
-        self.assertIn(response.status_code, (400, 404))
+        # The signature names the path it was issued for, so a traversal is
+        # refused before ``safe_join`` is even reached.
+        self.assertIn(response.status_code, (400, 403, 404))
         self.assertNotIn(b'SECRET_KEY', response.content)
 
     def test_writes_are_refused(self):

@@ -4,13 +4,13 @@ Covers: GPS traces, trench classifications, CRM risk assessments,
 hazards, field evidence, and survey change version control.
 """
 
-import hashlib
 import uuid
 
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from projects.photo_gallery import digest
 from supervision.storage import get_evidence_storage
 
 # ── GPS Trace ──────────────────────────────────────────────────────────────
@@ -736,18 +736,6 @@ class SurveyFeature(models.Model):
         return f'SurveyFeature {self.id} — HLD:{hld} — {self.get_survey_status_display()}'
 
 
-def _photo_digest(upload):
-    """(sha256 hex digest, byte count) of an upload, read once and rewound."""
-    digest = hashlib.sha256()
-    size = 0
-    upload.seek(0)
-    for chunk in upload.chunks():
-        digest.update(chunk)
-        size += len(chunk)
-    upload.seek(0)
-    return digest.hexdigest(), size
-
-
 class SurveyFeaturePhoto(models.Model):
     """One of several site photos a survey engineer attaches to a survey feature.
 
@@ -805,7 +793,7 @@ class SurveyFeaturePhoto(models.Model):
         if not self.project_id and self.survey_feature_id:
             self.project_id = self.survey_feature.project_id
         if self.image and not self.sha256:
-            self.sha256, self.size_bytes = _photo_digest(self.image)
+            self.sha256, self.size_bytes = digest(self.image)
         if not self.storage_backend:
             self.storage_backend = getattr(self.image.storage, 'label', '')
         super().save(*args, **kwargs)

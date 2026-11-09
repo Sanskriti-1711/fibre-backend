@@ -1,9 +1,10 @@
-from django.db.models import Max
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from projects.api.access import engineer_can_access
 from projects.models import Feature, Project
+from projects.photo_gallery import attach_photos
 from supervision.design_change import (
     REQUEST_PENDING,
     project_requests,
@@ -14,59 +15,29 @@ from supervision.models import FeatureDecisionRecord, FeaturePhoto
 from supervision.serializers import FeatureDecisionRecordSerializer, FeaturePhotoSerializer
 
 
-def _validate_photo(upload):
-    """Return an error string for an unacceptable upload, or None."""
-    if upload.content_type not in FeaturePhoto.ALLOWED_CONTENT_TYPES:
-        return 'Invalid file type. Only JPEG and PNG are allowed.'
-    if not upload.size:
-        return 'The file is empty.'
-    if upload.size > FeaturePhoto.MAX_BYTES:
-        limit_mb = FeaturePhoto.MAX_BYTES / (1024 * 1024)
-        return f'File too large. Maximum size is {limit_mb:g}MB.'
-    return None
+def _can_edit_feature_photos(request, feature) -> bool:
+    """The engineer assigned to the project, or a planner/admin.
+
+    Reading the gallery stays open to any signed-in user (the review pages show
+    the same evidence); writing it is what was previously ungated, so any
+    engineer could upload into, or delete from, another project's record.
+    """
+    return engineer_can_access(request, feature.project)
 
 
 def _attach_photos(feature, uploads, user):
-    """Append uploads to a feature's gallery.
-
-    Returns (created_photos, error_response). Validates the whole batch first so
-    a bad file in the middle does not leave a half-saved gallery.
-    """
-    existing = feature.photos.count()
-    remaining = FeaturePhoto.MAX_PER_FEATURE - existing
-    if len(uploads) > remaining:
-        return None, Response(
-            {
-                'detail': (
-                    f'Maximum {FeaturePhoto.MAX_PER_FEATURE} photos per feature. '
-                    f'{existing} already uploaded, {max(remaining, 0)} slot(s) left.'
-                )
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    for upload in uploads:
-        error = _validate_photo(upload)
-        if error:
-            return None, Response(
-                {'detail': f'{upload.name}: {error}'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-    next_order = feature.photos.aggregate(Max('order')).get('order__max') if existing else None
-    next_order = 0 if next_order is None else next_order + 1
-
-    created = []
-    for offset, upload in enumerate(uploads):
-        created.append(
-            FeaturePhoto.objects.create(
-                feature=feature,
-                image=upload,
-                uploaded_by=user if user and user.is_authenticated else None,
-                order=next_order + offset,
-            )
-        )
-    return created, None
+    """Append uploads to a feature's gallery (projects.photo_gallery owns the rules)."""
+    return attach_photos(
+        photos=feature.photos,
+        model=FeaturePhoto,
+        owner_field='feature',
+        owner=feature,
+        uploads=uploads,
+        user=user,
+        allowed_content_types=FeaturePhoto.ALLOWED_CONTENT_TYPES,
+        max_bytes=FeaturePhoto.MAX_BYTES,
+        max_per_feature=FeaturePhoto.MAX_PER_FEATURE,
+    )
 
 
 class FeaturePhotosView(APIView):
@@ -104,6 +75,12 @@ class FeaturePhotosView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        if not _can_edit_feature_photos(request, feature):
+            return Response(
+                {'detail': 'Not allowed to add photos to this feature'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         uploads = request.FILES.getlist('photos') or request.FILES.getlist('photo')
         if not uploads:
             return Response(
@@ -132,11 +109,19 @@ class FeaturePhotoDetailView(APIView):
 
     def delete(self, request, feature_id, photo_id):
         try:
-            photo = FeaturePhoto.objects.get(id=photo_id, feature_id=feature_id)
+            photo = FeaturePhoto.objects.select_related('feature').get(
+                id=photo_id, feature_id=feature_id
+            )
         except FeaturePhoto.DoesNotExist:
             return Response(
                 {'detail': 'Photo not found'},
                 status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not _can_edit_feature_photos(request, photo.feature):
+            return Response(
+                {'detail': 'Not allowed to remove photos from this feature'},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         photo.image.delete(save=False)

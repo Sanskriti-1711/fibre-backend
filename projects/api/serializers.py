@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
+from config.media import media_url
 from projects.models.feature import Feature
 from projects.models.project import Project
 
@@ -88,12 +89,11 @@ class FeatureSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_photo_url(self, obj):
-        if obj.photo:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.photo.url)
-            return obj.photo.url
-        return None
+        if not obj.photo:
+            return None
+        url = media_url(obj.photo)
+        request = self.context.get('request')
+        return request.build_absolute_uri(url) if request else url
 
 
 class FeatureUpdateSerializer(serializers.ModelSerializer):

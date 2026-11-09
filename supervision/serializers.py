@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from config.media import media_url
 from supervision.models import FeatureDecisionRecord, FeaturePhoto
 
 
@@ -30,10 +31,9 @@ class FeaturePhotoSerializer(serializers.ModelSerializer):
     def get_url(self, obj):
         if not obj.image:
             return None
+        url = media_url(obj.image)
         request = self.context.get('request')
-        if request:
-            return request.build_absolute_uri(obj.image.url)
-        return obj.image.url
+        return request.build_absolute_uri(url) if request else url
 
     def get_uploaded_by(self, obj):
         if not obj.uploaded_by_id:

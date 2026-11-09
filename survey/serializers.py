@@ -3,6 +3,7 @@
 from django.core.exceptions import ValidationError
 from rest_framework import serializers
 
+from config.media import media_url
 from projects.models import Feature
 from survey.models import SurveyFeaturePhoto
 
@@ -320,12 +321,11 @@ class SurveyFeatureSerializer(serializers.ModelSerializer):
     photo_url = serializers.SerializerMethodField()
 
     def get_photo_url(self, obj):
-        if obj.photo:
-            request = self.context.get('request')
-            if request is not None:
-                return request.build_absolute_uri(obj.photo.url)
-            return obj.photo.url
-        return None
+        if not obj.photo:
+            return None
+        url = media_url(obj.photo)
+        request = self.context.get('request')
+        return request.build_absolute_uri(url) if request is not None else url
 
     class Meta:
         model = SurveyFeature
@@ -384,10 +384,9 @@ class SurveyFeaturePhotoSerializer(serializers.ModelSerializer):
     def get_url(self, obj):
         if not obj.image:
             return None
+        url = media_url(obj.image)
         request = self.context.get('request')
-        if request:
-            return request.build_absolute_uri(obj.image.url)
-        return obj.image.url
+        return request.build_absolute_uri(url) if request else url
 
     def get_uploaded_by(self, obj):
         if not obj.uploaded_by_id:

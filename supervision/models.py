@@ -1,28 +1,11 @@
-import hashlib
 import uuid
 
 from django.conf import settings
 from django.db import models
 
 from projects.models import Feature, Project
+from projects.photo_gallery import digest
 from supervision.storage import get_evidence_storage
-
-
-def _digest(upload):
-    """(sha256 hex digest, byte count) of an upload, read once and rewound.
-
-    The digest is what makes a photo provable: the same bytes re-uploaded, or a
-    file that changed after review, can be told apart without keeping a second
-    copy. ``upload.chunks()`` streams, so a 10 MB photo is never held twice.
-    """
-    digest = hashlib.sha256()
-    size = 0
-    upload.seek(0)
-    for chunk in upload.chunks():
-        digest.update(chunk)
-        size += len(chunk)
-    upload.seek(0)
-    return digest.hexdigest(), size
 
 
 class FeaturePhoto(models.Model):
@@ -98,7 +81,7 @@ class FeaturePhoto(models.Model):
         if not self.project_id and self.feature_id:
             self.project_id = self.feature.project_id
         if self.image and not self.sha256:
-            self.sha256, self.size_bytes = _digest(self.image)
+            self.sha256, self.size_bytes = digest(self.image)
         if not self.storage_backend:
             self.storage_backend = getattr(self.image.storage, 'label', '')
         super().save(*args, **kwargs)

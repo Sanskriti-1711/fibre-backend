@@ -9,7 +9,9 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from config.media import media_url
 from projects.models import Feature, Project
+from projects.photo_gallery import attach_photos, next_order
 
 from .models import (
     ApprovalRecord,
@@ -863,7 +865,8 @@ class SurveyFeaturePhotoUploadView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Save the photo
+        # Kept for the legacy single-photo column below; classification only
+        # reads the upload, it never stores it.
         sf.photo = photo
 
         # Tier-1 A1: classify the photo so tags drive the A3 auto-fill.
@@ -883,20 +886,23 @@ class SurveyFeaturePhotoUploadView(APIView):
         except Exception:
             sf.photo_tags = []
 
-        sf.save()
-
-        # Keep the legacy single-photo column for older clients, but append the
-        # same bytes to the gallery so a second photo does not replace the first.
+        # One copy of the bytes: the gallery row stores the upload, then the
+        # legacy single-photo column points at that same stored name. Saving
+        # `sf.photo` and *then* creating the gallery row wrote the file twice,
+        # so every upload through this route cost double the storage.
         try:
             photo.seek(0)
-            SurveyFeaturePhoto.objects.create(
+            gallery_photo = SurveyFeaturePhoto.objects.create(
                 survey_feature=sf,
                 image=photo,
                 uploaded_by=request.user if request.user.is_authenticated else None,
-                order=sf.photos.count(),
+                order=next_order(sf.photos),
             )
-        except Exception:  # noqa: BLE001 — the photo is already saved on the row
-            pass
+        except Exception:  # noqa: BLE001 — fall back to the legacy column alone
+            sf.save()
+        else:
+            sf.photo.name = gallery_photo.image.name
+            sf.save()
 
         # Tier-1 A3: field auto-fill suggestions derived from the tags.
         from .auto_fill import autofill_from_tags
@@ -906,7 +912,7 @@ class SurveyFeaturePhotoUploadView(APIView):
         return Response(
             {
                 'id': str(sf.id),
-                'photo_url': request.build_absolute_uri(sf.photo.url) if sf.photo else None,
+                'photo_url': request.build_absolute_uri(media_url(sf.photo)) if sf.photo else None,
                 'photo_tags': sf.photo_tags,
                 'suggestions': suggestions,
                 'uploaded_at': sf.updated_at.isoformat(),
@@ -925,56 +931,24 @@ def _can_edit_survey_photos(request, survey_feature):
     return survey_feature.engineer_id == user.id
 
 
-def _validate_survey_photo(upload):
-    """Return an error string for an unacceptable upload, or None."""
-    if upload.content_type not in SurveyFeaturePhoto.ALLOWED_CONTENT_TYPES:
-        return 'Invalid file type. Only JPEG and PNG are allowed.'
-    if not upload.size:
-        return 'The file is empty.'
-    if upload.size > SurveyFeaturePhoto.MAX_BYTES:
-        limit_mb = SurveyFeaturePhoto.MAX_BYTES / (1024 * 1024)
-        return f'File too large. Maximum size is {limit_mb:g}MB.'
-    return None
-
-
 def _attach_survey_photos(survey_feature, uploads, user):
     """Append uploads to a survey feature's gallery.
 
-    Validates the whole batch first so a bad file in the middle does not leave
-    a half-saved gallery (same contract as the supervision FeaturePhoto view).
+    The batch validation, the per-feature cap, the type allow-list and the
+    ordering are ``projects.photo_gallery``'s — the supervision gallery calls
+    the same code, so the two cannot answer differently again.
     """
-    existing = survey_feature.photos.count()
-    remaining = SurveyFeaturePhoto.MAX_PER_FEATURE - existing
-    if len(uploads) > remaining:
-        return None, Response(
-            {
-                'detail': (
-                    f'Maximum {SurveyFeaturePhoto.MAX_PER_FEATURE} photos per feature. '
-                    f'{existing} already uploaded, {max(remaining, 0)} slot(s) left.'
-                )
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    for upload in uploads:
-        error = _validate_survey_photo(upload)
-        if error:
-            return None, Response(
-                {'detail': f'{upload.name}: {error}'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-    created = []
-    for offset, upload in enumerate(uploads):
-        created.append(
-            SurveyFeaturePhoto.objects.create(
-                survey_feature=survey_feature,
-                image=upload,
-                uploaded_by=user if user and user.is_authenticated else None,
-                order=existing + offset,
-            )
-        )
-    return created, None
+    return attach_photos(
+        photos=survey_feature.photos,
+        model=SurveyFeaturePhoto,
+        owner_field='survey_feature',
+        owner=survey_feature,
+        uploads=uploads,
+        user=user,
+        allowed_content_types=SurveyFeaturePhoto.ALLOWED_CONTENT_TYPES,
+        max_bytes=SurveyFeaturePhoto.MAX_BYTES,
+        max_per_feature=SurveyFeaturePhoto.MAX_PER_FEATURE,
+    )
 
 
 class SurveyFeaturePhotosView(APIView):
