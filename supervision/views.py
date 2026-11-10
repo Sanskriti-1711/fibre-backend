@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from projects.api.access import engineer_can_access
+from projects.api.layers import editable_feature_ids
 from projects.models import Feature, Project
 from projects.photo_gallery import attach_photos
 from supervision.design_change import (
@@ -16,13 +17,18 @@ from supervision.serializers import FeatureDecisionRecordSerializer, FeaturePhot
 
 
 def _can_edit_feature_photos(request, feature) -> bool:
-    """The engineer assigned to the project, or a planner/admin.
+    """The engineer assigned to this feature's scope, or a planner/admin.
 
     Reading the gallery stays open to any signed-in user (the review pages show
-    the same evidence); writing it is what was previously ungated, so any
-    engineer could upload into, or delete from, another project's record.
+    the same evidence); writing follows the same assignment scopes as the map's
+    edit lock. Checking only project membership would let a feature- or
+    layer-scoped engineer write evidence onto every feature in the project.
     """
-    return engineer_can_access(request, feature.project)
+    if not engineer_can_access(request, feature.project):
+        return False
+
+    editable_ids = editable_feature_ids(request, feature.project)
+    return editable_ids is None or str(feature.id) in editable_ids
 
 
 def _attach_photos(feature, uploads, user):

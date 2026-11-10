@@ -15,10 +15,12 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, TestCase, override_settings
 from PIL import Image
+from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from assignments.models import AssignmentJob
 from config.media import signed_media_url
 from projects.models import Feature, Project
 from supervision.models import FeaturePhoto
@@ -28,6 +30,7 @@ from supervision.storage import (
     get_evidence_storage,
     reset_evidence_storage,
 )
+from supervision.views import _can_edit_feature_photos
 from users.models import User
 
 
@@ -326,6 +329,115 @@ class MediaServingTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response['Location'], f'https://media.example.com/{self.name}')
+
+
+class FeaturePhotoWriteScopeTests(TestCase):
+    """Photo writes follow assignment scope, not just project membership."""
+
+    def setUp(self):
+        self.project = Project.objects.create(name='Photo scope test')
+        self.feature_in_layer = Feature.objects.create(
+            project=self.project, layer_name='Spans', layer_id='spans'
+        )
+        self.sibling_in_layer = Feature.objects.create(
+            project=self.project, layer_name='Spans', layer_id='spans'
+        )
+        self.feature_in_other_layer = Feature.objects.create(
+            project=self.project, layer_name='Chambers', layer_id='chambers'
+        )
+        self.engineer = User.objects.create_user(
+            email='photo-scope@example.com',
+            password='demo1234',
+            full_name='Photo Scope',
+            role=User.Role.ENGINEER,
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.engineer)
+
+    def assign(self, **fields):
+        return AssignmentJob.objects.create(
+            project=self.project, assignee=self.engineer, **fields
+        )
+
+    def can_write(self, feature):
+        request = RequestFactory().post('/api/photos/')
+        request.user = self.engineer
+        return _can_edit_feature_photos(request, feature)
+
+    def test_an_unassigned_engineer_cannot_write(self):
+        self.assertFalse(self.can_write(self.feature_in_layer))
+
+    def test_feature_scope_allows_only_the_assigned_feature(self):
+        self.assign(
+            scope=AssignmentJob.SCOPE_FEATURE,
+            feature=self.feature_in_layer,
+        )
+
+        self.assertTrue(self.can_write(self.feature_in_layer))
+        self.assertFalse(self.can_write(self.sibling_in_layer))
+        self.assertFalse(self.can_write(self.feature_in_other_layer))
+
+    def test_layer_scope_allows_only_the_assigned_layer(self):
+        self.assign(scope=AssignmentJob.SCOPE_LAYER, layer_id='spans')
+
+        self.assertTrue(self.can_write(self.feature_in_layer))
+        self.assertTrue(self.can_write(self.sibling_in_layer))
+        self.assertFalse(self.can_write(self.feature_in_other_layer))
+
+    def test_span_scope_allows_only_covered_features(self):
+        self.assign(
+            scope=AssignmentJob.SCOPE_SPAN,
+            span_id='span-1',
+            covered_feature_ids=[str(self.feature_in_layer.id)],
+        )
+
+        self.assertTrue(self.can_write(self.feature_in_layer))
+        self.assertFalse(self.can_write(self.feature_in_other_layer))
+
+    def test_project_scope_allows_the_whole_project(self):
+        self.assign(scope=AssignmentJob.SCOPE_PROJECT)
+
+        self.assertTrue(self.can_write(self.feature_in_layer))
+        self.assertTrue(self.can_write(self.feature_in_other_layer))
+
+    def test_feature_scope_upload_to_another_feature_is_403(self):
+        self.assign(
+            scope=AssignmentJob.SCOPE_FEATURE,
+            feature=self.feature_in_layer,
+        )
+
+        response = self.client.post(
+            f'/api/features/{self.feature_in_other_layer.id}/photos/',
+            {
+                'photos': SimpleUploadedFile(
+                    'site.png', png_bytes(), content_type='image/png'
+                )
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 403, response.content[:300])
+        self.assertEqual(FeaturePhoto.objects.count(), 0)
+
+    def test_feature_scope_delete_on_another_feature_is_403(self):
+        self.assign(
+            scope=AssignmentJob.SCOPE_FEATURE,
+            feature=self.feature_in_layer,
+        )
+        photo = FeaturePhoto.objects.create(
+            feature=self.feature_in_other_layer,
+            image='feature_photos/other.png',
+            sha256='0' * 64,
+            size_bytes=0,
+            storage_backend='local',
+        )
+
+        response = self.client.delete(
+            f'/api/features/{self.feature_in_other_layer.id}/photos/{photo.id}/'
+        )
+
+        self.assertEqual(response.status_code, 403, response.content[:300])
+        self.assertTrue(FeaturePhoto.objects.filter(id=photo.id).exists())
 
 
 class DesignChangeLoopTests(TestCase):
