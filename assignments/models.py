@@ -38,12 +38,13 @@ class AssignmentJob(models.Model):
     polygon = models.JSONField(null=True, blank=True)
     polygon_id = models.CharField(max_length=255, blank=True, null=True)
     polygon_name = models.CharField(max_length=255, blank=True, default='')
-    # A span is the chamber-to-chamber unit of supervision work: one trench and
-    # every duct, chamber, cable or PDP that belongs to it. ``span_id`` is the
-    # key the package carries (SPAN_ID where the import stamps one, TRENCH_ID /
-    # PARENT_TRENCH on older civil layers) and ``covered_feature_ids`` holds the
-    # components that shared it when the job was saved. One span is one job, so
-    # a 78-component span no longer becomes 78 rows on an engineer's list.
+    # A span is a layerwise unit of supervision work: the trench span, duct
+    # span or cable span that shares ``SPAN_ID`` (``TRENCH_ID`` /
+    # ``PARENT_TRENCH`` on older civil layers). ``layer_id`` keeps that span in
+    # one layer, so the same span key can have a separate trench, duct and
+    # cable job. ``covered_feature_ids`` holds the components that shared it
+    # when the job was saved. One span is one job, so a 78-component span no
+    # longer becomes 78 rows on an engineer's list.
     span_id = models.CharField(max_length=255, blank=True, null=True)
     covered_feature_ids = models.JSONField(default=list, blank=True)
     assignee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='assignment_jobs')
@@ -82,9 +83,11 @@ class AssignmentJob(models.Model):
                 name='unique_polygon_assignment',
             ),
             models.UniqueConstraint(
-                # One span, one engineer: the same claim is replaced, while a
-                # second engineer can still join the same span (like a layer).
-                fields=['project', 'span_id', 'assignee'],
+                # One span per layer per engineer: the same claim is replaced,
+                # while a second engineer can still join the same span. The
+                # layer is part of the identity, so TR-000010 can hold a
+                # trench span, a duct span and a cable span side by side.
+                fields=['project', 'span_id', 'layer_id', 'assignee'],
                 condition=models.Q(scope='span'),
                 name='unique_span_assignment',
             ),
@@ -97,7 +100,6 @@ class AssignmentJob(models.Model):
                     | models.Q(scope='feature', feature__isnull=False)
                     | models.Q(
                         scope='span',
-                        layer_id__isnull=True,
                         feature__isnull=True,
                         polygon__isnull=True,
                         span_id__isnull=False,
@@ -135,9 +137,9 @@ class AssignmentJob(models.Model):
             self.covered_feature_ids = []
         if scope == self.SCOPE_SPAN:
             # The components are sent with the job: nothing on the span id says
-            # which cables or PDPs belong to it, so there is nothing to resolve
-            # here and the list is kept exactly as the caller built it.
-            self.layer_id = None
+            # which components belong to it, so there is nothing to resolve
+            # here and the list is kept exactly as the caller built it. The
+            # layer is part of the span's identity and must survive the save.
             self.feature = None
             self.polygon = None
             self.polygon_id = None

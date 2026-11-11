@@ -99,12 +99,38 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(msg)
             attrs['span_id'] = str(span_id).strip()
             attrs['feature'] = None
-            attrs['layer_id'] = None
             attrs['polygon'] = None
             attrs['polygon_id'] = None
             sent = attrs.pop('feature_ids', None)
+            requested_layer = str(
+                attrs.get('layer_id') or getattr(instance, 'layer_id', None) or ''
+            ).strip()
+            feature_layer = ''
             if sent is not None:
-                attrs['covered_feature_ids'] = self._span_feature_ids(project, sent)
+                ids = self._span_feature_ids(project, sent)
+                attrs['covered_feature_ids'] = ids
+                if ids:
+                    layers = {
+                        str(value).strip()
+                        for value in Feature.objects.filter(id__in=ids).values_list(
+                            'layer_id', flat=True
+                        )
+                    }
+                    layers.discard('')
+                    if len(layers) != 1:
+                        msg = 'A span must contain components from exactly one layer'
+                        raise serializers.ValidationError(msg)
+                    feature_layer = layers.pop()
+            if feature_layer:
+                if requested_layer and requested_layer != feature_layer:
+                    msg = 'Span layer must match the layer of its components'
+                    raise serializers.ValidationError(msg)
+                attrs['layer_id'] = feature_layer
+            elif requested_layer:
+                attrs['layer_id'] = requested_layer
+            else:
+                msg = 'Layer ID is required for span scope'
+                raise serializers.ValidationError(msg)
         else:
             msg = 'Invalid scope'
             raise serializers.ValidationError(msg)
@@ -180,6 +206,7 @@ class AssignmentJobSerializer(serializers.ModelSerializer):
                 project=project,
                 scope=AssignmentJob.SCOPE_SPAN,
                 span_id=validated_data['span_id'],
+                layer_id=validated_data.get('layer_id'),
                 assignee=assignee,
             ).delete()
 
@@ -212,6 +239,7 @@ class AssignmentJobDetailSerializer(AssignmentJobSerializer):
         if instance.scope == AssignmentJob.SCOPE_SPAN:
             data['span'] = {
                 'id': instance.span_id or '',
+                'layer_id': instance.layer_id or '',
                 'feature_count': len(instance.covered_feature_ids or []),
             }
         if instance.scope == AssignmentJob.SCOPE_POLYGON:

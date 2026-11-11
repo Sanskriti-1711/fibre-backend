@@ -372,7 +372,10 @@ class JobAssignmentsListAPIView(APIView):
         """
         project_ids = {job.project_id for job in jobs if job.scope == AssignmentJob.SCOPE_PROJECT}
         layer_pairs = {
-            (job.project_id, job.layer_id) for job in jobs if job.scope == AssignmentJob.SCOPE_LAYER
+            (job.project_id, job.layer_id)
+            for job in jobs
+            if job.scope in (AssignmentJob.SCOPE_LAYER, AssignmentJob.SCOPE_SPAN)
+            and job.layer_id
         }
         by_project: dict = {}
         by_layer: dict = {}
@@ -555,8 +558,15 @@ class JobAssignmentsListAPIView(APIView):
             base['span'] = {
                 'id': job.span_id or '',
                 'name': job.span_id or 'Assigned span',
+                'layer_id': job.layer_id or '',
                 'feature_count': len(job.covered_feature_ids or []),
             }
+            if job.layer_id:
+                layer_key = (job.project_id, job.layer_id)
+                base['layer'] = {
+                    'id': job.layer_id,
+                    'name': layer_names.get(layer_key) or job.layer_id,
+                }
             status_counts = counts['polygon'].get(job.id, {})
             covered = progress['polygon'].get(job.id, {})
         elif job.scope == AssignmentJob.SCOPE_POLYGON:
@@ -776,6 +786,8 @@ class EngineerActivityAPIView(APIView):
                 'id': job.polygon_id,
                 'name': job.polygon_name or job.polygon_id,
             }
+        if job.scope == AssignmentJob.SCOPE_SPAN:
+            return {'type': 'span', 'id': job.span_id, 'layer_id': job.layer_id}
         return {'type': 'feature', 'id': str(job.feature.id) if job.feature else None}
 
     def _get_status_display(self, status):

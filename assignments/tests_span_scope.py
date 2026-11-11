@@ -1,9 +1,9 @@
-"""One span is one job.
+"""One span is one layerwise job.
 
-The assignment page resolves a span to the components that share its id and
-used to POST one feature job per component, so a 78-component span became 78
-rows on the engineer's list and deleting one left the span only partly
-assigned. A span job covers the whole span in a single row.
+The assignment page resolves a span to the components of one layer that share
+its id, so a trench span never claims ducts or cables too. A 78-component
+mixed-layer target used to become 78 feature rows; now it becomes one row per
+layer, each with its own components and engineer claim.
 
 Run with:
     python manage.py test --settings=config.test_settings assignments
@@ -25,10 +25,16 @@ class SpanScopeAssignmentTests(TestCase):
         self.planner = make_user('planner@example.com', role=User.Role.SUBADMIN)
         self.engineer = make_user('engineer@example.com', role=User.Role.ENGINEER)
         self.project = make_survey_copy(make_ftth_project())
-        self.trench = make_feature(
+        self.trench_a = make_feature(
             self.project, layer_id='final_trenches', layer_name='final_trenches'
         )
-        self.duct = make_feature(
+        self.trench_b = make_feature(
+            self.project, layer_id='final_trenches', layer_name='final_trenches'
+        )
+        self.duct_a = make_feature(
+            self.project, layer_id='distribution_ducts', layer_name='distribution_ducts'
+        )
+        self.duct_b = make_feature(
             self.project, layer_id='distribution_ducts', layer_name='distribution_ducts'
         )
         self.client = APIClient()
@@ -39,27 +45,60 @@ class SpanScopeAssignmentTests(TestCase):
             'project': str(self.project.id),
             'scope': 'span',
             'span_id': 'TRENCH-00012',
-            'feature_ids': [str(self.trench.id), str(self.duct.id)],
+            'feature_ids': [str(self.trench_a.id), str(self.trench_b.id)],
             'assignee': str(self.engineer.id),
         }
         payload.update(overrides)
         return self.client.post('/api/assignments/', payload, format='json')
 
-    def test_one_span_is_one_job_over_all_its_components(self):
+    def test_one_span_is_one_job_over_all_its_layer_components(self):
         response = self.create()
 
         self.assertEqual(response.status_code, 201, response.data)
         job = AssignmentJob.objects.get(pk=response.data['id'])
         self.assertEqual(job.scope, AssignmentJob.SCOPE_SPAN)
         self.assertEqual(job.span_id, 'TRENCH-00012')
+        self.assertEqual(job.layer_id, 'final_trenches')
+        detail = self.client.get(f'/api/assignments/{response.data["id"]}/')
+        self.assertEqual(detail.status_code, 200, detail.data)
+        self.assertEqual(detail.data['span']['layer_id'], 'final_trenches')
+        self.assertEqual(detail.data['layer']['id'], 'final_trenches')
         self.assertEqual(
-            set(job.covered_feature_ids), {str(self.trench.id), str(self.duct.id)}
+            set(job.covered_feature_ids), {str(self.trench_a.id), str(self.trench_b.id)}
         )
-        self.trench.refresh_from_db()
-        self.duct.refresh_from_db()
-        self.assertEqual(self.trench.status, Feature.STATUS_ASSIGNED)
-        self.assertEqual(self.duct.status, Feature.STATUS_ASSIGNED)
+        self.trench_a.refresh_from_db()
+        self.trench_b.refresh_from_db()
+        self.assertEqual(self.trench_a.status, Feature.STATUS_ASSIGNED)
+        self.assertEqual(self.trench_b.status, Feature.STATUS_ASSIGNED)
         self.assertEqual(AssignmentJob.objects.count(), 1)
+
+    def test_a_span_cannot_mix_layers(self):
+        response = self.create(feature_ids=[str(self.trench_a.id), str(self.duct_a.id)])
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('exactly one layer', str(response.data))
+        self.assertFalse(AssignmentJob.objects.exists())
+
+    def test_the_same_span_key_can_have_one_job_per_layer(self):
+        trench_response = self.create()
+        duct_response = self.create(
+            feature_ids=[str(self.duct_a.id), str(self.duct_b.id)],
+            layer_id='distribution_ducts',
+        )
+
+        self.assertEqual(trench_response.status_code, 201, trench_response.data)
+        self.assertEqual(duct_response.status_code, 201, duct_response.data)
+        jobs = AssignmentJob.objects.filter(scope='span').order_by('layer_id')
+        self.assertEqual(
+            [(job.layer_id, set(job.covered_feature_ids)) for job in jobs],
+            [
+                (
+                    'distribution_ducts',
+                    {str(self.duct_a.id), str(self.duct_b.id)},
+                ),
+                ('final_trenches', {str(self.trench_a.id), str(self.trench_b.id)}),
+            ],
+        )
 
     def test_reassigning_the_span_replaces_the_same_engineers_claim(self):
         self.create()
@@ -71,7 +110,7 @@ class SpanScopeAssignmentTests(TestCase):
         foreign = make_survey_copy(make_ftth_project())
         foreign_feature = make_feature(foreign, layer_id='final_trenches')
 
-        response = self.create(feature_ids=[str(self.trench.id), str(foreign_feature.id)])
+        response = self.create(feature_ids=[str(self.trench_a.id), str(foreign_feature.id)])
 
         self.assertEqual(response.status_code, 400)
         self.assertFalse(AssignmentJob.objects.exists())
@@ -81,7 +120,7 @@ class SpanScopeAssignmentTests(TestCase):
 
         self.client.delete(f'/api/assignments/{response.data["id"]}/')
 
-        self.trench.refresh_from_db()
-        self.duct.refresh_from_db()
-        self.assertEqual(self.trench.status, Feature.STATUS_PENDING)
-        self.assertEqual(self.duct.status, Feature.STATUS_PENDING)
+        self.trench_a.refresh_from_db()
+        self.trench_b.refresh_from_db()
+        self.assertEqual(self.trench_a.status, Feature.STATUS_PENDING)
+        self.assertEqual(self.trench_b.status, Feature.STATUS_PENDING)
