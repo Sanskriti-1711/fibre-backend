@@ -27,8 +27,10 @@ COPY . .
 
 # Gather admin + DRF assets into STATIC_ROOT. WhiteNoise serves them from
 # gunicorn afterwards, so no separate web server or CDN is required.
-# --noinput because the build is non-interactive.
-RUN python manage.py collectstatic --noinput
+# --noinput because the build is non-interactive. A throwaway key is enough
+# for this build step; the real DJANGO_SECRET_KEY is supplied by the service
+# environment at runtime. Without it, production settings refuse to load.
+RUN DJANGO_SECRET_KEY=build-only-collectstatic python manage.py collectstatic --noinput
 
 EXPOSE 8000
 
