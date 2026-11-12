@@ -243,7 +243,10 @@ class LldHandoffView(APIView):
             metadata={
                 'source_lld_run_id': source_lld_run_id,
                 'rebound_from': bound_ref,
-                **{key: result[key] for key in ('features_created', 'features_updated', 'features_kept')},
+                **{
+                    key: result[key]
+                    for key in ('features_created', 'features_updated', 'features_kept')
+                },
             },
         )
         return Response(

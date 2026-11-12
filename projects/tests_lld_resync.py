@@ -31,7 +31,11 @@ def layer_geojson(depth=600, feature_id='1'):
             {
                 'type': 'Feature',
                 'geometry': LINE,
-                'properties': {'layer': 'final_trenches', 'feature_id': feature_id, 'depth_mm': depth},
+                'properties': {
+                    'layer': 'final_trenches',
+                    'feature_id': feature_id,
+                    'depth_mm': depth,
+                },
             }
         ],
     }

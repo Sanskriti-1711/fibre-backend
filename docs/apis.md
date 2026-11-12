@@ -218,6 +218,8 @@ This is the new assignment job system with scope.
 - `feature`
 - `layer`
 - `project`
+- `polygon`
+- `span` (one job over every component sharing `SPAN_ID` / `TRENCH_ID` / `PARENT_TRENCH`)
 
 ---
 
@@ -227,7 +229,7 @@ This is the new assignment job system with scope.
 **Query Parameters:**
 - `project={proj_id}`
 - `layer_id={layer_id}` (optional)
-- `scope=feature|layer|project` (optional)
+- `scope=feature|layer|project|polygon|span` (optional)
 - `assignee={engineer_user_id}` (optional)
 
 ---
@@ -264,6 +266,20 @@ This is the new assignment job system with scope.
   "assignee": "engineer_id"
 }
 ```
+
+#### Span Scope Example
+```json
+{
+  "project": "proj_id",
+  "scope": "span",
+  "span_id": "SPAN-00012",
+  "feature_ids": ["feature_uuid_1", "feature_uuid_2"],
+  "assignee": "engineer_id"
+}
+```
+`feature_ids` is the span's components; each must belong to the project. The
+server snapshots them into `covered_feature_ids`, so the job covers the whole
+span without one feature job per component.
 
 ---
 
