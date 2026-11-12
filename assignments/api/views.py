@@ -956,6 +956,18 @@ class FeatureFieldMeasurementsAPIView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        if not feature.is_inspection_editable:
+            return Response(
+                {
+                    'detail': (
+                        'This inspection has been submitted and is locked for review. '
+                        'It can only be edited again if the reviewer sends it back to redo.'
+                    ),
+                    'status': feature.status,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         field_measurements = request.data.get('field_measurements')
         comparison_notes = request.data.get('comparison_notes')
         # Where the crew actually laid it. Submitted beside the readings so one

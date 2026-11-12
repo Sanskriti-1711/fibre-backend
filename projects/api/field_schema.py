@@ -7,15 +7,39 @@ cannot drift apart, and so a layer with no admin :class:`LayerFieldConfig` still
 gives its engineers a usable form instead of an empty one.
 
 The heuristic is deliberately conservative: an attribute is a measurement when
-its name says so (``DEPTH_MM``, ``length_m``) or its value is a number. Identity
-columns and free-text attributes stay read-only reference data — the engineer
-can still add their own fields from the field form, and an admin can flip any
-of these in Layer Details → Field Configuration.
+its name says so (``DEPTH_MM``, ``length_m``) or its value is a number, and it
+is not an identifier. Identity and foreign-key columns (``cable_id``,
+``TRUNK_NO``, ``PARENT_TRENCH``) stay read-only reference data even when their
+values are numbers: editing one changes what the feature *is*, not what was
+built, and the as-built comparison would then disagree with the design for the
+wrong reason. Free-text attributes are reference data too. The engineer can
+still add their own fields from the field form, and an admin can flip any of
+these in Layer Details → Field Configuration.
 """
 
 from __future__ import annotations
 
 _IDENTITY_KEYS = {'id', 'gid', 'fid', 'objectid', 'feature_id', 'uuid'}
+
+# Suffixes and prefixes that mark a column as pointing at other data rather than
+# describing the build. Matched on the key, because an identifier's value is very
+# often a number and a number is otherwise our whole measurement signal.
+_REFERENCE_SUFFIXES = (
+    '_id',
+    '_ids',
+    '_no',
+    '_num',
+    '_code',
+    '_ref',
+    '_key',
+    '_name',
+    '_uuid',
+    '_gid',
+    '_fid',
+)
+
+# ``PARENT_TRENCH: "1"`` names its target in the prefix instead.
+_REFERENCE_PREFIXES = ('parent_',)
 
 _MEASUREMENT_HINTS = (
     'depth',
@@ -48,7 +72,7 @@ def _is_number(value):
     """True for numbers and numeric strings — the shape measurements arrive in."""
     if isinstance(value, bool):
         return False
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return True
     if isinstance(value, str) and value.strip():
         try:
@@ -57,6 +81,20 @@ def _is_number(value):
             return False
         return True
     return False
+
+
+def _is_reference(key):
+    """True for columns that identify this feature or point at another one.
+
+    ``cable_id``, ``TRUNK_NO`` and ``PARENT_TRENCH`` all arrive with numeric
+    values, so the value test alone would offer them as editable number boxes on
+    the engineer's form.
+    """
+    return (
+        key in _IDENTITY_KEYS
+        or key.endswith(_REFERENCE_SUFFIXES)
+        or key.startswith(_REFERENCE_PREFIXES)
+    )
 
 
 def derive_field_schema(properties):
@@ -74,21 +112,24 @@ def derive_field_schema(properties):
         lowered = key_text.lower()
         label = key_text.replace('_', ' ').title()
 
-        measurement = (
-            lowered not in _IDENTITY_KEYS
-            and (any(hint in lowered for hint in _MEASUREMENT_HINTS) or _is_number(value))
+        numeric = _is_number(value)
+        measurement = not _is_reference(lowered) and (
+            any(hint in lowered for hint in _MEASUREMENT_HINTS) or numeric
         )
 
         if measurement:
+            # A hinted field whose real value is text (``SIZE: "600x600 mm"``,
+            # ``"Large (1500×1200 mm)"``) cannot go through a number input: it
+            # stays editable, as a text box with no unit.
             schema.append(
                 {
                     'key': key_text,
                     'label': label,
-                    'role': 'measurement',
-                    'widget': 'number',
-                    'unit': True,
+                    'role': 'measurement' if numeric else 'measurement_text',
+                    'widget': 'number' if numeric else 'text',
+                    'unit': numeric,
                     'editable': True,
-                    'type': 'number',
+                    'type': 'number' if numeric else 'text',
                     'order': order,
                 }
             )

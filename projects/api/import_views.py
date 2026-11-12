@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 from projects.api.field_schema import derive_field_schema
 from projects.api.microservice import headers as microservice_headers
 from projects.models import Feature, ImportSession, Project
+from users.permissions import IsSubadmin
 
 # Where the import/geo service runs. Local development starts it on :8180
 # (see dev/start.sh); a deployment overrides this with its own host.
@@ -146,6 +147,10 @@ class GpkgUploadView(APIView):
     Upload .gpkg or .zip file, create ImportSession.
     """
 
+    # An import writes Feature rows into a project, so it is a planner action.
+    # The view used to take the project id from the URL and nothing else, so any
+    # authenticated engineer could import into a project they cannot even see.
+    permission_classes = [IsSubadmin]
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request, project_id):
@@ -206,6 +211,8 @@ class GpkgDiscoverView(APIView):
     For .gpkg: call microservice.
     For .zip: extract and list .geojson layers.
     """
+
+    permission_classes = [IsSubadmin]
 
     def post(self, request, project_id):
         try:
@@ -284,6 +291,8 @@ class GpkgImportView(APIView):
     For .gpkg: call microservice.
     For .zip: extract .geojson and create Features directly.
     """
+
+    permission_classes = [IsSubadmin]
 
     def post(self, request, project_id):
         try:
@@ -434,6 +443,8 @@ class ImportStatusView(APIView):
     GET /api/projects/{project_id}/import/status/
     Get current import status
     """
+
+    permission_classes = [IsSubadmin]
 
     def get(self, request, project_id):
         try:

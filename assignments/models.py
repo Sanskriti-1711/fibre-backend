@@ -98,11 +98,15 @@ class AssignmentJob(models.Model):
                     models.Q(scope='project', layer_id__isnull=True, feature__isnull=True)
                     | models.Q(scope='layer', layer_id__isnull=False, feature__isnull=True)
                     | models.Q(scope='feature', feature__isnull=False)
-                    | models.Q(
-                        scope='span',
-                        feature__isnull=True,
-                        polygon__isnull=True,
-                        span_id__isnull=False,
+                    | (
+                        models.Q(
+                            scope='span',
+                            feature__isnull=True,
+                            polygon__isnull=True,
+                            span_id__isnull=False,
+                            layer_id__isnull=False,
+                        )
+                        & ~models.Q(layer_id='')
                     )
                     | models.Q(
                         scope='polygon',
@@ -136,14 +140,35 @@ class AssignmentJob(models.Model):
             self.polygon_id = None
             self.covered_feature_ids = []
         if scope == self.SCOPE_SPAN:
-            # The components are sent with the job: nothing on the span id says
-            # which components belong to it, so there is nothing to resolve
-            # here and the list is kept exactly as the caller built it. The
-            # layer is part of the span's identity and must survive the save.
+            # The components are sent with the job, but a span has no meaning
+            # without the layer it belongs to. Infer that layer from the
+            # components when the caller omitted it, and reject a mixed set
+            # before it reaches the database. The serializer does the same for
+            # API calls; this guard also covers the admin and imports.
             self.feature = None
             self.polygon = None
             self.polygon_id = None
             self.covered_feature_ids = list(self.covered_feature_ids or [])
+            if self.covered_feature_ids:
+                layers = {
+                    str(layer or '').strip()
+                    for layer in Feature.objects.filter(
+                        id__in=self.covered_feature_ids
+                    ).values_list('layer_id', flat=True)
+                }
+                layers.discard('')
+                if len(layers) != 1:
+                    msg = 'A span must contain components from exactly one layer'
+                    raise ValueError(msg)
+                component_layer = layers.pop()
+                if self.layer_id and str(self.layer_id).strip() != component_layer:
+                    msg = 'Span layer must match the layer of its components'
+                    raise ValueError(msg)
+                self.layer_id = component_layer
+            self.layer_id = str(self.layer_id or '').strip() or None
+            if not self.layer_id:
+                msg = 'A span assignment requires a layer'
+                raise ValueError(msg)
         if scope == self.SCOPE_POLYGON:
             self.layer_id = None
             self.feature = None

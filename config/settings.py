@@ -39,11 +39,14 @@ if _ENV_FILE.exists():
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-# Production must set DJANGO_SECRET_KEY (Zeabur service variable).
-SECRET_KEY = os.getenv(
-    'DJANGO_SECRET_KEY',
-    'django-insecure-%p=ow#x9d^a8!#t%5p-m0#@(29wyu1f258$ae$a77_jz1rppf0',
-)
+# Production must set DJANGO_SECRET_KEY (the host's service variable). There is
+# deliberately no committed fallback: this key signs the JWT access/refresh
+# tokens AND the emailed permit Approve/Reject links (permits/notifications.py
+# signs them with django.core.signing, whose default signer is SECRET_KEY), so
+# a published default lets anyone who can read this repository forge both. The
+# check that refuses to boot without it sits after DEBUG below, which is what
+# knows whether this is a development or test run.
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', '').strip()
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # Default: DEBUG OFF. A host that forgets this variable must come up safe, not
@@ -77,6 +80,21 @@ else:
         else ['fiber-backend-wml3.onrender.com']
     )
 
+# Same rule for the key: a host that forgot it must refuse to start rather than
+# run on a value every reader of this repository knows. Development and the
+# test suite keep a throwaway key so a checkout and CI need no setup; a
+# deployed process (DEBUG off, not `manage.py test`) does not.
+if not SECRET_KEY:
+    if DEBUG or _TEST_RUN:
+        SECRET_KEY = 'django-insecure-development-only-not-for-deployment'
+    else:
+        missing_secret = (
+            'DJANGO_SECRET_KEY is not set. It signs the JWT access/refresh tokens '
+            'and the emailed permit action links, so a default would make both '
+            'forgeable by anyone with the source.'
+        )
+        raise ImproperlyConfigured(missing_secret)
+
 
 # Application definition
 
@@ -88,6 +106,10 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    # Revocation: needed for the logout route and for ROTATE_REFRESH_TOKENS /
+    # BLACKLIST_AFTER_ROTATION below. Without it an issued refresh token cannot
+    # be withdrawn, so a lost phone stays signed in for its full 30 days.
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'users',
     'projects',
@@ -106,6 +128,9 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # Refuses an oversized photo upload on CONTENT_LENGTH, before DRF parses the
+    # multipart body to a temp file.
+    'config.upload_limits.RequestBodyLimitMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -273,6 +298,9 @@ EVIDENCE_PUBLIC_BASE_URL = os.getenv('EVIDENCE_PUBLIC_BASE_URL', '')
 EVIDENCE_PRESIGN_SECONDS = int(os.getenv('EVIDENCE_PRESIGN_SECONDS', '3600'))
 # Per-file cap, checked before the bytes are read in full.
 EVIDENCE_MAX_BYTES = int(os.getenv('EVIDENCE_MAX_BYTES', str(10 * 1024 * 1024)))
+# The largest body a photo endpoint may receive: one full gallery batch
+# (MAX_PER_FEATURE = 20) of maximal photos, plus multipart overhead.
+MAX_PHOTO_UPLOAD_BYTES = int(os.getenv('MAX_PHOTO_UPLOAD_BYTES', str(21 * EVIDENCE_MAX_BYTES)))
 
 # CORS Configuration
 CORS_ALLOW_CREDENTIALS = True
@@ -294,6 +322,11 @@ CORS_ALLOWED_ORIGINS = [
     # the GitLab Pages origin above.
     'https://fibre-survey-web.onrender.com',
     'http://localhost:3000',
+    # The same frontend served on the loopback address. Opening the UI at
+    # 127.0.0.1:3000 while the API is called as localhost:8000 is a different
+    # origin, and without this entry every login and page load failed the
+    # preflight while both services were up.
+    'http://127.0.0.1:3000',
     'http://localhost:8081',
     'http://127.0.0.1:8081',
 ]
@@ -352,6 +385,11 @@ SIMPLE_JWT = {
     # 401→refresh path in apiFetch renewing the 12h access token silently.
     'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
     'AUTH_HEADER_TYPES': ('Bearer',),
+    # Every refresh issues a new token and retires the old one, so a leaked
+    # refresh token stops working as soon as the real client renews — and
+    # `POST /api/users/logout/` can withdraw one immediately.
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
 }
 
 

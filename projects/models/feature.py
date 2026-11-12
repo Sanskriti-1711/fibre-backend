@@ -20,6 +20,17 @@ class Feature(models.Model):
         (STATUS_REDO, 'Redo'),
     ]
 
+    # Once a feature is submitted its measurements, notes and evidence belong to
+    # the review record. ``redo`` reopens it for the engineer; ``under_review``
+    # and ``approved`` are deliberately immutable from the field client.
+    INSPECTION_EDITABLE_STATUSES = frozenset(
+        {STATUS_PENDING, STATUS_ASSIGNED, STATUS_REDO}
+    )
+
+    @property
+    def is_inspection_editable(self) -> bool:
+        return self.status in self.INSPECTION_EDITABLE_STATUSES
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
 

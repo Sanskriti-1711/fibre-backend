@@ -19,6 +19,7 @@ from .api import (
     DeleteProjectView,
     DesignPackageView,
     DownloadFileView,
+    FtthAreaCoverageView,
     FtthProjectAssignView,
     FtthProjectListView,
     InputLayerView,
@@ -125,7 +126,13 @@ urlpatterns = [
         FtthProjectAssignView.as_view(),
         name='ftth-assign-project',
     ),
-    # GET  /api/ftth/hld/results/<id>/boq/ — computed BOQ/BOM (JSON)
+    # POST /api/ftth/hld/projects/<project_id>/areas/coverage/ — preview area features
+    path(
+        'ftth/hld/projects/<str:project_id>/areas/coverage/',
+        FtthAreaCoverageView.as_view(),
+        name='ftth-area-coverage',
+    ),
+    # GET /api/ftth/hld/results/<id>/boq/ — computed BOQ/BOM (JSON)
     path('ftth/hld/results/<str:project_id>/boq/', BoqView.as_view(), name='ftth-boq'),
     # GET  /api/ftth/hld/results/<id>/boq/download/ — BOQ/BOM XLSX
     path(

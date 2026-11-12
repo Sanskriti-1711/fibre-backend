@@ -12,10 +12,12 @@ from rest_framework.views import APIView
 
 from ftth_hld.assign import accept_survey_project
 from ftth_hld.pipeline import ftth_project_payloads
+from projects.api.access import deny, engineer_can_access
 from projects.api.microservice import headers as microservice_headers
 from projects.models.import_session import ImportSession
 from projects.models.project import Project
 from projects.models.stage_event import StageEvent
+from users.permissions import IsSubadmin
 
 from .serializers import ProjectSerializer
 
@@ -228,14 +230,28 @@ class ProjectListCreateAPIView(APIView):
 
 class ProjectDetailAPIView(APIView):
     """
-    GET /api/projects/<uuid>/
+    GET    /api/projects/<uuid>/
+    DELETE /api/projects/<uuid>/   (subadmin only)
+
+    Reading is scoped exactly like the list above: an engineer sees the projects
+    they are assigned to, a planner sees everything. Deleting is a planner
+    action — it cascades to every Feature, AssignmentJob and ImportSession, and
+    nothing in the database keeps a copy of those.
     """
+
+    def get_permissions(self):
+        if self.request.method == 'DELETE':
+            return [IsSubadmin()]
+        return super().get_permissions()
 
     def get(self, request, project_id):
         try:
             project = Project.objects.get(id=project_id)
         except Project.DoesNotExist:
             return Response({'detail': 'Project not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not engineer_can_access(request, project):
+            return deny()
 
         serializer = ProjectSerializer(project)
         return Response(serializer.data)

@@ -25,6 +25,7 @@ Section numbering mirrors the original BOQ.xlsx template:
 from __future__ import annotations
 
 import contextlib
+import json
 import math
 from typing import Any
 
@@ -230,6 +231,8 @@ _BOM_ITEMS = [
     ('Plant Elements', 'Handhole B125', '6.4', 'ea'),
     ('Plant Elements', 'Splice closure', '6.6', 'ea'),
     ('Plant Elements', 'Optical coupler (drop ↔ distribution)', '6.13', 'ea'),
+    ('Plant Elements', 'CBT — 1:8 splitter cabinet', '6.14', 'ea'),
+    ('Plant Elements', 'CBT — 1:16 splitter cabinet', '6.15', 'ea'),
     ('Plant Elements', '1:32 Splitter', '6.7', 'ea'),
     ('Plant Elements', '1:8 Splitter', '6.8', 'ea'),
     ('Plant Elements', '1:16 Splitter', '6.11', 'ea'),
@@ -389,6 +392,55 @@ class _CombinedLayer:
         self.feature_count = len(features)
 
 
+class _EngineLayer:
+    """A layer read straight from the engine for an id the platform has no row
+    for (a run started directly on the engine).
+
+    ``_get_layer`` callers only need ``.geojson`` (see ``_iter_features``), so
+    this stands in for ``FtthLayer`` without writing anything to the database.
+    """
+
+    def __init__(self, name: str, geojson: dict):
+        self.name = name
+        self.geojson = geojson
+        self.feature_count = len(geojson.get('features') or [])
+        self.updated_at = None
+
+
+_ENGINE_LAYER_CACHE: dict = {}
+
+
+def _engine_layer(project_id: str, name: str):
+    """The engine's current GeoJSON for ``name``, cached for the process.
+
+    Engine-only runs never reach ``FtthLayer`` — no ``FtthProject`` row exists
+    for them, so the sync step that persists layers was never run and the BOQ
+    found nothing. Reading the layer the BOQ needs directly from the engine is
+    enough: the engine is where those layers are produced.
+    """
+    key = (project_id, name)
+    if key in _ENGINE_LAYER_CACHE:
+        return _ENGINE_LAYER_CACHE[key]
+    layer = None
+    try:
+        from .pipeline import get_layer_geojson
+
+        raw = get_layer_geojson(project_id, name)
+    except Exception:  # noqa: BLE001
+        raw = None
+    if raw:
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            data = None
+        if isinstance(data, dict):
+            data.setdefault('type', 'FeatureCollection')
+            data.setdefault('features', [])
+            layer = _EngineLayer(name, data)
+    _ENGINE_LAYER_CACHE[key] = layer
+    return layer
+
+
 def _get_layer(project_id: str, name: str):
     """Get a layer by name, preferring the fresher of LLD output / HLD input.
 
@@ -432,7 +484,10 @@ def _get_layer(project_id: str, name: str):
                     return matched[0]
                 return _CombinedLayer(matched)
 
-    return hld_layer
+    if hld_layer is not None:
+        return hld_layer
+    # Nothing stored on the platform: an engine-only run still has the layers.
+    return _engine_layer(project_id, name)
 
 
 def _iter_features(layer):
@@ -840,6 +895,31 @@ def compute_quantities(project_id: str) -> dict[str, float]:
         )
     if n_cpl:
         qty['6.13'] = qty.get('6.13', 0.0) + n_cpl
+
+    # CBT tier — one cabinet per block, sized 1:8 or 1:16 by the block's homes,
+    # plus its feed cable.  The feed is a distribution-tier cable from the PDP,
+    # so its metres join the same per-FO-count cable items the distribution
+    # cables use; there is no separate CBT cable line in the catalogue.
+    cbts = list(_iter_features(_get_layer(project_id, 'cbts')))
+    if cbts:
+        def _split_size(f):
+            return str((f.get('properties') or {}).get('SPLIT_SIZE') or '')
+
+        n8 = sum(1 for f in cbts if _split_size(f).endswith(':8'))
+        n16 = sum(1 for f in cbts if _split_size(f).endswith(':16'))
+        if n8:
+            qty['6.14'] = qty.get('6.14', 0.0) + n8
+        if n16:
+            qty['6.15'] = qty.get('6.15', 0.0) + n16
+
+    for f in _iter_features(_get_layer(project_id, 'cbt_cable')):
+        code = _cable_item_code('Distribution', str(_int_prop(f, 'FIBER_COUNT'))) or '4.6'
+        raw = (f.get('properties') or {}).get('LENGTH_M')
+        try:
+            length = float(raw) if raw is not None else _geometry_length(f.get('geometry'))
+        except (TypeError, ValueError):
+            length = _geometry_length(f.get('geometry'))
+        qty[code] = qty.get(code, 0.0) + length
 
     # Splitters — the design stamps per-ratio counts (SPL_32 / SPL_8 are the
     # template items; SPL_16 / SPL_64 are the ratios this design actually

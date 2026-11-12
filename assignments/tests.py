@@ -170,6 +170,105 @@ class AssignmentReleaseTests(TestCase):
         self.assertEqual(self.status_of(self.span), Feature.STATUS_APPROVED)
 
 
+class SubmittedInspectionLockTests(TestCase):
+    """A submitted inspection is evidence, not a draft.
+
+    The field client can still open the span while it is under review, but the
+    measurements, notes and geometry must not change underneath the reviewer.
+    ``redo`` deliberately reopens the record for the engineer.
+    """
+
+    def setUp(self):
+        self.engineer = make_user('inspection-lock@example.com', role=User.Role.ENGINEER)
+        self.project = make_survey_copy(make_ftth_project())
+        self.feature = make_feature(self.project, layer_id='spans', layer_name='spans')
+        AssignmentJob.objects.create(
+            project=self.project,
+            scope=AssignmentJob.SCOPE_PROJECT,
+            assignee=self.engineer,
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.engineer)
+        self.url = f'/api/features/{self.feature.id}/field-measurements/'
+
+    def patch(self, measurements=None):
+        return self.client.patch(
+            self.url,
+            {
+                'field_measurements': measurements or {'depth': {'value': 1.2, 'unit': 'm'}},
+                'comparison_notes': 'changed after submit',
+            },
+            format='json',
+        )
+
+    def test_under_review_measurements_are_locked(self):
+        Feature.objects.filter(pk=self.feature.pk).update(
+            status=Feature.STATUS_UNDER_REVIEW,
+            field_measurements={'depth': {'value': 1.0, 'unit': 'm'}},
+        )
+
+        response = self.patch()
+
+        self.assertEqual(response.status_code, 409, response.content[:300])
+        self.feature.refresh_from_db()
+        self.assertEqual(
+            self.feature.field_measurements, {'depth': {'value': 1.0, 'unit': 'm'}}
+        )
+        self.assertNotEqual(self.feature.comparison_notes, 'changed after submit')
+
+    def test_approved_measurements_are_locked(self):
+        Feature.objects.filter(pk=self.feature.pk).update(
+            status=Feature.STATUS_APPROVED,
+            field_measurements={'depth': {'value': 1.0, 'unit': 'm'}},
+        )
+
+        response = self.patch()
+
+        self.assertEqual(response.status_code, 409, response.content[:300])
+
+    def test_redo_reopens_the_inspection(self):
+        Feature.objects.filter(pk=self.feature.pk).update(status=Feature.STATUS_REDO)
+
+        response = self.patch({'depth': {'value': 1.3, 'unit': 'm'}})
+
+        self.assertEqual(response.status_code, 200, response.content[:300])
+        self.feature.refresh_from_db()
+        self.assertEqual(self.feature.field_measurements, {'depth': {'value': 1.3, 'unit': 'm'}})
+
+    def test_submitted_feature_cannot_be_patched_through_the_general_route(self):
+        """Changing status or properties must not reopen a submitted record.
+
+        The measurements endpoint is not the only write path: the map editor
+        PATCHes the feature itself. Blocking only inspection-specific fields
+        would let a client change ``status`` back to ``assigned`` and then edit
+        the measurements through the now-unlocked endpoint.
+        """
+        Feature.objects.filter(pk=self.feature.pk).update(
+            status=Feature.STATUS_UNDER_REVIEW,
+            properties={'depth': 'old'},
+        )
+
+        response = self.client.patch(
+            f'/api/projects/{self.project.id}/features/{self.feature.id}/update/',
+            {'properties': {'depth': 'new'}, 'status': Feature.STATUS_ASSIGNED},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 409, response.content[:300])
+        self.feature.refresh_from_db()
+        self.assertEqual(self.feature.status, Feature.STATUS_UNDER_REVIEW)
+        self.assertEqual(self.feature.properties, {'depth': 'old'})
+
+    def test_a_span_without_a_layer_cannot_be_saved(self):
+        with self.assertRaisesMessage(ValueError, 'requires a layer'):
+            AssignmentJob.objects.create(
+                project=self.project,
+                scope=AssignmentJob.SCOPE_SPAN,
+                span_id='NO-LAYER',
+                assignee=self.engineer,
+            )
+
+
 class JobListFieldProgressTests(TestCase):
     """The jobs list reports what has actually been recorded per row.
 

@@ -87,6 +87,17 @@ class FeaturePhotosView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        if not feature.is_inspection_editable:
+            return Response(
+                {
+                    'detail': (
+                        'This inspection has been submitted and its evidence is locked for review.'
+                    ),
+                    'status': feature.status,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         uploads = request.FILES.getlist('photos') or request.FILES.getlist('photo')
         if not uploads:
             return Response(
@@ -128,6 +139,17 @@ class FeaturePhotoDetailView(APIView):
             return Response(
                 {'detail': 'Not allowed to remove photos from this feature'},
                 status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not photo.feature.is_inspection_editable:
+            return Response(
+                {
+                    'detail': (
+                        'This inspection has been submitted and its evidence is locked for review.'
+                    ),
+                    'status': photo.feature.status,
+                },
+                status=status.HTTP_409_CONFLICT,
             )
 
         photo.image.delete(save=False)

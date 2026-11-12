@@ -58,15 +58,26 @@ class DashboardSummaryAPIView(APIView):
 
         # An engineer counts as active once they submit a feature today. A
         # rejection clears submitted_at, so a same-day reject drops them out.
-        active_today = (
+        active_ids = set(
             AssignmentJob.objects.filter(
                 scope=AssignmentJob.SCOPE_FEATURE,
                 feature__submitted_at__gte=today_start,
-            )
-            .values('assignee_id')
-            .distinct()
-            .count()
+            ).values_list('assignee_id', flat=True)
         )
+        # Span jobs carry their components as a snapshot, so submission is
+        # matched here rather than by joining ``feature``.
+        submitted_today = {
+            str(feature_id)
+            for feature_id in Feature.objects.filter(
+                submitted_at__gte=today_start
+            ).values_list('id', flat=True)
+        }
+        for job in AssignmentJob.objects.filter(scope=AssignmentJob.SCOPE_SPAN).only(
+            'assignee_id', 'covered_feature_ids'
+        ):
+            if submitted_today & {str(fid) for fid in job.covered_feature_ids or []}:
+                active_ids.add(job.assignee_id)
+        active_today = len(active_ids)
         total_engineers = User.objects.filter(role=User.Role.ENGINEER, is_active=True).count()
 
         uploads = ImportSession.objects.select_related('project').order_by('-created_at')[
@@ -122,6 +133,16 @@ class DashboardSummaryAPIView(APIView):
                 feature_id__in=[f.id for f, _, _ in rows],
             )
         }
+        # A span job names all its components, so it answers for any reviewed
+        # feature that has no feature-scope job of its own.
+        reviewed = {str(f.id) for f, _, _ in rows}
+        for job in AssignmentJob.objects.select_related('assignee').filter(
+            scope=AssignmentJob.SCOPE_SPAN,
+            project_id__in={f.project_id for f, _, _ in rows},
+        ):
+            for feature_id in job.covered_feature_ids or []:
+                if feature_id in reviewed:
+                    engineers.setdefault(feature_id, job.assignee)
 
         result = []
         for feature, outcome, at in rows:

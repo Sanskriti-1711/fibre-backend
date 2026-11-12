@@ -341,23 +341,34 @@ class ProjectFeatureByDesignAPIView(APIView):
 
         from assignments.models import AssignmentJob
 
-        # A feature job is the specific answer; a layer job covers the whole
-        # layer it sits in; a project job covers everything. Narrowest wins.
+        # A feature job is the specific answer; a span job covers its own
+        # components; a layer job covers the whole layer; a project job covers
+        # everything. Narrowest wins.
         condition = Q(scope=AssignmentJob.SCOPE_FEATURE, feature=feature) | Q(
             scope=AssignmentJob.SCOPE_PROJECT
         )
         if feature.layer_id:
             condition |= Q(scope=AssignmentJob.SCOPE_LAYER, layer_id=feature.layer_id)
+        condition |= Q(scope=AssignmentJob.SCOPE_SPAN)
 
         jobs = list(
             AssignmentJob.objects.select_related('assignee')
             .filter(project=project)
             .filter(condition)
         )
+        # A span's components are a snapshot list, not a column, so whether this
+        # feature belongs to the job is decided here rather than in SQL.
+        jobs = [
+            job
+            for job in jobs
+            if job.scope != AssignmentJob.SCOPE_SPAN
+            or str(feature.id) in (job.covered_feature_ids or [])
+        ]
         precedence = {
             AssignmentJob.SCOPE_FEATURE: 0,
-            AssignmentJob.SCOPE_LAYER: 1,
-            AssignmentJob.SCOPE_PROJECT: 2,
+            AssignmentJob.SCOPE_SPAN: 1,
+            AssignmentJob.SCOPE_LAYER: 2,
+            AssignmentJob.SCOPE_PROJECT: 3,
         }
         # Several engineers can hold the same layer, so equal scopes need a
         # stable tiebreak: the earliest claim answers, rather than whichever row
@@ -381,6 +392,7 @@ class ProjectFeatureByDesignAPIView(APIView):
                     # The scope target, so a client can say which job is
                     # covering the feature rather than only its kind.
                     'layer_id': job.layer_id or '',
+                    'span_id': job.span_id or '',
                     'assignee': {
                         'id': str(job.assignee_id),
                         'email': job.assignee.email,
@@ -524,6 +536,18 @@ class ProjectFeatureUpdateAPIView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        if not feature.is_inspection_editable:
+            return Response(
+                {
+                    'detail': (
+                        'This inspection has been submitted and is locked for review. '
+                        'It can only be edited again if the reviewer sends it back to redo.'
+                    ),
+                    'status': feature.status,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         serializer = FeatureUpdateSerializer(
             feature,
             data=request.data,
@@ -602,6 +626,17 @@ class FeaturePhotoUploadView(APIView):
             return Response(
                 {'detail': 'This feature is outside your assigned area.'},
                 status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not feature.is_inspection_editable:
+            return Response(
+                {
+                    'detail': (
+                        'This inspection has been submitted and its evidence is locked for review.'
+                    ),
+                    'status': feature.status,
+                },
+                status=status.HTTP_409_CONFLICT,
             )
 
         if 'photo' not in request.FILES:

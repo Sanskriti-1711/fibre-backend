@@ -439,6 +439,45 @@ class FeaturePhotoWriteScopeTests(TestCase):
         self.assertEqual(response.status_code, 403, response.content[:300])
         self.assertTrue(FeaturePhoto.objects.filter(id=photo.id).exists())
 
+    def test_a_submitted_feature_refuses_new_photos(self):
+        self.assign(scope=AssignmentJob.SCOPE_PROJECT)
+        Feature.objects.filter(pk=self.feature_in_layer.pk).update(
+            status=Feature.STATUS_UNDER_REVIEW
+        )
+
+        response = self.client.post(
+            f'/api/features/{self.feature_in_layer.id}/photos/',
+            {
+                'photos': SimpleUploadedFile(
+                    'site.png', png_bytes(), content_type='image/png'
+                )
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 409, response.content[:300])
+        self.assertEqual(FeaturePhoto.objects.count(), 0)
+
+    def test_a_submitted_feature_refuses_photo_deletion(self):
+        self.assign(scope=AssignmentJob.SCOPE_PROJECT)
+        photo = FeaturePhoto.objects.create(
+            feature=self.feature_in_layer,
+            image='feature_photos/locked.png',
+            sha256='0' * 64,
+            size_bytes=0,
+            storage_backend='local',
+        )
+        Feature.objects.filter(pk=self.feature_in_layer.pk).update(
+            status=Feature.STATUS_UNDER_REVIEW
+        )
+
+        response = self.client.delete(
+            f'/api/features/{self.feature_in_layer.id}/photos/{photo.id}/'
+        )
+
+        self.assertEqual(response.status_code, 409, response.content[:300])
+        self.assertTrue(FeaturePhoto.objects.filter(id=photo.id).exists())
+
 
 class DesignChangeLoopTests(TestCase):
     """Approved deviation → request for the next LLD version.

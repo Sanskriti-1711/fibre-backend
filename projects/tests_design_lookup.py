@@ -111,6 +111,60 @@ class DesignFeatureLookupTests(TestCase):
         self.assertEqual(response.data['assignment']['scope'], AssignmentJob.SCOPE_PROJECT)
         self.assertEqual(response.data['assignment']['assignee']['email'], 'engineer@example.com')
 
+    def test_a_span_job_answers_for_its_components(self):
+        """A span job names its components, so it covers this feature too."""
+        AssignmentJob.objects.create(
+            project=self.project,
+            scope=AssignmentJob.SCOPE_SPAN,
+            span_id='TRENCH-00012',
+            covered_feature_ids=[str(self.feature.id)],
+            assignee=self.engineer,
+        )
+
+        response = self.client.get(self.url(DESIGN_ID))
+
+        self.assertEqual(response.data['assignment']['scope'], AssignmentJob.SCOPE_SPAN)
+        self.assertEqual(response.data['assignment']['span_id'], 'TRENCH-00012')
+        self.assertEqual(response.data['assignment']['assignee']['email'], 'engineer@example.com')
+
+    def test_a_span_job_that_does_not_cover_the_row_is_ignored(self):
+        # A span job now has to name a real, single-layer component set. Use
+        # another feature in the same layer, so this job is valid but still does
+        # not cover the by-design row under test.
+        other_feature = make_feature(
+            self.project,
+            layer_id='spans',
+            layer_name='spans',
+            properties={'feature_id': 'LLD-spans-other'},
+        )
+        AssignmentJob.objects.create(
+            project=self.project,
+            scope=AssignmentJob.SCOPE_SPAN,
+            span_id='TRENCH-OTHER',
+            layer_id='spans',
+            covered_feature_ids=[str(other_feature.id)],
+            assignee=self.other,
+        )
+
+        response = self.client.get(self.url(DESIGN_ID))
+
+        self.assertIsNone(response.data['assignment'])
+
+    def test_feature_job_beats_the_span_job(self):
+        AssignmentJob.objects.create(
+            project=self.project,
+            scope=AssignmentJob.SCOPE_SPAN,
+            span_id='TRENCH-00012',
+            covered_feature_ids=[str(self.feature.id)],
+            assignee=self.other,
+        )
+        self.assign(scope=AssignmentJob.SCOPE_FEATURE, assignee=self.engineer)
+
+        response = self.client.get(self.url(DESIGN_ID))
+
+        self.assertEqual(response.data['assignment']['scope'], AssignmentJob.SCOPE_FEATURE)
+        self.assertEqual(response.data['assignment']['assignee']['email'], 'engineer@example.com')
+
     def test_no_job_is_reported_as_unassigned(self):
         response = self.client.get(self.url(DESIGN_ID))
 

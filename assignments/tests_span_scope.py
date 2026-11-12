@@ -11,7 +11,9 @@ Run with:
 
 from __future__ import annotations
 
-from django.test import TestCase
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
+from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient
 
 from assignments.models import AssignmentJob
@@ -124,3 +126,66 @@ class SpanScopeAssignmentTests(TestCase):
         self.trench_b.refresh_from_db()
         self.assertEqual(self.trench_a.status, Feature.STATUS_PENDING)
         self.assertEqual(self.trench_b.status, Feature.STATUS_PENDING)
+
+
+class SpanLayerDataMigrationTests(TransactionTestCase):
+    """The legacy 78-component span becomes one job per actual layer.
+
+    This seeds the pre-fix shape through the historical model at 0010, then runs
+    the data and constraint migrations together. It is the regression for the
+    real ``TR-000010`` row: a job with no layer covering ducts, trenches and
+    feeder ducts. The migration must preserve one row per layer, never leave a
+    NULL layer behind, and keep every covered component.
+    """
+
+    migrate_from = [('assignments', '0010_assignmentjob_span_layer')]
+    migrate_to = [('assignments', '0012_require_span_layer')]
+
+    def test_a_mixed_span_is_split_by_layer(self):
+        project = make_survey_copy(make_ftth_project())
+        engineer = make_user('migration@example.com', role=User.Role.ENGINEER)
+        ducts = [
+            make_feature(project, layer_id='distribution_ducts'),
+            make_feature(project, layer_id='distribution_ducts'),
+        ]
+        feeder = make_feature(project, layer_id='feeder_ducts')
+        trench = make_feature(project, layer_id='final_trenches')
+        covered_ids = [str(feature.id) for feature in [*ducts, feeder, trench]]
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_from)
+        try:
+            old_apps = executor.loader.project_state(self.migrate_from).apps
+            old_job = old_apps.get_model('assignments', 'AssignmentJob')
+            old_job.objects.create(
+                project_id=project.id,
+                scope='span',
+                span_id='TR-MIGRATION',
+                layer_id=None,
+                covered_feature_ids=covered_ids,
+                assignee_id=engineer.id,
+            )
+
+            executor = MigrationExecutor(connection)
+            executor.migrate(self.migrate_to)
+        finally:
+            # A failed assertion must not leave the test database stuck at 0010
+            # for every test that runs after this one.
+            MigrationExecutor(connection).migrate(self.migrate_to)
+
+        jobs = list(
+            AssignmentJob.objects.filter(
+                project=project, scope=AssignmentJob.SCOPE_SPAN
+            ).order_by('layer_id')
+        )
+
+        self.assertEqual(len(jobs), 3)
+        self.assertFalse(any(not job.layer_id for job in jobs))
+        self.assertEqual(
+            [(job.layer_id, set(job.covered_feature_ids)) for job in jobs],
+            [
+                ('distribution_ducts', {str(feature.id) for feature in ducts}),
+                ('feeder_ducts', {str(feeder.id)}),
+                ('final_trenches', {str(trench.id)}),
+            ],
+        )

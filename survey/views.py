@@ -1,6 +1,7 @@
 """API views for the survey app — with pagination and filtering."""
 
 import contextlib
+import logging
 from datetime import datetime
 
 from django.db.models import Q
@@ -52,6 +53,8 @@ _REVIEW_DONE_STATUSES = {'submitted', 'under_review', 'reviewed', 'accepted', 'c
 # ── Pagination Defaults ───────────────────────────────────────────────────
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
+
+logger = logging.getLogger(__name__)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -1087,6 +1090,7 @@ class SurveyFeatureApprovalAPIView(APIView):
         #    section. The SurveyFeature lives on the survey copy Project,
         #    whose source_ftth_project_id maps back to the HLD run the
         #    permits are keyed on.
+        permit_warnings: list[str] = []
         if decision_value == 'approved':
             ftth_id = getattr(sf.project, 'source_ftth_project_id', None)
             if ftth_id:
@@ -1095,16 +1099,34 @@ class SurveyFeatureApprovalAPIView(APIView):
 
                     create_variations(str(ftth_id), sf, user=request.user)
                 except Exception:
-                    pass
+                    # The approval is already committed, so this must not fail
+                    # the request — but it must not vanish either. A planner told
+                    # "approved" while the permit matrix still shows the old
+                    # approved permit has no other way to notice.
+                    logger.warning(
+                        'Survey approval could not re-open permit variations for %s',
+                        ftth_id,
+                        exc_info=True,
+                    )
+                    permit_warnings.append('permit_variations')
                 try:
                     from permits.rules.survey_hook import ensure_survey_evidence
 
                     ensure_survey_evidence(str(ftth_id))
                 except Exception:
-                    pass
+                    logger.warning(
+                        'Survey approval could not re-feed permit evidence for %s',
+                        ftth_id,
+                        exc_info=True,
+                    )
+                    permit_warnings.append('permit_evidence')
 
-        serializer = SurveyFeatureSerializer(sf, context={'request': request})
-        return Response(serializer.data)
+        payload = dict(SurveyFeatureSerializer(sf, context={'request': request}).data)
+        if permit_warnings:
+            # The UI can say "approved, but the permit was not re-fed" instead
+            # of reporting a clean success.
+            payload['permit_warnings'] = permit_warnings
+        return Response(payload)
 
 
 class ProjectRiskQueueAPIView(APIView):

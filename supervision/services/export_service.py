@@ -276,6 +276,11 @@ def _assignment_lookup(project):
             project_assignee = label
         elif job.scope == AssignmentJob.SCOPE_LAYER and job.layer_id:
             by_layer[job.layer_id] = label
+        elif job.scope == AssignmentJob.SCOPE_SPAN:
+            # A span job covers every component it was saved with; a feature job
+            # on one of them is narrower, so it is applied afterwards.
+            for feature_id in job.covered_feature_ids or []:
+                by_feature[str(feature_id)] = label
         elif job.scope == AssignmentJob.SCOPE_FEATURE and job.feature_id:
             by_feature[str(job.feature_id)] = label
 

@@ -448,17 +448,15 @@ def estimate_timeline(
     is the slowest authority), plus a small sequencing buffer.
     """
     statuses = statuses or []
-    # Approved/closed rows do not add review time.
-    active_types = [
-        t for t, s in zip(permit_types, permit_types, strict=False) if True
-    ]  # keep shape
-    # If caller passes statuses aligned with types, drop completed ones.
+    # If the caller passes statuses aligned with types, drop completed ones.
     if statuses and len(statuses) == len(permit_types):
         active_types = [
             t
             for t, s in zip(permit_types, statuses, strict=False)
             if s not in ('approved', 'closed', 'not_required')
         ]
+    else:
+        active_types = list(permit_types)
 
     if not active_types:
         return {
