@@ -2,6 +2,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from config.media import media_url
+from projects.layer_rules import layer_kind as resolve_layer_kind
 from projects.models.feature import Feature
 from projects.models.project import Project
 
@@ -65,6 +66,9 @@ def validate_geojson_geometry(value):
 
 class FeatureSerializer(serializers.ModelSerializer):
     photo_url = serializers.SerializerMethodField()
+    # Which layer form this feature uses. Exposed so a client adding a field
+    # (job-detail.html) targets the same kind the resolver applies.
+    layer_kind = serializers.SerializerMethodField()
 
     class Meta:
         model = Feature
@@ -72,6 +76,7 @@ class FeatureSerializer(serializers.ModelSerializer):
             'id',
             'layer_name',
             'layer_id',
+            'layer_kind',
             'properties',
             'geometry',
             'as_built_geometry',
@@ -94,6 +99,9 @@ class FeatureSerializer(serializers.ModelSerializer):
         url = media_url(obj.photo)
         request = self.context.get('request')
         return request.build_absolute_uri(url) if request else url
+
+    def get_layer_kind(self, obj):
+        return resolve_layer_kind(obj.layer_id or obj.layer_name)
 
 
 class FeatureUpdateSerializer(serializers.ModelSerializer):

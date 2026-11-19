@@ -107,6 +107,15 @@ class FieldTemplateTests(TestCase):
         self.assertIn('custom_safety', other_keys)
         self.assertNotIn('custom_gate', other_keys)
 
+    def test_feature_detail_exposes_the_layer_kind(self):
+        detail = self.client.get(
+            f'/api/projects/{self.project.id}/features/{self.feature.id}/'
+        )
+
+        # job-detail.html uses this to target the right form when a planner
+        # adds a field from the job itself.
+        self.assertEqual(detail.data['feature']['layer_kind'], 'trench')
+
     def test_layer_list_serves_the_same_fields_as_feature_detail(self):
         self._put(
             scope='project',
