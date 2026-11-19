@@ -213,7 +213,10 @@ def _tape_strip(image):
     for span in range(shortest, longest, step):
         for top in range(0, height - span + 1, step):
             coverage = sum(bright_rows[top : top + span]) / span
-            if coverage > best[0]:
+            # `>=`, not `>`: a tape is bright edge to edge, so a thin sliver and
+            # the whole blade tie on coverage. Prefer the taller crop, or the
+            # printed numbers sit outside the strip and are never read.
+            if coverage >= best[0]:
                 best = (coverage, top, span)
     coverage, top, span = best
     if coverage < 0.45:
@@ -239,9 +242,14 @@ def _ocr_readings(image, rotation: int) -> list[dict]:
         return []
     rotated = image.rotate(rotation, expand=True) if rotation else image
     try:
+        # No `tessedit_char_whitelist` here: with it Tesseract glues every
+        # number on the blade into one word ("102030405060708") with confidence
+        # 0, which no run can use. Without it the same crop comes back as
+        # separate 95%-confident words, and `_digits` still drops anything that
+        # is not a number.
         data = pytesseract.image_to_data(
             rotated,
-            config='--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789',
+            config='--oem 3 --psm 6',
             output_type=pytesseract.Output.DICT,
         )
     except Exception:
