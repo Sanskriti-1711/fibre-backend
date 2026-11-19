@@ -13,8 +13,13 @@ ENV PYTHONUNBUFFERED=1 \
 # libpq is what psycopg2 links against. It is bundled in the -binary wheel, but
 # installing it explicitly keeps the runtime predictable if the wheel ever
 # falls back to a source build.
+#
+# tesseract-ocr is the engine behind the tape-reading endpoint
+# (supervision/tape_measure.py). The pytesseract wheel is only a wrapper, so
+# without the binary the endpoint answers 503 and the engineer types the
+# reading by hand.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libpq5 \
+    && apt-get install -y --no-install-recommends libpq5 tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -9,6 +9,7 @@ from supervision.views import (
     FeatureDesignRevisionView,
     FeaturePhotoDetailView,
     FeaturePhotosView,
+    FeatureTapeMeasurementView,
     ProjectDecisionListView,
     ProjectFeatureStatusesAPIView,
 )
@@ -45,6 +46,12 @@ urlpatterns = [
     path(
         'features/<uuid:feature_id>/ai-measurements/',
         FeatureAiMeasurementView.as_view(),
+    ),
+    # Reads a tape measure in one stored photo and returns the span it covers;
+    # writes nothing, the engineer confirms the form.
+    path(
+        'features/<uuid:feature_id>/tape-measurements/',
+        FeatureTapeMeasurementView.as_view(),
     ),
     path(
         'features/<uuid:feature_id>/photos/<uuid:photo_id>/',

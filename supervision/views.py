@@ -7,7 +7,7 @@ from projects.api.access import engineer_can_access
 from projects.api.layers import editable_feature_ids
 from projects.models import Feature, Project
 from projects.photo_gallery import attach_photos
-from supervision import ai_measure
+from supervision import ai_measure, tape_measure
 from supervision.design_change import (
     REQUEST_PENDING,
     project_requests,
@@ -396,5 +396,112 @@ class FeatureAiMeasurementView(APIView):
                 'estimates': rows,
                 'notes': note,
                 'photo_id': str(photo.id),
+            }
+        )
+
+
+class FeatureTapeMeasurementView(APIView):
+    """POST /api/features/<feature_id>/tape-measurements/
+
+    Reads the numbers printed on a tape in one stored photo and returns the
+    distance between the outermost ones. Nothing is written: the app fills the
+    inspection form with the reading as `actual_*`, and the engineer confirms
+    it against the tape before saving.
+
+    The OCR pass is the scale — a tape needs no known-size object and no camera
+    calibration — so this route is the as-built counterpart to the estimator.
+    """
+
+    def post(self, request, feature_id):
+        try:
+            feature = Feature.objects.select_related('project').get(id=feature_id)
+        except Feature.DoesNotExist:
+            return Response(
+                {'detail': 'Feature not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Reading a tape spends no model call, but it is still evidence for this
+        # span: the same scopes that may add a photo may ask for a reading.
+        if not _can_edit_feature_photos(request, feature):
+            return Response(
+                {'detail': 'Not allowed to measure this feature'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not feature.is_inspection_editable:
+            return Response(
+                {
+                    'detail': (
+                        'This inspection has been submitted and its evidence is locked for '
+                        'review.'
+                    ),
+                    'status': feature.status,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        element_type = str(request.data.get('element_type') or '').strip().lower()
+        if element_type not in tape_measure.DIMENSION_SPECS:
+            return Response(
+                {'detail': 'Unknown element type'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        dimension = str(request.data.get('dimension') or '').strip().lower()
+        if tape_measure.dimension_spec(element_type, dimension) is None:
+            return Response(
+                {'detail': 'Unknown dimension for this element'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # As with an estimate, the photo must already be in this span's gallery
+        # so the reading stays tied to the bytes it was made from.
+        try:
+            photo = feature.photos.get(id=str(request.data.get('photo_id') or ''))
+        except (FeaturePhoto.DoesNotExist, ValidationError, ValueError):
+            return Response(
+                {'detail': 'Photo not found on this feature'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not tape_measure.ocr_available():
+            return Response(
+                {
+                    'detail': (
+                        'Tape OCR is not available on this server (tesseract is not '
+                        'installed). Read the tape into the form by hand.'
+                    )
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        read = tape_measure.read_tape(photo)
+        if read is None:
+            return Response(
+                {
+                    'measurement': None,
+                    'readings': [],
+                    'unit': 'cm',
+                    'notes': (
+                        'No tape numbers could be read. Lay the blade along the dimension, '
+                        'keep two printed numbers in the frame and avoid glare.'
+                    ),
+                    'photo_id': str(photo.id),
+                    'engine': 'tesseract',
+                }
+            )
+
+        measurement, note = tape_measure.measure(
+            element_type, dimension, read['readings'], read['unit']
+        )
+        return Response(
+            {
+                'measurement': measurement,
+                'readings': read['readings'],
+                'unit': read['unit'],
+                'notes': note,
+                'photo_id': str(photo.id),
+                'engine': read['engine'],
             }
         )
