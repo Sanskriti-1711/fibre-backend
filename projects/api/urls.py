@@ -1,6 +1,11 @@
 from django.urls import path
 
 from .completion import ProjectCompletionAPIView
+from .field_templates import (
+    FieldTemplateDetailAPIView,
+    FieldTemplateListAPIView,
+    FieldTemplatePreviewAPIView,
+)
 from .handoff import LldHandoffView
 from .import_views import (
     GpkgDiscoverView,
@@ -30,6 +35,11 @@ from .projects import (
 )
 
 urlpatterns = [
+    # Scoped engineer form fields. The admin page writes these; the layer and
+    # feature APIs read them through the same resolver.
+    path('field-templates/', FieldTemplateListAPIView.as_view()),
+    path('field-templates/preview/', FieldTemplatePreviewAPIView.as_view()),
+    path('field-templates/<uuid:template_id>/', FieldTemplateDetailAPIView.as_view()),
     path('projects/', ProjectListCreateAPIView.as_view()),
     path('projects/latest/', LatestProjectUpdatesAPIView.as_view()),
     path('projects/<uuid:project_id>/', ProjectDetailAPIView.as_view()),

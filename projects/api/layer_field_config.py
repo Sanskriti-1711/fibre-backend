@@ -16,6 +16,42 @@ TYPE_MAP = {
 }
 
 
+def clean_schema(schema):
+    """Normalise an admin field list into the shape the field clients render.
+
+    One implementation for the per-layer editor and the scoped templates. An
+    admin field carries a plain ``type`` (number/text/location/textarea); the
+    clients read ``role``/``widget``/``unit``. A row without a ``key`` is
+    dropped rather than saved half-formed.
+    """
+    clean = []
+    for i, item in enumerate(schema or []):
+        if not isinstance(item, dict) or not item.get('key'):
+            continue
+
+        editable = bool(item.get('editable'))
+        if editable:
+            # Prefer an explicit "type"; else fall back to the given widget.
+            type_key = item.get('type') or item.get('widget') or 'number'
+            spec = TYPE_MAP.get(type_key, TYPE_MAP['number'])
+            role, widget, unit = spec['role'], spec['widget'], spec['unit']
+        else:
+            role, widget, unit = 'reference', 'readonly', False
+
+        clean.append(
+            {
+                'key': item['key'],
+                'label': item.get('label') or item['key'],
+                'role': role,
+                'widget': widget,
+                'unit': unit,
+                'editable': editable,
+                'order': item.get('order', i),
+            }
+        )
+    return clean
+
+
 def _layer_name(project, layer_id):
     f = Feature.objects.filter(project=project, layer_id=layer_id).first()
     return f.layer_name if f else None
@@ -93,31 +129,7 @@ class LayerFieldConfigAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        clean = []
-        for i, item in enumerate(schema):
-            if not isinstance(item, dict) or not item.get('key'):
-                continue
-
-            editable = bool(item.get('editable'))
-            if editable:
-                # Prefer an explicit "type"; else fall back to the given widget.
-                type_key = item.get('type') or item.get('widget') or 'number'
-                spec = TYPE_MAP.get(type_key, TYPE_MAP['number'])
-                role, widget, unit = spec['role'], spec['widget'], spec['unit']
-            else:
-                role, widget, unit = 'reference', 'readonly', False
-
-            clean.append(
-                {
-                    'key': item['key'],
-                    'label': item.get('label') or item['key'],
-                    'role': role,
-                    'widget': widget,
-                    'unit': unit,
-                    'editable': editable,
-                    'order': item.get('order', i),
-                }
-            )
+        clean = clean_schema(schema)
 
         # Absolute slack that still counts as "as designed" (§3 Stage 5.2).
         # Omitted means 0, the strictest reading: any difference is a deviation.

@@ -1,3 +1,4 @@
+import contextlib
 import os
 from typing import Any
 
@@ -9,7 +10,7 @@ from rest_framework.views import APIView
 
 from projects.api.access import deny as _deny
 from projects.api.access import engineer_can_access as _engineer_can_access
-from projects.api.field_schema import derive_field_schema, has_editable
+from projects.api.field_templates import SchemaResolver
 from projects.api.microservice import headers as microservice_headers
 from projects.layer_rules import is_field_survey_layer
 from projects.models import Feature, LayerFieldConfig, Project
@@ -275,7 +276,14 @@ class ProjectLayerDetailAPIView(APIView):
         )
 
         editable_ids = editable_feature_ids(request, project)
-        serialized_features = FeatureSerializer(layer_features, many=True).data
+        feature_rows = list(layer_features.order_by('created_at'))
+        serialized_features = FeatureSerializer(feature_rows, many=True).data
+        resolver = SchemaResolver(project)
+        for entry, row in zip(serialized_features, feature_rows, strict=False):
+            # A template lookup must never take down the whole layer list; the
+            # serializer already carries the layer's stored schema as fallback.
+            with contextlib.suppress(Exception):
+                entry['field_schema'] = resolver.for_feature(row)
         editable_count = 0
         for entry in serialized_features:
             editable = editable_ids is None or str(entry['id']) in editable_ids
@@ -431,23 +439,13 @@ class ProjectFeatureDetailAPIView(APIView):
         editable_ids = editable_feature_ids(request, project)
         feature_data['editable'] = editable_ids is None or str(feature.id) in editable_ids
 
-        # If an admin has configured this layer's fields, serve that schema
-        # instead of the auto-derived one so the engineer clients use it.
-        # Broad except so a not-yet-migrated table (deploy ordering) degrades
-        # to the derived schema rather than 500-ing this endpoint.
-        try:
-            cfg = LayerFieldConfig.objects.get(project=project, layer_id=feature.layer_id)
-            feature_data['field_schema'] = cfg.schema
-        except LayerFieldConfig.DoesNotExist:
-            # No admin configuration yet. A schema captured before the editable
-            # heuristic existed asks the engineer for nothing, which renders an
-            # empty form, so derive the schema from this feature's attributes.
-            if not has_editable(feature_data.get('field_schema')):
-                derived = derive_field_schema(feature.properties)
-                if derived:
-                    feature_data['field_schema'] = derived
-        except Exception:
-            pass
+        # One resolver decides the form: a per-layer admin config when it
+        # exists, otherwise the derived schema, plus any fields a scoped
+        # template adds. The layer list resolves through the same code.
+        # Broad except so a not-yet-migrated template table (deploy ordering)
+        # degrades to the derived schema rather than 500-ing this endpoint.
+        with contextlib.suppress(Exception):
+            feature_data['field_schema'] = SchemaResolver(project).for_feature(feature)
 
         # Planned vs as-built (INTEGRATION_PLAN.md §3 Stage 5.2). This endpoint
         # serves one feature, so the extra lookup for the layer's tolerance is

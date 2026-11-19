@@ -103,3 +103,44 @@ def field_survey_exclusion_q(field: str = 'layer_id'):
         re.escape(name).replace('_', '[ _-]') for name in sorted(FIELD_SURVEY_EXCLUDED_LAYERS)
     )
     return Q(**{f'{field}__iregex': f'^(?:imp-)?(?:{body})$'})
+
+
+# ── Layer kinds ─────────────────────────────────────────────────────────────
+# A planner adds form fields to a *kind* of layer ("the trench layer"), not to
+# one project's spelling of it. Projects call the same layer `Final_Trenches`,
+# `trenches` or `imp-final-trenches`; all three are the trench kind. The same
+# list is the choice set on FieldTemplate, so the API and the admin page cannot
+# drift apart.
+LAYER_KIND_CHOICES = (
+    ('trench', 'Trench'),
+    ('duct', 'Duct'),
+    ('cable', 'Cable'),
+    ('chamber', 'Chamber'),
+    ('pole', 'Pole'),
+    ('premise', 'Premise'),
+    ('other', 'Other'),
+)
+
+_KIND_KEYWORDS = (
+    ('trench', ('trench',)),
+    ('duct', ('duct',)),
+    ('cable', ('cable', 'fibre', 'fiber')),
+    ('chamber', ('chamber', 'handhole', 'manhole')),
+    ('pole', ('pole',)),
+    ('premise', ('object', 'premise', 'building', 'address', 'household')),
+)
+
+
+def layer_kind(layer_id_or_name) -> str:
+    """Which kind of layer this is, for applying a scoped field template.
+
+    Matched on the app's normalised id, so `Final_Trenches`, `final_trenches`
+    and `imp-final-trenches` are one kind. Unknown layers are ``other``: a
+    template scoped to ``other`` is the escape hatch for a layer the list does
+    not name yet, rather than a silent no-op.
+    """
+    normalised = normalize_layer_id(layer_id_or_name)
+    for kind, keywords in _KIND_KEYWORDS:
+        if any(keyword in normalised for keyword in keywords):
+            return kind
+    return 'other'

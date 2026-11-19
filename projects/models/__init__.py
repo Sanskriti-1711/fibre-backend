@@ -1,4 +1,5 @@
 from .feature import Feature
+from .field_template import FieldTemplate
 from .import_session import ImportSession
 from .layer_field_config import LayerFieldConfig
 from .layer_weight import LayerWeight
@@ -9,6 +10,7 @@ from .stage_event import StageEvent
 
 __all__ = [
     'Feature',
+    'FieldTemplate',
     'ImportSession',
     'LayerFieldConfig',
     'LayerWeight',
