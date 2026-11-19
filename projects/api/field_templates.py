@@ -87,7 +87,10 @@ class SchemaResolver:
 
     def for_feature(self, feature: Feature) -> list[dict]:
         exact = self.exact.get(feature.layer_id)
-        base = exact if exact is not None else self.base_for(feature)
+        # An empty saved config is not a form with no fields. Treat it as
+        # unconfigured so a layer whose schema was cleared still renders the
+        # fields derived from its attributes.
+        base = exact if exact else self.base_for(feature)
         return merge_extra_fields(base, self.extras_for(feature.layer_id))
 
 

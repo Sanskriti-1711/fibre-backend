@@ -67,7 +67,7 @@ def _derived_schema(project, layer_id):
     """
     f = (
         Feature.objects.filter(project=project, layer_id=layer_id)
-        .exclude(field_schema__isnull=True)
+        .order_by('created_at')
         .first()
     )
     if f is None:
@@ -98,7 +98,9 @@ class LayerFieldConfigAPIView(APIView):
 
         try:
             cfg = LayerFieldConfig.objects.get(project=project, layer_id=layer_id)
-            effective = cfg.schema
+            # Same rule as SchemaResolver: an empty saved schema falls back
+            # to the fields derived from the layer's attributes.
+            effective = cfg.schema or derived
             configured = True
         except LayerFieldConfig.DoesNotExist:
             effective = derived

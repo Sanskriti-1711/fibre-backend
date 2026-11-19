@@ -57,6 +57,15 @@ WHITENOISE_AUTOREFRESH = True
 WHITENOISE_ROOT = BASE_DIR.parent / 'fiber-fe'  # noqa: F405
 WHITENOISE_INDEX_FILE = True
 
+# Keep evidence photos on this machine too. `.env` carries the deployment
+# bucket, and without this override a local upload would write to Cloudflare R2
+# even though the database is the local SQLite file.
+EVIDENCE_S3_BUCKET = ''
+EVIDENCE_S3_ENDPOINT_URL = ''
+EVIDENCE_S3_ACCESS_KEY_ID = ''
+EVIDENCE_S3_SECRET_ACCESS_KEY = ''
+EVIDENCE_PUBLIC_BASE_URL = ''
+
 # Permit / review mail prints in the runserver console instead of failing on
 # missing SMTP credentials.
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
