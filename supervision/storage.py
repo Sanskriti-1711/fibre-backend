@@ -14,6 +14,7 @@ stores evidence remotely can run its tests without the SDK installed.
 from __future__ import annotations
 
 import contextlib
+import io
 
 from django.conf import settings
 from django.core.files.storage import FileSystemStorage, Storage
@@ -84,6 +85,17 @@ class S3EvidenceStorage(Storage):
             ExtraArgs=extra or None,
         )
         return name
+
+    def _open(self, name, mode='rb'):
+        # Reading evidence back — the AI estimate does — needs a seekable
+        # handle; boto3's StreamingBody is not one and cannot be rewound.
+        body = self.client.get_object(Bucket=self.bucket, Key=name)['Body']
+        try:
+            return io.BytesIO(body.read())
+        finally:
+            close = getattr(body, 'close', None)
+            if close:
+                close()
 
     def exists(self, name):
         try:

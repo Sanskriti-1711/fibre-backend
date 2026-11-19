@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenRefreshView
 
 from .models import User
 from .permissions import IsSubadmin
@@ -31,6 +32,29 @@ class LoginAPIView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class TokenRefreshAPIView(TokenRefreshView):
+    """Refresh that answers 401 when the token's user no longer exists.
+
+    A refresh token outlives the user it names: the dev database is reseeded,
+    an account is removed, or the token was minted against another environment.
+    SimpleJWT's serializer looks that user up and lets `User.DoesNotExist`
+    escape, so the endpoint answers 500 (measured 2026-11-18: 136 KB traceback)
+    and the client retries the refresh forever instead of falling back to the
+    login screen -- the web app sat on "Couldn't Load Projects / User not
+    found" with every server healthy. 401 is the answer the client already
+    handles: clear the stored tokens and ask for credentials again.
+    """
+
+    def post(self, request, *args, **kwargs):
+        try:
+            return super().post(request, *args, **kwargs)
+        except User.DoesNotExist:
+            return Response(
+                {'detail': 'User not found', 'code': 'user_not_found'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
 
 
 class UserCreateAPIView(APIView):

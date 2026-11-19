@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -6,6 +7,7 @@ from projects.api.access import engineer_can_access
 from projects.api.layers import editable_feature_ids
 from projects.models import Feature, Project
 from projects.photo_gallery import attach_photos
+from supervision import ai_measure
 from supervision.design_change import (
     REQUEST_PENDING,
     project_requests,
@@ -327,5 +329,72 @@ class ProjectDecisionListView(APIView):
                 'project_id': str(project_id),
                 'count': total,
                 'results': FeatureDecisionRecordSerializer(records[:limit], many=True).data,
+            }
+        )
+
+
+class FeatureAiMeasurementView(APIView):
+    """POST /api/features/<feature_id>/ai-measurements/
+
+    Proposes dimensions from one stored photo and says where each number came
+    from. Nothing is written here: the client applies the values it accepts as
+    `estimated_*` readings, so a proposal can never overwrite a tape reading.
+    """
+
+    def post(self, request, feature_id):
+        try:
+            feature = Feature.objects.select_related('project').get(id=feature_id)
+        except Feature.DoesNotExist:
+            return Response(
+                {'detail': 'Feature not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Estimating reads the photo and spends a model call, but it is still
+        # evidence for this span: the same scopes that may add a photo may ask
+        # for an estimate.
+        if not _can_edit_feature_photos(request, feature):
+            return Response(
+                {'detail': 'Not allowed to estimate this feature'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not feature.is_inspection_editable:
+            return Response(
+                {
+                    'detail': (
+                        'This inspection has been submitted and its evidence is locked for '
+                        'review.'
+                    ),
+                    'status': feature.status,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        element_type = str(request.data.get('element_type') or '').strip().lower()
+        if element_type not in ai_measure.ELEMENT_SPECS:
+            return Response(
+                {'detail': 'Unknown element type'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # The photo must already be in this feature's gallery: an estimate is
+        # tied to the bytes it was made from, and `FeaturePhoto` keeps the hash.
+        try:
+            photo = feature.photos.get(id=str(request.data.get('photo_id') or ''))
+        except (FeaturePhoto.DoesNotExist, ValidationError, ValueError):
+            return Response(
+                {'detail': 'Photo not found on this feature'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        observation = ai_measure.observe(photo, element_type)
+        basis, rows, note = ai_measure.estimate(feature, element_type, observation)
+        return Response(
+            {
+                'basis': basis,
+                'estimates': rows,
+                'notes': note,
+                'photo_id': str(photo.id),
             }
         )

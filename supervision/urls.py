@@ -4,6 +4,7 @@ from supervision.dashboard import DashboardSummaryAPIView
 from supervision.export import ProjectExportAPIView
 from supervision.report import ProjectAsBuiltReportAPIView
 from supervision.views import (
+    FeatureAiMeasurementView,
     FeatureDecisionListView,
     FeatureDesignRevisionView,
     FeaturePhotoDetailView,
@@ -40,6 +41,11 @@ urlpatterns = [
     ),
     path('projects/<uuid:project_id>/decisions/', ProjectDecisionListView.as_view()),
     path('features/<uuid:feature_id>/photos/', FeaturePhotosView.as_view()),
+    # Proposes dimensions from one stored photo; writes nothing.
+    path(
+        'features/<uuid:feature_id>/ai-measurements/',
+        FeatureAiMeasurementView.as_view(),
+    ),
     path(
         'features/<uuid:feature_id>/photos/<uuid:photo_id>/',
         FeaturePhotoDetailView.as_view(),

@@ -147,6 +147,11 @@ def _layer_report(project, layer_id, layer_name, tolerance, units, weight):
         'measured_features': {},
         'outside': {},
     }
+    # Provenance per field: an as-built total is only as good as the instrument
+    # behind it, so the report says which methods produced the readings and how
+    # coarse the worst of them was.
+    methods: dict[str, dict[str, int]] = {}
+    max_accuracy: dict[str, float] = {}
     planned_m = 0.0
     as_built_m = 0.0
     measured_length_features = 0
@@ -194,6 +199,13 @@ def _layer_report(project, layer_id, layer_name, tolerance, units, weight):
             )
             totals['as_built'][key] = totals['as_built'].get(key, 0.0) + float(number)
             totals['measured_features'][key] = totals['measured_features'].get(key, 0) + 1
+            if isinstance(value, dict):
+                method = str(value.get('method') or 'untagged')
+                counts = methods.setdefault(key, {})
+                counts[method] = counts.get(method, 0) + 1
+                accuracy = as_number(value.get('accuracy_mm'))
+                if accuracy is not None:
+                    max_accuracy[key] = max(max_accuracy.get(key, 0.0), float(accuracy))
             if _is_length(key, unit, number):
                 reading_m += float(number)
 
@@ -241,6 +253,10 @@ def _layer_report(project, layer_id, layer_name, tolerance, units, weight):
                 'planned_features': totals['planned_features'].get(key, 0),
                 'measured_features': totals['measured_features'].get(key, 0),
                 'outside_features': outside.get(key, 0),
+                # {'tape': 2, 'gnss': 1} — absent entries carry no method.
+                'methods': methods.get(key, {}),
+                # The coarsest reading behind the total, in millimetres.
+                'max_accuracy_mm': _round(max_accuracy.get(key)),
             }
         )
 

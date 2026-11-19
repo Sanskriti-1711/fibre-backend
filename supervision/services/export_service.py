@@ -26,6 +26,11 @@ from projects.models import Feature, LayerFieldConfig
 from projects.services.completion_service import CompletionService
 
 # Audit columns appended after a layer's data columns, with their fixed widths.
+# Synthetic column keys for a reading's provenance. They are resolved against
+# the feature's measurements rather than the merged properties map.
+METHOD_PREFIX = '__method__'
+ACCURACY_PREFIX = '__accuracy__'
+
 TRAILING_COLUMNS = [
     ('Status', 14),
     ('Assigned To', 24),
@@ -219,19 +224,24 @@ def _schema_columns(schema):
 
 
 def build_columns(schema, key_rows):
-    """Ordered (key, label, width) columns for a layer.
+    """Ordered (key, label, width) columns, plus the tagged measurement keys.
 
     ``key_rows`` is an iterable of ``(properties, field_measurements)`` pairs.
     Schema fields lead, in their configured order and with their human labels;
     any key the schema does not mention follows, so nothing recorded against a
     feature is dropped from the export. Widths are measured over the same pass
     because write-only sheets need them before the first row is written.
+
+    The second return value is the measurement keys that actually recorded a
+    method or an accuracy; only those get the two provenance columns, so a
+    layer where nobody tagged anything keeps its old layout.
     """
     columns = _schema_columns(schema)
     order = [key for key, _ in columns]
     labels = dict(columns)
     seen = set(order)
     text_widths = {key: 0 for key in order}
+    tagged: dict[str, None] = {}
 
     for properties, measurements in key_rows:
         for source in (properties, measurements):
@@ -246,10 +256,16 @@ def build_columns(schema, key_rows):
                 flat = flatten(value)
                 if flat is not None:
                     text_widths[key] = max(text_widths[key], len(str(flat)))
+        if isinstance(measurements, dict):
+            for key, value in measurements.items():
+                if isinstance(value, dict) and (
+                    value.get('method') or value.get('accuracy_mm')
+                ):
+                    tagged[key] = None
 
     return [
         (key, labels[key], _width_for(text_widths.get(key, 0), len(labels[key]))) for key in order
-    ]
+    ], list(tagged)
 
 
 # ------------------------------------------------------------------- assignments
@@ -352,6 +368,17 @@ def _layer_schemas(project, layer_ids):
 # ----------------------------------------------------------------------- sheets
 
 
+def _cell_for(key, merged, measurements):
+    """One row's value for a column, including the provenance columns."""
+    if key.startswith(METHOD_PREFIX):
+        entry = measurements.get(key[len(METHOD_PREFIX) :])
+        return entry.get('method') if isinstance(entry, dict) else None
+    if key.startswith(ACCURACY_PREFIX):
+        entry = measurements.get(key[len(ACCURACY_PREFIX) :])
+        return entry.get('accuracy_mm') if isinstance(entry, dict) else None
+    return merged.get(key)
+
+
 def _write_layer_sheet(workbook, title, project, layer_id, schema, assignments):
     """Write one layer's features to a new sheet. Returns the row count."""
     project_assignee, by_layer, by_feature = assignments
@@ -360,10 +387,24 @@ def _write_layer_sheet(workbook, title, project, layer_id, schema, assignments):
 
     # First pass reads only the JSON columns, so the column union and widths
     # are known before the header row without loading whole feature rows.
-    columns = build_columns(
+    columns, tagged_keys = build_columns(
         schema,
         base_qs.values_list('properties', 'field_measurements').iterator(chunk_size=1000),
     )
+
+    # Provenance sits beside the value it describes: a number without its method
+    # is an opinion, and this workbook is the handover document.
+    labels_by_key = {key: label for key, label, _ in columns}
+    provenance = []
+    for key in tagged_keys:
+        label = labels_by_key.get(key, key)
+        provenance.append(
+            (f'{METHOD_PREFIX}{key}', f'{label} Method', _width_for(8, len(label) + 7))
+        )
+        provenance.append(
+            (f'{ACCURACY_PREFIX}{key}', f'{label} Accuracy (mm)', _width_for(10, len(label) + 14))
+        )
+    columns = columns + provenance
 
     headers = [label for _, label, _ in columns] + [label for label, _ in TRAILING_COLUMNS]
     widths = [width for _, _, width in columns] + [width for _, width in TRAILING_COLUMNS]
@@ -388,7 +429,7 @@ def _write_layer_sheet(workbook, title, project, layer_id, schema, assignments):
             by_feature.get(str(feature.id)) or by_layer.get(feature.layer_id) or project_assignee
         )
 
-        values = [merged.get(key) for key, _, _ in columns] + [
+        values = [_cell_for(key, merged, measurements) for key, _, _ in columns] + [
             STATUS_LABELS.get(feature.status, feature.status),
             assignee or '',
             len(feature.photos.all()),

@@ -177,6 +177,10 @@ class S3EvidenceStorageTests(TestCase):
         def delete_object(self, **kwargs):
             self.calls.append(('delete', kwargs))
 
+        def get_object(self, **kwargs):
+            self.calls.append(('get', kwargs))
+            return {'Body': io.BytesIO(b'evidence-bytes')}
+
         def generate_presigned_url(self, operation, Params, ExpiresIn):
             self.calls.append(
                 ('presign', {'operation': operation, **Params, 'ExpiresIn': ExpiresIn})
@@ -220,6 +224,18 @@ class S3EvidenceStorageTests(TestCase):
         self.assertEqual(operation, 'presign')
         self.assertEqual(kwargs['Bucket'], 'evidence')
         self.assertEqual(kwargs['ExpiresIn'], 3600)
+
+    def test_a_stored_photo_can_be_read_back(self):
+        # Without `_open` the deployed S3 store raised on every read, and the
+        # estimate silently fell back to the catalogue with the photo unused.
+        storage = self.make_storage()
+
+        with storage.open('feature_photos/site.png', 'rb') as handle:
+            self.assertEqual(handle.read(), b'evidence-bytes')
+
+        operation, kwargs = storage.client.calls[-1]
+        self.assertEqual(operation, 'get')
+        self.assertEqual(kwargs['Bucket'], 'evidence')
 
     def test_delete_and_exists_use_the_configured_bucket(self):
         storage = self.make_storage()
