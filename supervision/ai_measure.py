@@ -14,8 +14,10 @@ far wall, because the two are at different distances from the camera.
 
 Env (all optional; unset means deterministic values only):
   AI_MEASURE_LLM_URL      — e.g. https://api.openai.com/v1/chat/completions
-  AI_MEASURE_LLM_API_KEY  — bearer token (falls back to OPENAI_API_KEY)
-  AI_MEASURE_LLM_MODEL    — model name (default: gpt-4o-mini)
+  AI_MEASURE_LLM_API_KEY  — bearer token (falls back to OPENAI_API_KEY, then
+                            GEMINI_API_KEY via Gemini's OpenAI-compatible route)
+  AI_MEASURE_LLM_MODEL    — model name (default: gpt-4o-mini, or
+                            gemini-3-flash-preview when only a Gemini key is set)
 """
 
 from __future__ import annotations
@@ -250,26 +252,61 @@ VISION_PROMPT = (
 )
 
 
+OPENAI_VISION_URL = 'https://api.openai.com/v1/chat/completions'
+OPENAI_VISION_MODEL = 'gpt-4o-mini'
+
+# Gemini speaks the OpenAI chat-completions shape on this route, so a project
+# that already holds `GEMINI_API_KEY` for its other AI features gets vision
+# without provisioning a second provider.
+GEMINI_VISION_URL = (
+    'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
+)
+GEMINI_VISION_MODEL = 'gemini-3-flash-preview'
+
+# Enough for the JSON reply, and a hard stop for a model that starts writing
+# prose. Gemini counts its own reasoning against the same budget, so this cap
+# truncates its reply mid-object and is not sent there.
+MAX_REPLY_TOKENS = 200
+
+
 def _vision_config() -> tuple[str, str, str] | None:
     """Where to send the photo, or None when no model is configured.
 
-    `AI_MEASURE_LLM_*` is the explicit override, but the project already keeps
-    an OpenAI key for its own tools, so a deployment that has `OPENAI_API_KEY`
-    gets vision without a second secret to manage. No key at all means the
-    estimator still answers from the design and catalogue values.
+    `AI_MEASURE_LLM_*` is the explicit override. Without it the deployment uses
+    whichever provider key it already has: `OPENAI_API_KEY` first because it is
+    the widest choice, then `GEMINI_API_KEY`, whose models are reached through
+    the OpenAI-compatible route. The provider decides the default URL and model,
+    because a Gemini model name sent to OpenAI answers 404 and vice versa. No
+    key at all means the estimator still answers from the design and catalogue
+    values.
     """
-    key = (
-        (os.getenv('AI_MEASURE_LLM_API_KEY') or '').strip()
-        or (os.getenv('OPENAI_API_KEY') or '').strip()
-    )
-    if not key:
+    explicit_key = (os.getenv('AI_MEASURE_LLM_API_KEY') or '').strip()
+    openai_key = (os.getenv('OPENAI_API_KEY') or '').strip()
+    gemini_key = (os.getenv('GEMINI_API_KEY') or '').strip()
+    if explicit_key:
+        key, default_url, default_model = (
+            explicit_key,
+            OPENAI_VISION_URL,
+            OPENAI_VISION_MODEL,
+        )
+    elif openai_key:
+        key, default_url, default_model = (
+            openai_key,
+            OPENAI_VISION_URL,
+            OPENAI_VISION_MODEL,
+        )
+    elif gemini_key:
+        key, default_url, default_model = (
+            gemini_key,
+            GEMINI_VISION_URL,
+            GEMINI_VISION_MODEL,
+        )
+    else:
         return None
-    url = (
-        (os.getenv('AI_MEASURE_LLM_URL') or '').strip()
-        or 'https://api.openai.com/v1/chat/completions'
-    )
+    url = (os.getenv('AI_MEASURE_LLM_URL') or '').strip() or default_url
     model = (
-        (os.getenv('AI_MEASURE_LLM_MODEL') or 'gpt-4o-mini').strip() or 'gpt-4o-mini'
+        (os.getenv('AI_MEASURE_LLM_MODEL') or '').strip()
+        or default_model
     )
     return url, key, model
 
@@ -342,8 +379,13 @@ def observe(photo, element_type: str) -> dict | None:
             }
         ],
         'temperature': 0.0,
-        'max_tokens': 200,
     }
+    if 'generativelanguage.googleapis.com' not in url:
+        payload['max_tokens'] = MAX_REPLY_TOKENS
+    else:
+        # Gemini 3 reasons before it answers and bills those tokens too, which
+        # cost 7.9s here against 1.7s at this setting for the same JSON.
+        payload['reasoning_effort'] = 'low'
     try:
         resp = requests.post(
             url,

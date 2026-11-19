@@ -16,6 +16,7 @@ network and does not depend on an API key being present.
 """
 
 import io
+import json
 import os
 import unittest
 from types import SimpleNamespace
@@ -44,7 +45,12 @@ def png_bytes(width=16, height=16):
 
 def live_vision_key() -> str:
     """The key a live vision test would use, or '' when none is configured."""
-    return (os.getenv('AI_MEASURE_LLM_API_KEY') or os.getenv('OPENAI_API_KEY') or '').strip()
+    return (
+        os.getenv('AI_MEASURE_LLM_API_KEY')
+        or os.getenv('OPENAI_API_KEY')
+        or os.getenv('GEMINI_API_KEY')
+        or ''
+    ).strip()
 
 
 def trench_photo_bytes(width=900, height=700):
@@ -263,7 +269,7 @@ class ElementFromLayerNameTests(SimpleTestCase):
 
 
 class VisionConfigTests(SimpleTestCase):
-    """Explicit overrides first, then the project's existing OpenAI key."""
+    """Explicit overrides first, then whichever provider key the project has."""
 
     def config(self, **env):
         with mock.patch.dict(os.environ, env, clear=True):
@@ -297,6 +303,24 @@ class VisionConfigTests(SimpleTestCase):
             self.config(OPENAI_API_KEY='sk-project', AI_MEASURE_LLM_MODEL=''),
             ('https://api.openai.com/v1/chat/completions', 'sk-project', 'gpt-4o-mini'),
         )
+
+    def test_a_gemini_key_uses_the_compatible_route(self):
+        # Gemini answers the OpenAI chat-completions shape on its own host, and
+        # an OpenAI model name sent there is a 404, so the default model has to
+        # follow the key rather than be a single constant.
+        self.assertEqual(
+            self.config(GEMINI_API_KEY='gm-test'),
+            (
+                'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+                'gm-test',
+                'gemini-3-flash-preview',
+            ),
+        )
+
+    def test_the_openai_key_beats_the_gemini_one(self):
+        url, key, model = self.config(OPENAI_API_KEY='sk-project', GEMINI_API_KEY='gm-test')
+
+        self.assertEqual((url, key, model), ('https://api.openai.com/v1/chat/completions', 'sk-project', 'gpt-4o-mini'))
 
     def test_no_key_at_all_means_no_vision(self):
         self.assertIsNone(self.config())
@@ -332,6 +356,29 @@ class ObserveTests(SimpleTestCase):
         self.assertTrue(sent['headers']['Authorization'].startswith('Bearer '))
         self.assertIn('data:image/jpeg;base64,', sent['data'])
         self.assertIn('expected to be a trench', sent['data'])
+
+    def test_the_gemini_route_sends_no_token_cap(self):
+        # A 200-token cap ended Gemini's reply mid-object (finish_reason length),
+        # so the estimator saw an unparsable answer and fell back every time.
+        with mock.patch.dict(os.environ, {'GEMINI_API_KEY': 'gm-test'}, clear=True), mock.patch(
+            'requests.post', return_value=self.reply('{"element": "trench"}')
+        ) as post:
+            ai_measure.observe(self.photo, 'trench')
+
+        sent = json.loads(post.call_args.kwargs['data'])
+        self.assertEqual(sent['model'], 'gemini-3-flash-preview')
+        self.assertNotIn('max_tokens', sent)
+        self.assertEqual(sent['reasoning_effort'], 'low')
+
+    def test_the_openai_route_keeps_the_token_cap(self):
+        with mock.patch.dict(os.environ, {'OPENAI_API_KEY': 'sk-test'}, clear=True), mock.patch(
+            'requests.post', return_value=self.reply('{"element": "trench"}')
+        ) as post:
+            ai_measure.observe(self.photo, 'trench')
+
+        sent = json.loads(post.call_args.kwargs['data'])
+        self.assertEqual(sent['max_tokens'], 200)
+        self.assertNotIn('reasoning_effort', sent)
 
     def test_an_error_response_falls_back_to_the_design_values(self):
         failure = mock.Mock(status_code=500)
@@ -516,7 +563,7 @@ class LiveVisionEndToEndTests(LocalEvidenceMixin, TestCase):
     def setUp(self):
         if not live_vision_key():
             raise unittest.SkipTest(
-                'No vision key: set OPENAI_API_KEY or AI_MEASURE_LLM_API_KEY.'
+                'No vision key: set OPENAI_API_KEY, GEMINI_API_KEY or AI_MEASURE_LLM_API_KEY.'
             )
         self.pin_local_evidence()
         self.engineer = make_user('ai-measure-live@example.com', role=User.Role.ENGINEER)
