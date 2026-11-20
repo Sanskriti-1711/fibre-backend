@@ -247,9 +247,12 @@ def _ocr_readings(image, rotation: int) -> list[dict]:
         # 0, which no run can use. Without it the same crop comes back as
         # separate 95%-confident words, and `_digits` still drops anything that
         # is not a number.
+        # `--oem 1` (LSTM only) reads the same digits as the default engine in
+        # about half the time, which is the difference between a usable read and
+        # a timeout on a free 0.1-CPU host.
         data = pytesseract.image_to_data(
             rotated,
-            config='--oem 3 --psm 6',
+            config='--oem 1 --psm 6',
             output_type=pytesseract.Output.DICT,
         )
     except Exception:
@@ -341,6 +344,13 @@ def read_tape_bytes(data: bytes) -> dict | None:
             score = _run_score(run)
             if score > best_score:
                 best, best_score = run, score
+            # Three numbers in order already are a tape, and each further turn
+            # costs seconds on the free host. Stop there instead of reading all
+            # eight crop/rotation passes to shave a reading off the ends.
+            if len(best) >= 3:
+                break
+        if len(best) >= 3:
+            break
 
     if len(best) < 2:
         return None
