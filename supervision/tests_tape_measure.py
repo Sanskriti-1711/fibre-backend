@@ -105,7 +105,7 @@ class ReadTapeTests(SimpleTestCase):
     """The OCR pass keeps a run and rejects everything else."""
 
     def read(self, tokens_by_rotation):
-        def fake(image, rotation):
+        def fake(image, rotation, config=tape_measure.DENSE_OCR_CONFIG):
             return tokens_by_rotation.get(rotation, [])
 
         with mock.patch('supervision.tape_measure._ocr_readings', side_effect=fake):

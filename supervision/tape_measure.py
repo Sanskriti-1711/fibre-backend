@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import io
 import statistics
+import time
 
 # Uploads are shrunk to this longest edge before OCR. Bigger costs time without
-# making a printed digit easier to read.
+# making a printed digit easier to read — but a blurred field photo does lose
+# its run at 1280, so this stays at 1600.
 TAPE_MAX_EDGE = 1600
 
 # pytesseract reports confidence 0–100, and a digit it is unsure about is worse
@@ -39,6 +41,26 @@ LOW_OCR_CONFIDENCE = 35
 # Gray-level step (0–255) between the two sides of a boundary before it counts
 # as the end of the trench or duct rather than a stone or a shadow.
 EDGE_MIN_STEP = 12.0
+
+# `--oem 1` (LSTM only) reads a printed digit in about half the time of the
+# default engine. ``psm 6`` treats the crop as one block of text, which is what
+# a blade is; ``psm 11`` finds scattered words, which is what is left when dust,
+# shadow or a gap between the marks breaks the blade into islands.
+DENSE_OCR_CONFIG = '--oem 1 --psm 6'
+SPARSE_OCR_CONFIG = '--oem 1 --psm 11'
+
+# One tesseract run is a subprocess with its own timeout. Without it a single
+# wedged process holds the request open forever, which is exactly what a
+# 0.1-CPU host does under load.
+OCR_PASS_TIMEOUT = 25
+
+# Wall-clock budgets for the whole read. The free host runs the same passes
+# 10–40x slower than a laptop, so a full sweep of every crop, equalisation and
+# quarter turn can outlast the phone's patience; past the soft budget the
+# reader returns the run it already has. Past the hard one it stops even with
+# nothing, because a photo with no readable blade must still answer.
+TAPE_OCR_BUDGET_S = 55.0
+TAPE_OCR_HARD_BUDGET_S = 80.0
 
 # A real tape number is bigger than this and no tape is longer than that.
 MIN_READING_MM = 30
@@ -329,7 +351,39 @@ def _variants(image) -> list[tuple[str, object]]:
             )
     except Exception:
         pass
+    try:
+        variants.append(('binary', _binarized(image)))
+    except Exception:
+        pass
     return variants
+
+
+def _binarized(image):
+    """Black digits on a white blade, at a threshold the crop picks itself.
+
+    Sun on one end of the blade and shadow on the other make the graded crop
+    hard to read, and an Otsu split — the level that best separates the two
+    populations of gray in this crop — turns it back into a printed scale.
+    """
+    histogram = image.histogram()
+    total = sum(histogram)
+    if not total:
+        return image
+    weighted = sum(level * count for level, count in enumerate(histogram))
+    background, background_sum = 0, 0.0
+    best_variance, threshold = -1.0, 128
+    for level, count in enumerate(histogram):
+        background += count
+        foreground = total - background
+        if not background or not foreground:
+            continue
+        background_sum += level * count
+        mean_back = background_sum / background
+        mean_front = (weighted - background_sum) / foreground
+        variance = background * foreground * (mean_back - mean_front) ** 2
+        if variance > best_variance:
+            best_variance, threshold = variance, level
+    return image.point(lambda value: 255 if value > threshold else 0)
 
 
 def _cluster_tokens(tokens: list[dict], tolerance: float = 0.02) -> list[dict]:
@@ -577,7 +631,7 @@ def _clip_to_bounds(run: list[dict], bounds: dict | None) -> list[dict]:
     return inside if len(inside) >= 2 else run
 
 
-def _ocr_readings(image, rotation: int) -> list[dict]:
+def _ocr_readings(image, rotation: int, config: str = DENSE_OCR_CONFIG) -> list[dict]:
     """Digit tokens in one rotation of an image: value, x (0–1), confidence."""
     pytesseract = _pytesseract()
     if pytesseract is None:
@@ -589,13 +643,11 @@ def _ocr_readings(image, rotation: int) -> list[dict]:
         # 0, which no run can use. Without it the same crop comes back as
         # separate 95%-confident words, and `_digits` still drops anything that
         # is not a number.
-        # `--oem 1` (LSTM only) reads the same digits as the default engine in
-        # about half the time, which is the difference between a usable read and
-        # a timeout on a free 0.1-CPU host.
         data = pytesseract.image_to_data(
             rotated,
-            config='--oem 1 --psm 6',
+            config=config,
             output_type=pytesseract.Output.DICT,
+            timeout=OCR_PASS_TIMEOUT,
         )
     except Exception:
         return []
@@ -682,19 +734,38 @@ def read_tape_bytes(data: bytes) -> dict | None:
     if image is None:
         return None
 
-    crops = [{'top': 0, 'bottom': image.height, 'crop': image, 'small_top': None}]
-    crops.extend(_tape_bands(image))
+    frame = {'top': 0, 'bottom': image.height, 'crop': image, 'small_top': None}
+    # A band that covers most of the frame is the frame: scanning it twice only
+    # spends seconds the free host does not have.
+    bands = [band for band in _tape_bands(image) if band['crop'].height < image.height * 0.8]
 
     best: list[dict] = []
     best_score = 0.0
-    best_crop = crops[0]
+    best_crop = frame
     best_rotation = 0
-    for crop in crops:
+    started = time.monotonic()
+    deadline = started + TAPE_OCR_BUDGET_S
+    hard_deadline = started + TAPE_OCR_HARD_BUDGET_S
+
+    def out_of_time() -> bool:
+        """Stop paying for passes: nothing readable here, or out of time."""
+        now = time.monotonic()
+        return now > hard_deadline or (len(best) >= 2 and now > deadline)
+
+    def look(crop, rotations: tuple[int, ...]) -> None:
+        """Score one crop at these turns, keeping the best run seen anywhere.
+
+        Every turn feeds one pool for the crop: two equalisations that read the
+        same value at the same x reinforce each other, and a mark one turn sees
+        fills the gap another left. That agreement is what turns a shaky field
+        photo into a run, so it must not be thrown away to save a pass.
+        """
+        nonlocal best, best_score, best_crop, best_rotation
         pool: list[dict] = []
         for _label, variant in _variants(crop['crop']):
-            # The blade may run in any direction; OCR only reads digits upright,
-            # so each variant is tried at four quarter turns.
-            for rotation in (0, 90, 180, 270):
+            for rotation in rotations:
+                if out_of_time():
+                    return
                 pool.extend(_ocr_readings(variant, rotation))
                 run = _reading_run(_drop_outliers(_cluster_tokens(pool)))
                 score = _run_score(run)
@@ -702,9 +773,33 @@ def read_tape_bytes(data: bytes) -> dict | None:
                     best, best_score = run, score
                     best_crop, best_rotation = crop, rotation
             # Three numbers in order already are a tape; further equalisations
-            # of the same crop cost seconds on the free host for no gain.
+            # of the same crop cost seconds for no gain.
             if len(_reading_run(_cluster_tokens(pool))) >= 3:
                 break
+        if len(_reading_run(_cluster_tokens(pool))) >= 2:
+            return
+        # Nothing whole here: the marks are broken into islands by dust, glare
+        # or bare blade between them, so ask the sparse model before giving up.
+        for rotation in rotations:
+            if out_of_time():
+                return
+            pool.extend(_ocr_readings(crop['crop'], rotation, config=SPARSE_OCR_CONFIG))
+            run = _reading_run(_drop_outliers(_cluster_tokens(pool)))
+            score = _run_score(run)
+            if score > best_score:
+                best, best_score = run, score
+                best_crop, best_rotation = crop, rotation
+
+    # A blade usually lies inside a bright band, and a band is a fraction of the
+    # frame's pixels, so read the bands first and take the whole frame only when
+    # no band has produced a proper run. A blade running up a portrait frame is
+    # upright only after a quarter turn, so those turns come last, on one crop.
+    for band in bands:
+        look(band, (0, 180))
+    if len(best) < 4:
+        look(frame, (0, 180))
+    if len(best) < 2:
+        look(bands[0] if bands else frame, (90, 270))
 
     if len(best) < 2:
         return None
