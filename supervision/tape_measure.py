@@ -790,16 +790,18 @@ def read_tape_bytes(data: bytes) -> dict | None:
                 best, best_score = run, score
                 best_crop, best_rotation = crop, rotation
 
-    # A blade usually lies inside a bright band, and a band is a fraction of the
-    # frame's pixels, so read the bands first and take the whole frame only when
-    # no band has produced a proper run. A blade running up a portrait frame is
-    # upright only after a quarter turn, so those turns come last, on one crop.
-    for band in bands:
-        look(band, (0, 180))
+    # The whole frame at 0 and 180 is usually one or two passes away from the
+    # full run, so it goes first: a band crop can hold only part of the blade
+    # and read two marks where the frame reads seven, and on a slow host the
+    # budget would be spent before the frame was ever tried. The bands are the
+    # cheap follow-up when the frame came back weak.
+    look(frame, (0, 180))
     if len(best) < 4:
-        look(frame, (0, 180))
+        for band in bands:
+            look(band, (0, 180))
+    # A blade running up a portrait frame is upright only after a quarter turn.
     if len(best) < 2:
-        look(bands[0] if bands else frame, (90, 270))
+        look(frame, (90, 270))
 
     if len(best) < 2:
         return None
