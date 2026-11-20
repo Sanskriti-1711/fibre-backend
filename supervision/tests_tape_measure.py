@@ -285,3 +285,63 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
         )
 
         self.assertIn(response.status_code, (401, 403))
+
+
+class GluedNumberSplitTests(SimpleTestCase):
+    """Tesseract can return every mark on the blade as one word."""
+
+    def test_six_two_digit_marks_glued_together_come_back_as_six_numbers(self):
+        self.assertEqual(
+            tape_measure._split_merged('102030405060'), [10, 20, 30, 40, 50, 60]
+        )
+
+    def test_three_digit_marks_glued_together_come_back_as_three_numbers(self):
+        self.assertEqual(tape_measure._split_merged('100110120'), [100, 110, 120])
+
+    def test_a_blob_that_does_not_step_regularly_is_not_split(self):
+        self.assertEqual(tape_measure._split_merged('1000000001'), [])
+
+    def test_a_single_printed_number_is_left_alone(self):
+        self.assertEqual(tape_measure._split_merged('1234'), [])
+
+
+class ObjectEdgeTests(SimpleTestCase):
+    """The blade runs past the trench or duct; the reading stops at its edge."""
+
+    def scene(self, middle: int = 210, width: int = 600, height: int = 300):
+        image = Image.new('L', (width, height), 40)
+        pixels = image.load()
+        for y in range(height):
+            for x in range(width // 3, (width * 2) // 3):
+                pixels[x, y] = middle
+        return image
+
+    def test_two_edges_across_the_blade_bound_the_object(self):
+        bounds = tape_measure._object_bounds(self.scene(), {'top': 120, 'bottom': 180})
+
+        self.assertIsNotNone(bounds)
+        self.assertAlmostEqual(bounds['left'], 1 / 3, delta=0.06)
+        self.assertAlmostEqual(bounds['right'], 2 / 3, delta=0.06)
+
+    def test_a_flat_frame_has_no_edges(self):
+        image = Image.new('L', (600, 300), 128)
+
+        self.assertIsNone(tape_measure._object_bounds(image, {'top': 120, 'bottom': 180}))
+
+    def test_numbers_printed_past_the_edge_are_dropped(self):
+        run = [
+            {'value': value, 'x': x, 'confidence': 0.9}
+            for value, x in ((10, 0.1), (20, 0.3), (30, 0.5), (40, 0.8), (50, 0.9))
+        ]
+
+        clipped = tape_measure._clip_to_bounds(run, {'left': 0.2, 'right': 0.6})
+
+        self.assertEqual([row['value'] for row in clipped], [20, 30])
+
+    def test_a_false_edge_never_empties_a_reading(self):
+        run = [
+            {'value': value, 'x': x, 'confidence': 0.9}
+            for value, x in ((10, 0.1), (20, 0.3))
+        ]
+
+        self.assertEqual(tape_measure._clip_to_bounds(run, {'left': 0.5, 'right': 0.9}), run)

@@ -495,6 +495,15 @@ class FeatureTapeMeasurementView(APIView):
         measurement, note = tape_measure.measure(
             element_type, dimension, read['readings'], read['unit']
         )
+        bounds = read.get('bounds')
+        if bounds and bounds.get('clipped'):
+            # The numbers past the edge are the far side of the trench or duct,
+            # not part of what was asked for: say so rather than silently
+            # shortening the tape.
+            note = (
+                f"{note} Stopped at the {element_type} edge visible in the photo "
+                f"({bounds['clipped']} number(s) past it ignored)."
+            )
         return Response(
             {
                 'measurement': measurement,
@@ -503,5 +512,6 @@ class FeatureTapeMeasurementView(APIView):
                 'notes': note,
                 'photo_id': str(photo.id),
                 'engine': read['engine'],
+                'bounds': bounds,
             }
         )

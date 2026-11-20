@@ -30,6 +30,16 @@ TAPE_MAX_EDGE = 1600
 # than no digit: the reading would move the measured span.
 MIN_OCR_CONFIDENCE = 55
 
+# A field photo is rarely as clean as a test card. A digit tesseract is only
+# half sure of is still useful when it lands on the same x as the same value
+# from another equalisation, and `_run_score` penalises the weak ones that
+# never find that support.
+LOW_OCR_CONFIDENCE = 35
+
+# Gray-level step (0–255) between the two sides of a boundary before it counts
+# as the end of the trench or duct rather than a stone or a shadow.
+EDGE_MIN_STEP = 12.0
+
 # A real tape number is bigger than this and no tape is longer than that.
 MIN_READING_MM = 30
 MAX_READING_MM = 30000
@@ -189,18 +199,20 @@ def _prepare(data: bytes):
         return None
 
 
-def _tape_strip(image):
-    """The brightest long band in the frame, or None when no blade stands out.
+def _tape_bands(image, limit: int = 2) -> list[dict]:
+    """The brightest long bands in the frame, best first.
 
     A tape is a bright, low-variance strip running across the photo. Cropping to
     it before OCR removes the trench walls, the site clutter and the timestamp
-    burn-in that otherwise become candidate numbers.
+    burn-in that otherwise become candidate numbers. More than one band is kept
+    because a white site hut, a sheet of paper or a sunlit path can outshine the
+    blade, and the reader scores whichever band actually yields a tape run.
     """
     small = image.copy()
     small.thumbnail((320, 320))
     width, height = small.size
     if width < 8 or height < 8:
-        return None
+        return []
     pixels = small.load()
     bright_rows = []
     for y in range(height):
@@ -209,30 +221,305 @@ def _tape_strip(image):
     step = max(1, height // 40)
     shortest = max(4, height // 10)
     longest = max(shortest + 1, int(height * 0.45))
-    best = (0.0, 0, shortest)
+    candidates = []
     for span in range(shortest, longest, step):
         for top in range(0, height - span + 1, step):
             coverage = sum(bright_rows[top : top + span]) / span
-            # `>=`, not `>`: a tape is bright edge to edge, so a thin sliver and
-            # the whole blade tie on coverage. Prefer the taller crop, or the
-            # printed numbers sit outside the strip and are never read.
-            if coverage >= best[0]:
-                best = (coverage, top, span)
-    coverage, top, span = best
-    if coverage < 0.45:
-        return None
+            if coverage >= 0.45:
+                candidates.append((coverage, span, top))
+    if not candidates:
+        return []
+    candidates.sort(reverse=True)
 
-    pad = max(2, span // 8)
-    top = max(0, top - pad)
-    bottom = min(height, top + span + 2 * pad)
     scale = image.height / height
-    return image.crop((0, int(top * scale), image.width, min(image.height, int(bottom * scale))))
+    bands: list[dict] = []
+    for coverage, span, top in candidates:
+        # One band per stretch of the frame: two crops of the same blade would
+        # only add OCR time.
+        if any(abs(top - band['small_top']) < max(span, band['small_span']) for band in bands):
+            continue
+        pad = max(2, span // 8)
+        crop_top = max(0, top - pad)
+        crop_bottom = min(height, top + span + 2 * pad)
+        band_top = int(crop_top * scale)
+        band_bottom = min(image.height, int(crop_bottom * scale))
+        bands.append(
+            {
+                'small_top': top,
+                'small_span': span,
+                'coverage': coverage,
+                'top': band_top,
+                'bottom': band_bottom,
+                'crop': image.crop((0, band_top, image.width, band_bottom)),
+            }
+        )
+        if len(bands) >= limit:
+            break
+    return bands
+
+
+def _tape_strip(image):
+    """The brightest long band in the frame, or None when no blade stands out."""
+    bands = _tape_bands(image, limit=1)
+    return bands[0]['crop'] if bands else None
 
 
 def _digits(raw) -> str:
     text = str(raw or '').translate(_LOOKALIKES)
     text = ''.join(character for character in text if character.isdigit())
-    return text if 1 <= len(text) <= 5 else ''
+    # Up to five digits is one printed number; longer is either a blob of glued
+    # numbers (see `_split_merged`) or noise, and is sorted out by the caller.
+    return text if 1 <= len(text) <= 14 else ''
+
+
+def _split_merged(text: str) -> list[int]:
+    """One glued OCR word split back into the numbers printed on the blade.
+
+    Tesseract returns ``102030405060`` for six separate marks when the digits
+    touch, and a single 0-confidence word is unusable. Splitting it into
+    equal-width groups that step regularly recovers the run; anything that does
+    not decompose that way is left alone.
+    """
+    if not text.isdigit() or len(text) <= 5:
+        return []
+    for width in (3, 2):
+        if len(text) % width or len(text) // width < 3:
+            continue
+        groups = [int(text[index : index + width]) for index in range(0, len(text), width)]
+        gaps = [later - earlier for earlier, later in zip(groups, groups[1:])]
+        if any(gap <= 0 for gap in gaps):
+            continue
+        step = statistics.median(gaps)
+        if all(abs(gap - step) <= step * 0.2 for gap in gaps):
+            return groups
+    return []
+
+
+def _variants(image) -> list[tuple[str, object]]:
+    """The same blade under a few equalisations, cheapest first.
+
+    A field photo arrives with glare, shadow, a dusty blade or the wrong
+    exposure, and a digit that is unreadable in the raw crop often comes back
+    after autocontrast or an upscale with an unsharp mask. The reader takes the
+    best run across the variants, so a bad equalisation costs nothing.
+    """
+    from PIL import ImageFilter, ImageOps
+
+    variants: list[tuple[str, object]] = [('raw', image)]
+    try:
+        variants.append(('auto', ImageOps.autocontrast(image)))
+    except Exception:
+        pass
+    try:
+        # Only the strip, not a full frame: a 2x upscale of a 1600 px photo is
+        # three times the pixels for digits that are already large enough.
+        if image.width <= 900:
+            from PIL import Image as PILImage
+
+            large = image.resize(
+                (image.width * 2, image.height * 2), PILImage.Resampling.LANCZOS
+            )
+            variants.append(
+                (
+                    'sharp',
+                    large.filter(
+                        ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3)
+                    ),
+                )
+            )
+    except Exception:
+        pass
+    return variants
+
+
+def _cluster_tokens(tokens: list[dict], tolerance: float = 0.02) -> list[dict]:
+    """One token per position along the blade, from every variant that saw it.
+
+    Two equalisations that agree on a value at the same place are worth more
+    than either alone; one that reads something else there votes against
+    itself and the confident majority wins.
+    """
+    ordered = sorted(tokens, key=lambda token: token['x'])
+    clusters: list[list[dict]] = []
+    for token in ordered:
+        if clusters and abs(token['x'] - clusters[-1][-1]['x']) <= tolerance:
+            clusters[-1].append(token)
+        else:
+            clusters.append([token])
+
+    merged: list[dict] = []
+    for rows in clusters:
+        best = max(rows, key=lambda row: row['confidence'])
+        agreeing = [row for row in rows if row['value'] == best['value']]
+        merged.append(
+            {
+                'value': best['value'],
+                'x': sum(row['x'] for row in agreeing) / len(agreeing),
+                'y': sum(row.get('y', 0.5) for row in agreeing) / len(agreeing),
+                'confidence': min(1.0, best['confidence'] + 0.05 * (len(agreeing) - 1)),
+            }
+        )
+    return merged
+
+
+def _smoothed(values: list[float], radius: int = 2) -> list[float]:
+    if radius <= 0 or not values:
+        return list(values)
+    return [
+        sum(values[max(0, index - radius) : index + radius + 1])
+        / len(values[max(0, index - radius) : index + radius + 1])
+        for index in range(len(values))
+    ]
+
+
+def _steps(profile: list[float], window: int) -> list[float]:
+    """Gray-level change at every column, measured over a window each side."""
+    count = len(profile)
+    prefix = [0.0]
+    for value in profile:
+        prefix.append(prefix[-1] + value)
+
+    def mean(start: int, end: int):
+        start, end = max(0, min(count, start)), max(0, min(count, end))
+        return (prefix[end] - prefix[start]) / (end - start) if end > start else None
+
+    steps = []
+    for x in range(count):
+        left, right = mean(x - window, x), mean(x, x + window)
+        steps.append(abs(right - left) if left is not None and right is not None else 0.0)
+    return steps
+
+
+def _peaks(values: list[float], min_gap: int, threshold: float) -> list[int]:
+    """The strongest separated local maxima, left to right."""
+    candidates = [
+        (values[x], x)
+        for x in range(1, len(values) - 1)
+        if values[x] >= threshold and values[x] >= values[x - 1] and values[x] >= values[x + 1]
+    ]
+    candidates.sort(reverse=True)
+    chosen: list[int] = []
+    for _score, x in candidates:
+        if all(abs(x - other) >= min_gap for other in chosen):
+            chosen.append(x)
+        if len(chosen) == 4:
+            break
+    return sorted(chosen)
+
+
+def _band_for(crop, run: list[dict]) -> dict:
+    """The rows the blade occupies, from the strip if it found one.
+
+    When no bright band stood out (a dirty blade, a dull day, a wide shot) the
+    digits themselves say where the blade is, so the rows above and below them
+    can still be searched for the object's edge.
+    """
+    if crop.get('small_top') is not None:
+        return {'top': crop['top'], 'bottom': crop['bottom']}
+    height = crop['crop'].height
+    ys = [token.get('y', 0.5) for token in run] or [0.5]
+    centre = statistics.median(ys)
+    spread = max(0.04, (max(ys) - min(ys)) * 0.8)
+    return {
+        'top': max(0, int((centre - spread) * height)),
+        'bottom': min(height, int((centre + spread) * height)),
+    }
+
+
+def _drop_outliers(run: list[dict]) -> list[dict]:
+    """End the run where the pitch breaks, not at the furthest number found.
+
+    A blade prints 10, 20, 30 … at a steady pitch, so a jump several times that
+    pitch is a street number or a depth stamp caught by the same pass. Genuine
+    skipped marks stay: their gap is a small multiple of the pitch.
+    """
+    if len(run) < 3:
+        return run
+    gaps = [later['value'] - earlier['value'] for earlier, later in zip(run, run[1:])]
+    pitch = statistics.median(gaps)
+    if pitch <= 0:
+        return run
+    kept = [run[0]]
+    for token, gap in zip(run[1:], gaps):
+        if gap > pitch * 4:
+            break
+        kept.append(token)
+    return kept
+
+
+def _object_bounds(image, band, rotation: int = 0) -> dict | None:
+    """Where the object the blade crosses ends, as x fractions along the blade.
+
+    The blade runs past the trench wall or the duct rim, so the numbers beyond
+    the object are printed on ground that is not being measured. The rows just
+    above and just below the blade carry that boundary: at the object's edge
+    both change at the same x, while a passing stone or a shadow shows on one
+    side only. Two such edges bound the measurement; when only texture noise is
+    found the reading is left whole.
+    """
+    # A quarter turn puts the blade on its side, so "along the blade" is no
+    # longer the image's x axis and these profiles mean nothing.
+    if rotation in (90, 270):
+        return None
+    try:
+        small = image.copy()
+        small.thumbnail((360, 2000))
+        width, height = small.size
+        if width < 16 or height < 8:
+            return None
+        scale = height / image.height
+        top, bottom = band['top'] * scale, band['bottom'] * scale
+        span = max(2.0, bottom - top)
+        above = (max(0.0, top - span * 0.7), max(1.0, top - span * 0.1))
+        below = (min(height - 1.0, bottom + span * 0.1), min(float(height), bottom + span * 0.7))
+        if above[1] - above[0] < 1 or below[1] - below[0] < 1:
+            return None
+
+        pixels = small.load()
+
+        def profile(bounds) -> list[float]:
+            start = int(bounds[0])
+            end = max(start + 1, int(bounds[1]))
+            rows = range(start, min(end, height))
+            if not rows:
+                return [0.0] * width
+            return [sum(pixels[x, y] for y in rows) / len(rows) for x in range(width)]
+
+        window = max(2, width // 40)
+        above_steps = _steps(_smoothed(profile(above)), window)
+        below_steps = _steps(_smoothed(profile(below)), window)
+        # Both sides have to agree: one band changing alone is clutter, not an edge.
+        combined = [min(a, b) for a, b in zip(above_steps, below_steps)]
+        peaks = _peaks(combined, max(3, width // 30), EDGE_MIN_STEP)
+        if len(peaks) < 2:
+            return None
+        left = peaks[0] / (width - 1)
+        right = peaks[-1] / (width - 1)
+        if right - left < 0.25:
+            return None
+        if rotation == 180:
+            # The numbers were read off a half-turned crop, so their x runs the
+            # other way; mirror the bounds to match them.
+            left, right = 1 - right, 1 - left
+        return {'left': round(left, 3), 'right': round(right, 3)}
+    except Exception:
+        return None
+
+
+def _clip_to_bounds(run: list[dict], bounds: dict | None) -> list[dict]:
+    """Drop the tape numbers printed past the detected end of the object.
+
+    Only applied when it leaves a usable run: a false edge must never turn a
+    good reading into no reading.
+    """
+    if not bounds or len(run) < 3:
+        return run
+    inside = [
+        token
+        for token in run
+        if bounds['left'] - 0.02 <= token['x'] <= bounds['right'] + 0.02
+    ]
+    return inside if len(inside) >= 2 else run
 
 
 def _ocr_readings(image, rotation: int) -> list[dict]:
@@ -268,22 +555,30 @@ def _ocr_readings(image, rotation: int) -> list[dict]:
             confidence = float(data['conf'][index])
         except (KeyError, TypeError, ValueError):
             continue
-        if confidence < MIN_OCR_CONFIDENCE:
-            continue
-        value = int(text)
-        # Zero is legitimate: it is the tape's own datum, and a measurement that
-        # starts there would otherwise be short by exactly that distance.
-        if not (0 <= value <= MAX_READING_MM):
+        if confidence < LOW_OCR_CONFIDENCE:
             continue
         left = float(data['left'][index])
         token_width = float(data['width'][index])
-        tokens.append(
-            {
-                'value': value,
-                'x': (left + token_width / 2) / width,
-                'confidence': confidence / 100.0,
-            }
-        )
+        groups = _split_merged(text) or [int(text)]
+        for position, value in enumerate(groups):
+            # Zero is legitimate: it is the tape's own datum, and a measurement
+            # that starts there would otherwise be short by that distance.
+            if not (0 <= value <= MAX_READING_MM):
+                continue
+            if len(groups) == 1:
+                x = left + token_width / 2
+            else:
+                # Glued numbers sit evenly across the blob they came from.
+                x = left + token_width * (position + 0.5) / len(groups)
+            tokens.append(
+                {
+                    'value': value,
+                    'x': x / width,
+                    'y': (float(data['top'][index]) + float(data['height'][index]) / 2)
+                    / max(1, rotated.height),
+                    'confidence': min(1.0, confidence / 100.0),
+                }
+            )
     return tokens
 
 
@@ -315,7 +610,10 @@ def _run_score(run: list[dict]) -> float:
         return 0.0
     irregular = sum(1 for gap in gaps if abs(gap - step) > step * 0.6)
     mean_confidence = sum(token['confidence'] for token in run) / len(run)
-    return len(run) * 10.0 - irregular * 8.0 + mean_confidence * 5.0
+    # A weak digit only helps when another variant read the same value there;
+    # on its own it is as likely to be a stone as a tape mark.
+    weak = sum(1 for token in run if token['confidence'] < 0.55)
+    return len(run) * 10.0 - irregular * 8.0 + mean_confidence * 5.0 - weak * 4.0
 
 
 def _infer_unit(values: list[int]) -> str:
@@ -329,31 +627,41 @@ def read_tape_bytes(data: bytes) -> dict | None:
     if image is None:
         return None
 
-    crops = [('frame', image)]
-    strip = _tape_strip(image)
-    if strip is not None:
-        crops.append(('blade', strip))
+    crops = [{'top': 0, 'bottom': image.height, 'crop': image, 'small_top': None}]
+    crops.extend(_tape_bands(image))
 
     best: list[dict] = []
     best_score = 0.0
-    for _label, crop in crops:
-        # The blade may run in any direction; OCR only reads digits upright, so
-        # the same crop is tried at four quarter turns and the best run wins.
-        for rotation in (0, 90, 180, 270):
-            run = _reading_run(_ocr_readings(crop, rotation))
-            score = _run_score(run)
-            if score > best_score:
-                best, best_score = run, score
-            # Three numbers in order already are a tape, and each further turn
-            # costs seconds on the free host. Stop there instead of reading all
-            # eight crop/rotation passes to shave a reading off the ends.
-            if len(best) >= 3:
+    best_crop = crops[0]
+    best_rotation = 0
+    for crop in crops:
+        pool: list[dict] = []
+        for _label, variant in _variants(crop['crop']):
+            # The blade may run in any direction; OCR only reads digits upright,
+            # so each variant is tried at four quarter turns.
+            for rotation in (0, 90, 180, 270):
+                pool.extend(_ocr_readings(variant, rotation))
+                run = _reading_run(_drop_outliers(_cluster_tokens(pool)))
+                score = _run_score(run)
+                if score > best_score:
+                    best, best_score = run, score
+                    best_crop, best_rotation = crop, rotation
+            # Three numbers in order already are a tape; further equalisations
+            # of the same crop cost seconds on the free host for no gain.
+            if len(_reading_run(_cluster_tokens(pool))) >= 3:
                 break
-        if len(best) >= 3:
-            break
 
     if len(best) < 2:
         return None
+
+    band = _band_for(best_crop, best)
+    bounds = _object_bounds(image, band, best_rotation)
+    clipped = _clip_to_bounds(best, bounds)
+    if bounds and len(clipped) < len(best):
+        bounds = {**bounds, 'clipped': len(best) - len(clipped), 'stopped_at': clipped[-1]['value']}
+        best = clipped
+    else:
+        bounds = None
 
     unit = _infer_unit([token['value'] for token in best])
     return {
@@ -368,6 +676,7 @@ def read_tape_bytes(data: bytes) -> dict | None:
             }
             for token in best
         ],
+        'bounds': bounds,
     }
 
 
