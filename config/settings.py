@@ -295,6 +295,11 @@ EVIDENCE_S3_SECRET_ACCESS_KEY = os.getenv('EVIDENCE_S3_SECRET_ACCESS_KEY', '')
 # A CDN/public bucket domain (e.g. https://media.example.com); unset means the
 # API hands out short-lived presigned URLs instead of public links.
 EVIDENCE_PUBLIC_BASE_URL = os.getenv('EVIDENCE_PUBLIC_BASE_URL', '')
+
+# Optional Cloud Vision key for the tape reader's fallback engine
+# (supervision/tape_cloud.py). Empty means local tesseract only, which is the
+# default: the fallback costs a call per photo and sends the image offsite.
+GOOGLE_VISION_API_KEY = os.getenv('GOOGLE_VISION_API_KEY', '')
 EVIDENCE_PRESIGN_SECONDS = int(os.getenv('EVIDENCE_PRESIGN_SECONDS', '3600'))
 # Per-file cap, checked before the bytes are read in full.
 EVIDENCE_MAX_BYTES = int(os.getenv('EVIDENCE_MAX_BYTES', str(10 * 1024 * 1024)))

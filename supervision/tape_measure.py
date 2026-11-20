@@ -23,6 +23,8 @@ import io
 import statistics
 import time
 
+import numpy as np
+
 # Uploads are shrunk to this longest edge before OCR. Bigger costs time without
 # making a printed digit easier to read — but a blurred field photo does lose
 # its run at 1280, so this stays at 1600.
@@ -61,6 +63,18 @@ OCR_PASS_TIMEOUT = 25
 # nothing, because a photo with no readable blade must still answer.
 TAPE_OCR_BUDGET_S = 55.0
 TAPE_OCR_HARD_BUDGET_S = 80.0
+
+# A handheld photo is rarely level, and tesseract's accuracy falls off well
+# before 10 degrees of tilt. The blade's angle is measured on a thumbnail first
+# and the frame turned upright when it is worth it.
+ANGLE_SEARCH_DEGREES = (-20, -15, -11, -8, -5, -3, 0, 3, 5, 8, 11, 15, 20)
+ANGLE_MIN_DEGREES = 2.0
+
+# Above this share of near-white pixels the crop carries glare, and below this
+# Laplacian variance it is out of focus — both are worth telling the engineer
+# instead of only 'nothing could be read'.
+GLARE_SHARE = 0.06
+SHARPNESS_MIN = 12.0
 
 # A real tape number is bigger than this and no tape is longer than that.
 MIN_READING_MM = 30
@@ -221,6 +235,73 @@ def _prepare(data: bytes):
         return None
 
 
+def _blade_angle(image) -> float:
+    """How far the blade is tilted from level, in degrees.
+
+    A level blade is one sharp step up and down in the row brightness. Rotating
+    a small copy to each candidate angle and keeping the one with the strongest
+    step finds the tilt without needing to read a single digit.
+    """
+    from PIL import Image
+
+    small = image.copy()
+    small.thumbnail((420, 420))
+    best_angle, best_score = 0.0, 0.0
+    for angle in ANGLE_SEARCH_DEGREES:
+        rotated = (
+            small.rotate(angle, resample=Image.Resampling.BILINEAR, expand=True)
+            if angle
+            else small
+        )
+        rows = np.asarray(rotated, dtype=np.float32).mean(axis=1)
+        if rows.size < 3:
+            continue
+        rows = np.convolve(rows, np.ones(3) / 3.0, mode='same')
+        score = float(np.abs(np.diff(rows)).max())
+        if score > best_score:
+            best_angle, best_score = float(angle), score
+    if abs(best_angle) < ANGLE_MIN_DEGREES or best_score < 6.0:
+        return 0.0
+    return best_angle
+
+
+def _upright(image, angle: float):
+    """The frame turned so the blade lies level, padded with its own gray."""
+    from PIL import Image
+
+    if not angle:
+        return image
+    fill = int(np.median(np.asarray(image)))
+    return image.rotate(
+        angle, resample=Image.Resampling.BICUBIC, expand=True, fillcolor=fill
+    )
+
+
+def _quality(image) -> dict:
+    """The cheap reasons a photo will not read: glare and focus."""
+    pixels = np.asarray(image, dtype=np.float32)
+    glare = float((pixels >= 245).mean()) if pixels.size else 0.0
+    sharpness = 0.0
+    if pixels.ndim == 2 and pixels.shape[0] > 2 and pixels.shape[1] > 2:
+        centre = pixels[1:-1, 1:-1]
+        laplacian = (
+            pixels[:-2, 1:-1] + pixels[2:, 1:-1] + pixels[1:-1, :-2] + pixels[1:-1, 2:]
+        ) - 4.0 * centre
+        sharpness = float(laplacian.var())
+    return {'glare': round(glare, 3), 'sharpness': round(sharpness, 1)}
+
+
+def retake_reasons(diagnostics: dict | None) -> list[str]:
+    """What to tell the engineer when the blade could not be read."""
+    diagnostics = diagnostics or {}
+    reasons: list[str] = []
+    if float(diagnostics.get('glare') or 0) >= GLARE_SHARE:
+        reasons.append('glare is washing out part of the blade')
+    if diagnostics.get('sharpness') is not None and float(diagnostics['sharpness']) <= SHARPNESS_MIN:
+        reasons.append('the blade looks out of focus')
+    return reasons
+
+
 def _tape_bands(image, limit: int = 2) -> list[dict]:
     """The brightest long bands in the frame, best first.
 
@@ -355,20 +436,19 @@ def _variants(image) -> list[tuple[str, object]]:
         variants.append(('binary', _binarized(image)))
     except Exception:
         pass
+    try:
+        variants.append(('digits', _digit_strip(image)))
+    except Exception:
+        pass
     return variants
 
 
-def _binarized(image):
-    """Black digits on a white blade, at a threshold the crop picks itself.
-
-    Sun on one end of the blade and shadow on the other make the graded crop
-    hard to read, and an Otsu split — the level that best separates the two
-    populations of gray in this crop — turns it back into a printed scale.
-    """
+def _otsu(image) -> int:
+    """The gray level that best separates this crop's two populations."""
     histogram = image.histogram()
     total = sum(histogram)
     if not total:
-        return image
+        return 128
     weighted = sum(level * count for level, count in enumerate(histogram))
     background, background_sum = 0, 0.0
     best_variance, threshold = -1.0, 128
@@ -383,7 +463,74 @@ def _binarized(image):
         variance = background * foreground * (mean_back - mean_front) ** 2
         if variance > best_variance:
             best_variance, threshold = variance, level
-    return image.point(lambda value: 255 if value > threshold else 0)
+    return threshold
+
+
+def _binarized(image):
+    """Black digits on a white blade, thresholded tile by tile.
+
+    Sun on the near end and shadow on the far end of one blade is the normal
+    case in a trench, and a single threshold for the whole crop loses one end
+    or the other. Each tile picks its own level and the pieces are stitched
+    back together.
+    """
+    width, height = image.size
+    columns, rows = 4, 3
+    cleaned = image.copy()
+    for row in range(rows):
+        top = height * row // rows
+        bottom = height * (row + 1) // rows
+        for column in range(columns):
+            left = width * column // columns
+            right = width * (column + 1) // columns
+            if right <= left or bottom <= top:
+                continue
+            tile = image.crop((left, top, right, bottom))
+            cut = _otsu(tile)
+            cleaned.paste(
+                tile.point(lambda value, level=cut: 255 if value > level else 0),
+                (left, top),
+            )
+    return cleaned
+
+
+def _digit_strip(image):
+    """The strip with the non-numeric ink whited out.
+
+    On a tape the marks are the only ink in a regular row, so the column ink
+    density finds each mark. Dust on the blade, the branding printed along its
+    edge and the shadow underneath are removed before tesseract reads it, which
+    is what keeps a dirty field photo readable.
+    """
+    from PIL import ImageDraw
+
+    ink = (np.asarray(_binarized(image), dtype=np.uint8) < 128).sum(axis=0)
+    if not ink.any():
+        return image
+    cut = max(1.0, float(ink.max()) * 0.15)
+    spans: list[tuple[int, int]] = []
+    start = None
+    for x, value in enumerate(ink):
+        if value >= cut and start is None:
+            start = x
+        elif value < cut and start is not None:
+            spans.append((start, x))
+            start = None
+    if start is not None:
+        spans.append((start, len(ink)))
+    keeps = [span for span in spans if 4 <= span[1] - span[0] <= image.width * 0.1]
+    if len(keeps) < 2:
+        return image
+    cleaned = image.copy()
+    draw = ImageDraw.Draw(cleaned)
+    previous = 0
+    for left, right in keeps:
+        if left > previous:
+            draw.rectangle((previous, 0, left, image.height), fill=255)
+        previous = right
+    if previous < image.width:
+        draw.rectangle((previous, 0, image.width, image.height), fill=255)
+    return cleaned
 
 
 def _cluster_tokens(tokens: list[dict], tolerance: float = 0.02) -> list[dict]:
@@ -683,6 +830,7 @@ def _ocr_readings(image, rotation: int, config: str = DENSE_OCR_CONFIG) -> list[
                     'x': x / width,
                     'y': (float(data['top'][index]) + float(data['height'][index]) / 2)
                     / max(1, rotated.height),
+                    'height': float(data['height'][index]) / max(1, rotated.height),
                     'confidence': min(1.0, confidence / 100.0),
                 }
             )
@@ -728,11 +876,22 @@ def _infer_unit(values: list[int]) -> str:
     return 'mm' if max(values) >= 1000 else 'cm'
 
 
-def read_tape_bytes(data: bytes) -> dict | None:
-    """The tape's readings, or None when no blade could be read."""
+def read_tape_bytes(data: bytes, diagnostics: dict | None = None) -> dict | None:
+    """The tape's readings, or None when no blade could be read.
+
+    ``diagnostics`` is filled with the cheap quality measures (glare, focus,
+    blade angle) so the endpoint can say why a photo failed instead of only
+    that it did.
+    """
     image = _prepare(data)
     if image is None:
         return None
+    if diagnostics is not None:
+        diagnostics.update(_quality(image))
+
+    angle = _blade_angle(image)
+    if diagnostics is not None:
+        diagnostics['angle'] = round(angle, 1)
 
     frame = {'top': 0, 'bottom': image.height, 'crop': image, 'small_top': None}
     # A band that covers most of the frame is the frame: scanning it twice only
@@ -743,6 +902,7 @@ def read_tape_bytes(data: bytes) -> dict | None:
     best_score = 0.0
     best_crop = frame
     best_rotation = 0
+    spans: list[float] = []
     started = time.monotonic()
     deadline = started + TAPE_OCR_BUDGET_S
     hard_deadline = started + TAPE_OCR_HARD_BUDGET_S
@@ -769,6 +929,8 @@ def read_tape_bytes(data: bytes) -> dict | None:
                 pool.extend(_ocr_readings(variant, rotation))
                 run = _reading_run(_drop_outliers(_cluster_tokens(pool)))
                 score = _run_score(run)
+                if len(run) >= 2:
+                    spans.append(run[-1]['value'] - run[0]['value'])
                 if score > best_score:
                     best, best_score = run, score
                     best_crop, best_rotation = crop, rotation
@@ -786,6 +948,8 @@ def read_tape_bytes(data: bytes) -> dict | None:
             pool.extend(_ocr_readings(crop['crop'], rotation, config=SPARSE_OCR_CONFIG))
             run = _reading_run(_drop_outliers(_cluster_tokens(pool)))
             score = _run_score(run)
+            if len(run) >= 2:
+                spans.append(run[-1]['value'] - run[0]['value'])
             if score > best_score:
                 best, best_score = run, score
                 best_crop, best_rotation = crop, rotation
@@ -799,6 +963,20 @@ def read_tape_bytes(data: bytes) -> dict | None:
     if len(best) < 4:
         for band in bands:
             look(band, (0, 180))
+    if len(best) < 2 and angle:
+        # The blade is tilted enough that no level read found the run: turn the
+        # frame upright and try again before asking for a quarter turn.
+        straight = _upright(image, angle)
+        upright = {
+            'top': 0,
+            'bottom': straight.height,
+            'crop': straight,
+            'small_top': None,
+            'deskewed': True,
+        }
+        look(upright, (0, 180))
+        for band in _tape_bands(straight):
+            look({**band, 'deskewed': True}, (0, 180))
     # A blade running up a portrait frame is upright only after a quarter turn.
     if len(best) < 2:
         look(frame, (90, 270))
@@ -807,7 +985,9 @@ def read_tape_bytes(data: bytes) -> dict | None:
         return None
 
     band = _band_for(best_crop, best, best_rotation)
-    bounds = _object_bounds(image, band, best_rotation)
+    # A straightened crop's rows no longer line up with the frame's own axes,
+    # so the object's edge cannot be located in it.
+    bounds = None if best_crop.get('deskewed') else _object_bounds(image, band, best_rotation)
     clipped = _clip_to_bounds(best, bounds)
     if bounds and len(clipped) < len(best):
         bounds = {**bounds, 'clipped': len(best) - len(clipped), 'stopped_at': clipped[-1]['value']}
@@ -816,9 +996,14 @@ def read_tape_bytes(data: bytes) -> dict | None:
         bounds = None
 
     unit = _infer_unit([token['value'] for token in best])
+    span = best[-1]['value'] - best[0]['value']
+    # How many independent reads landed on the same span: one is a guess, two
+    # from different equalisations and turns is a reading worth trusting.
+    agreement = sum(1 for other in spans if abs(other - span) <= max(1.0, span * 0.02))
     return {
         'engine': 'tesseract',
         'unit': unit,
+        'agreement': max(1, agreement),
         'readings': [
             {
                 'value': token['value'],
@@ -832,7 +1017,7 @@ def read_tape_bytes(data: bytes) -> dict | None:
     }
 
 
-def read_tape(photo) -> dict | None:
+def read_tape(photo, diagnostics: dict | None = None) -> dict | None:
     """The readings of the tape stored in ``photo``, or None."""
     if photo is None:
         return None
@@ -844,7 +1029,7 @@ def read_tape(photo) -> dict | None:
         return None
     if not data:
         return None
-    return read_tape_bytes(data)
+    return read_tape_bytes(data, diagnostics)
 
 
 def measure(

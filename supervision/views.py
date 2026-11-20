@@ -7,7 +7,7 @@ from projects.api.access import engineer_can_access
 from projects.api.layers import editable_feature_ids
 from projects.models import Feature, Project
 from projects.photo_gallery import attach_photos
-from supervision import ai_measure, tape_measure
+from supervision import ai_measure, tape_cloud, tape_measure
 from supervision.design_change import (
     REQUEST_PENDING,
     project_requests,
@@ -465,7 +465,7 @@ class FeatureTapeMeasurementView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not tape_measure.ocr_available():
+        if not tape_measure.ocr_available() and not tape_cloud.configured():
             return Response(
                 {
                     'detail': (
@@ -476,17 +476,28 @@ class FeatureTapeMeasurementView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        read = tape_measure.read_tape(photo)
+        diagnostics: dict = {}
+        read = tape_measure.read_tape(photo, diagnostics)
+        if read is None and tape_cloud.configured():
+            # Only after the free local engine comes up short: that is what keeps
+            # a few hundred photos a month inside Cloud Vision's free tier.
+            read = tape_cloud.read_tape(photo)
         if read is None:
+            note = (
+                'No tape numbers could be read. Lay the blade along the dimension, '
+                'keep two printed numbers in the frame and avoid glare.'
+            )
+            reasons = tape_measure.retake_reasons(diagnostics)
+            if reasons:
+                # 'Nothing could be read' gives the engineer nothing to change;
+                # naming the glare or the focus does.
+                note = f'{note} The photo shows {" and ".join(reasons)}.'
             return Response(
                 {
                     'measurement': None,
                     'readings': [],
                     'unit': 'cm',
-                    'notes': (
-                        'No tape numbers could be read. Lay the blade along the dimension, '
-                        'keep two printed numbers in the frame and avoid glare.'
-                    ),
+                    'notes': note,
                     'photo_id': str(photo.id),
                     'engine': 'tesseract',
                 }
@@ -503,6 +514,11 @@ class FeatureTapeMeasurementView(APIView):
             note = (
                 f"{note} Stopped at the {element_type} edge visible in the photo "
                 f"({bounds['clipped']} number(s) past it ignored)."
+            )
+        if int(read.get('agreement') or 1) >= 2:
+            note = (
+                f"{note} Confirmed by {int(read['agreement'])} independent reads of "
+                'the blade.'
             )
         return Response(
             {

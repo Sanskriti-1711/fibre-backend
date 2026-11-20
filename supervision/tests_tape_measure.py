@@ -20,12 +20,12 @@ from unittest import mock
 from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase, override_settings
-from PIL import Image
+from PIL import Image, ImageDraw
 from rest_framework.test import APIClient
 
 from assignments.models import AssignmentJob
 from projects.models import Feature
-from supervision import tape_measure
+from supervision import tape_cloud, tape_measure
 from supervision.models import FeaturePhoto
 from supervision.storage import LocalEvidenceStorage, reset_evidence_storage
 from supervision.tests_ai_measure import LocalEvidenceMixin, png_bytes
@@ -286,6 +286,46 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
 
         self.assertIn(response.status_code, (401, 403))
 
+    def test_the_cloud_engine_answers_when_the_local_one_comes_up_short(self):
+        cloud = {
+            'engine': 'google-vision',
+            'unit': 'cm',
+            'agreement': 1,
+            'bounds': None,
+            'readings': cm_readings(10, 30),
+        }
+
+        with mock.patch(
+            'supervision.tape_measure.ocr_available', return_value=True
+        ), mock.patch('supervision.tape_measure.read_tape', return_value=None), mock.patch(
+            'supervision.tape_cloud.configured', return_value=True
+        ), mock.patch('supervision.tape_cloud.read_tape', return_value=cloud):
+            response = self.post(
+                photo_id=str(self.photo.id), element_type='trench', dimension='depth'
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['engine'], 'google-vision')
+        self.assertEqual(response.json()['measurement']['value'], 200)
+
+    def test_a_glare_blown_photo_says_what_to_change(self):
+        def unreadable(photo, diagnostics=None, **_kwargs):
+            if diagnostics is not None:
+                diagnostics.update({'glare': 0.4, 'sharpness': 80.0})
+            return None
+
+        with mock.patch(
+            'supervision.tape_measure.ocr_available', return_value=True
+        ), mock.patch(
+            'supervision.tape_measure.read_tape', side_effect=unreadable
+        ), mock.patch('supervision.tape_cloud.configured', return_value=False):
+            response = self.post(
+                photo_id=str(self.photo.id), element_type='trench', dimension='depth'
+            )
+
+        self.assertIsNone(response.json()['measurement'])
+        self.assertIn('glare', response.json()['notes'].lower())
+
 
 class GluedNumberSplitTests(SimpleTestCase):
     """Tesseract can return every mark on the blade as one word."""
@@ -345,3 +385,142 @@ class ObjectEdgeTests(SimpleTestCase):
         ]
 
         self.assertEqual(tape_measure._clip_to_bounds(run, {'left': 0.5, 'right': 0.9}), run)
+
+
+class BladeAngleTests(SimpleTestCase):
+    """A handheld blade is rarely level; the tilt is measured, not assumed."""
+
+    def scene(self, angle: float):
+        blade = Image.new('L', (560, 90), 220)
+        canvas = Image.new('L', (700, 360), 45)
+        tilted = blade.rotate(angle, resample=Image.BICUBIC, expand=True, fillcolor=45)
+        canvas.paste(
+            tilted,
+            ((canvas.width - tilted.width) // 2, (canvas.height - tilted.height) // 2),
+        )
+        return canvas
+
+    def test_a_level_blade_needs_no_turn(self):
+        self.assertEqual(tape_measure._blade_angle(self.scene(0)), 0.0)
+
+    def test_a_tilted_blade_is_recognised(self):
+        self.assertGreaterEqual(abs(tape_measure._blade_angle(self.scene(12))), 8.0)
+
+    def test_straightening_the_frame_leaves_the_blade_level(self):
+        scene = self.scene(12)
+
+        straightened = tape_measure._upright(scene, tape_measure._blade_angle(scene))
+
+        self.assertEqual(tape_measure._blade_angle(straightened), 0.0)
+
+    def test_glare_and_blur_become_reasons_to_retake(self):
+        diagnostic = {'glare': 0.4, 'sharpness': 3.0}
+
+        reasons = tape_measure.retake_reasons(diagnostic)
+
+        self.assertEqual(len(reasons), 2)
+        self.assertTrue(any('glare' in reason for reason in reasons))
+
+    def test_a_sharp_clean_photo_has_no_excuses(self):
+        self.assertEqual(tape_measure.retake_reasons({'glare': 0.0, 'sharpness': 400.0}), [])
+
+
+class ThresholdingTests(SimpleTestCase):
+    """Tiled thresholding and the ink profile that removes dust."""
+
+    def two_lit_halves(self):
+        image = Image.new('L', (400, 100), 240)
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((200, 0, 400, 100), fill=150)
+        for x in (30, 90, 230, 290):
+            draw.rectangle((x, 30, x + 24, 80), fill=200 if x < 200 else 110)
+        return image
+
+    def test_each_tile_finds_ink_at_its_own_brightness(self):
+        binary = tape_measure._binarized(self.two_lit_halves())
+
+        self.assertLess(binary.getpixel((40, 50)), 60)
+        self.assertLess(binary.getpixel((240, 50)), 60)
+        self.assertGreater(binary.getpixel((150, 50)), 200)
+        self.assertGreater(binary.getpixel((350, 50)), 200)
+
+    def test_the_output_is_only_black_and_white(self):
+        values = set(tape_measure._binarized(self.two_lit_halves()).getdata())
+
+        self.assertTrue(values <= {0, 255})
+
+    def test_dust_is_removed_and_the_marks_are_kept(self):
+        image = Image.new('L', (400, 100), 245)
+        draw = ImageDraw.Draw(image)
+        for x in (40, 100, 160, 220, 280, 340):
+            draw.rectangle((x, 30, x + 26, 80), fill=20)
+        draw.point((374, 8), fill=15)
+
+        cleaned = tape_measure._digit_strip(image)
+
+        self.assertLess(cleaned.getpixel((50, 50)), 60)
+        self.assertGreater(cleaned.getpixel((374, 8)), 200)
+
+    def test_a_frame_with_nothing_digit_like_is_left_alone(self):
+        flat = Image.new('L', (300, 120), 200)
+
+        self.assertIs(tape_measure._digit_strip(flat), flat)
+
+
+class CloudFallbackTests(SimpleTestCase):
+    """Cloud Vision is the fallback engine, and only with a key configured."""
+
+    def words(self):
+        boxes = ((80, 140), (280, 340), (480, 540))
+        return [
+            {
+                'description': str(value),
+                'boundingPoly': {
+                    'vertices': [
+                        {'x': left, 'y': 40},
+                        {'x': right, 'y': 40},
+                        {'x': right, 'y': 90},
+                        {'x': left, 'y': 90},
+                    ]
+                },
+            }
+            for value, (left, right) in zip((10, 20, 30), boxes)
+        ]
+
+    def test_without_a_key_the_fallback_is_inert(self):
+        with override_settings(GOOGLE_VISION_API_KEY=''):
+            self.assertFalse(tape_cloud.configured())
+            self.assertIsNone(tape_cloud.read_tape_bytes(png_bytes(200, 100)))
+
+    def test_word_boxes_become_an_increasing_run(self):
+        run = tape_measure._reading_run(
+            tape_measure._cluster_tokens(tape_cloud._tokens(self.words(), 1000, 200))
+        )
+
+        self.assertEqual([token['value'] for token in run], [10, 20, 30])
+
+    @override_settings(GOOGLE_VISION_API_KEY='test-key')
+    def test_a_cloud_read_comes_back_in_the_same_shape(self):
+        body = {
+            'responses': [
+                {'textAnnotations': [{'description': '10 20 30'}] + self.words()}
+            ]
+        }
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = body
+
+        with mock.patch('supervision.tape_cloud.requests.post', return_value=response):
+            read = tape_cloud.read_tape_bytes(png_bytes(1000, 200))
+
+        self.assertEqual(read['engine'], 'google-vision')
+        self.assertEqual(read['unit'], 'cm')
+        self.assertEqual([row['value'] for row in read['readings']], [10, 20, 30])
+
+    @override_settings(GOOGLE_VISION_API_KEY='test-key')
+    def test_a_failed_cloud_call_is_not_an_error(self):
+        response = mock.Mock()
+        response.raise_for_status.side_effect = RuntimeError('403 forbidden')
+
+        with mock.patch('supervision.tape_cloud.requests.post', return_value=response):
+            self.assertIsNone(tape_cloud.read_tape_bytes(png_bytes(200, 100)))
