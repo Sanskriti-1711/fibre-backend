@@ -407,23 +407,70 @@ def _peaks(values: list[float], min_gap: int, threshold: float) -> list[int]:
     return sorted(chosen)
 
 
-def _band_for(crop, run: list[dict]) -> dict:
+def _blade_rows(image, centre: float, fallback: dict) -> dict:
+    """The blade's own rows, from how bright each row is.
+
+    A bright blade on darker ground is a step up and then a step down in the row
+    means, and those two rows bracket the digits. Without them the edge search
+    samples rows that are still on the blade, so it never sees the ground the
+    blade crosses and can never find the object's edge.
+    """
+    try:
+        small = image.copy()
+        small.thumbnail((360, 1200))
+        width, height = small.size
+        if width < 8 or height < 24:
+            return fallback
+        pixels = small.load()
+        stride = max(1, width // 180)
+        columns = range(0, width, stride)
+        means = [
+            sum(pixels[x, y] for x in columns) / len(columns) for y in range(height)
+        ]
+        steps = _steps(_smoothed(means), max(2, height // 50))
+        peaks = _peaks(steps, max(3, height // 40), EDGE_MIN_STEP)
+        middle = centre * (height - 1)
+        above = [row for row in peaks if row < middle - 2]
+        below = [row for row in peaks if row > middle + 2]
+        if not above or not below:
+            return fallback
+        # Outermost, not nearest: the blade's own edges are the first and last
+        # steps, while the rows between them belong to the numbers printed on
+        # it. A band made of the inner pair sits on the blade and sees nothing.
+        scale = image.height / height
+        band = {'top': int(min(above) * scale), 'bottom': int(max(below) * scale)}
+        if band['bottom'] - band['top'] < 4:
+            return fallback
+        if band['bottom'] - band['top'] > image.height * 0.85:
+            return fallback
+        return band
+    except Exception:
+        return fallback
+
+
+def _band_for(crop, run: list[dict], rotation: int = 0) -> dict:
     """The rows the blade occupies, from the strip if it found one.
 
     When no bright band stood out (a dirty blade, a dull day, a wide shot) the
-    digits themselves say where the blade is, so the rows above and below them
-    can still be searched for the object's edge.
+    digits say roughly where the blade is and the row brightness says how thick
+    it is, so the rows above and below can still be searched for the edge.
     """
     if crop.get('small_top') is not None:
         return {'top': crop['top'], 'bottom': crop['bottom']}
-    height = crop['crop'].height
-    ys = [token.get('y', 0.5) for token in run] or [0.5]
+    image = crop['crop']
+    height = image.height
+    # A half-turned crop reports its rows upside down; the blade is not.
+    ys = [
+        (1 - token.get('y', 0.5)) if rotation == 180 else token.get('y', 0.5)
+        for token in run
+    ] or [0.5]
     centre = statistics.median(ys)
     spread = max(0.04, (max(ys) - min(ys)) * 0.8)
-    return {
+    fallback = {
         'top': max(0, int((centre - spread) * height)),
         'bottom': min(height, int((centre + spread) * height)),
     }
+    return _blade_rows(image, centre, fallback)
 
 
 def _drop_outliers(run: list[dict]) -> list[dict]:
@@ -467,6 +514,14 @@ def _object_bounds(image, band, rotation: int = 0) -> dict | None:
         width, height = small.size
         if width < 16 or height < 8:
             return None
+        # The strip search can hand back rows from inside a tall blade, and a
+        # band that sits on the blade samples the blade's own brightness, where
+        # the object's edge is invisible. Widen it to the blade's own edges.
+        band = _blade_rows(
+            image,
+            (band['top'] + band['bottom']) / 2 / max(1, image.height),
+            band,
+        )
         scale = height / image.height
         top, bottom = band['top'] * scale, band['bottom'] * scale
         span = max(2.0, bottom - top)
@@ -654,7 +709,7 @@ def read_tape_bytes(data: bytes) -> dict | None:
     if len(best) < 2:
         return None
 
-    band = _band_for(best_crop, best)
+    band = _band_for(best_crop, best, best_rotation)
     bounds = _object_bounds(image, band, best_rotation)
     clipped = _clip_to_bounds(best, bounds)
     if bounds and len(clipped) < len(best):
