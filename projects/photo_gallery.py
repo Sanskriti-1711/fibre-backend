@@ -9,10 +9,27 @@ they disagreed about the next position. Both apps call this module now.
 """
 
 import hashlib
+import io
 
+import numpy as np
 from django.db.models import Max
 from rest_framework import status
 from rest_framework.response import Response
+
+# A photo whose long edge is under this cannot show a tape's digits or a duct
+# joint when it is reviewed later.
+MIN_LONG_EDGE = 800
+
+# Mean gray outside this is dusk inside a chamber or a blown-out highlight:
+# the photo proves nothing about the work.
+MIN_MEAN_GRAY = 40
+MAX_MEAN_GRAY = 230
+
+# Variance of the Laplacian from 1600 px, matching
+# supervision.tape_measure.SHARPNESS_MIN so an upload and a tape read agree on
+# what "out of focus" means.
+MIN_SHARPNESS = 12.0
+MAX_QUALITY_EDGE = 1600
 
 
 def digest(upload):
@@ -32,6 +49,71 @@ def digest(upload):
     return hasher.hexdigest(), size
 
 
+def photo_quality(upload) -> str | None:
+    """Return an error string for an image too poor to be evidence, or None.
+
+    Only whether the photo can be read at all is judged here. Framing, glare
+    over a blade and whether the right two marks are in shot belong to the
+    subject, and the tape reader already returns a retake reason for them.
+
+    shortcut: mean gray stands in for exposure — a frame that is half black and
+    half blown white still averages mid-gray; add a clipping check if the field
+    crew reports it.
+    """
+    try:
+        upload.seek(0)
+        payload = upload.read()
+    finally:
+        # The upload is hashed after this check, so its stream must stay open and
+        # rewound: PIL closing the file it was handed is what broke the digest.
+        upload.seek(0)
+
+    try:
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(payload))
+        image.load()
+        width, height = image.size
+    except Exception:
+        return 'That file could not be read as an image.'
+
+    try:
+        if max(width, height) < MIN_LONG_EDGE:
+            return (
+                f'The photo is {width}x{height} px, too small to review. Take it '
+                f'again closer, or set the camera to at least {MIN_LONG_EDGE} px '
+                'on the long edge.'
+            )
+
+        # Measured at the same scale the tape reader uses, and small enough that
+        # a 12 MP photo does not become a 400 MB float array.
+        image.thumbnail((MAX_QUALITY_EDGE, MAX_QUALITY_EDGE))
+        gray = np.asarray(image.convert('L'), dtype=np.float32)
+        mean = float(gray.mean())
+        if mean < MIN_MEAN_GRAY:
+            return 'The photo is almost black. Add light or use the flash and try again.'
+        if mean > MAX_MEAN_GRAY:
+            return (
+                'The photo is washed out by light. Take it again with the sun '
+                'behind you.'
+            )
+        if gray.shape[0] > 2 and gray.shape[1] > 2:
+            laplacian = (
+                gray[:-2, 1:-1]
+                + gray[2:, 1:-1]
+                + gray[1:-1, :-2]
+                + gray[1:-1, 2:]
+            ) - 4.0 * gray[1:-1, 1:-1]
+            if float(laplacian.var()) < MIN_SHARPNESS:
+                return (
+                    'The photo is out of focus. Hold still, tap the subject on '
+                    'the screen, then take it again.'
+                )
+        return None
+    finally:
+        image.close()
+
+
 def validate_photo(upload, *, allowed_content_types, max_bytes):
     """Return an error string for an unacceptable upload, or None."""
     if upload.content_type not in allowed_content_types:
@@ -41,7 +123,7 @@ def validate_photo(upload, *, allowed_content_types, max_bytes):
     if upload.size > max_bytes:
         limit_mb = max_bytes / (1024 * 1024)
         return f'File too large. Maximum size is {limit_mb:g}MB.'
-    return None
+    return photo_quality(upload)
 
 
 def next_order(photos) -> int:

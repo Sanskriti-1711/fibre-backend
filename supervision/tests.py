@@ -34,9 +34,16 @@ from supervision.views import _can_edit_feature_photos
 from users.models import User
 
 
-def png_bytes(width=8, height=8):
+def png_bytes(width=1000, height=800):
+    """A photo-shaped PNG: big enough and detailed enough to pass upload checks."""
+    from PIL import ImageDraw
+
+    image = Image.new('RGB', (width, height), (200, 30, 30))
+    draw = ImageDraw.Draw(image)
+    for x in range(0, width, 8):
+        draw.line((x, 0, x, height), fill=(30, 200, 30) if (x // 8) % 2 else (200, 200, 30))
     buffer = io.BytesIO()
-    Image.new('RGB', (width, height), (200, 30, 30)).save(buffer, format='PNG')
+    image.save(buffer, format='PNG')
     return buffer.getvalue()
 
 
@@ -112,7 +119,7 @@ class FeaturePhotoEvidenceTests(TestCase):
 
     def test_different_bytes_give_a_different_checksum(self):
         first = self.upload('a.png').json()['uploaded'][0]
-        other = png_bytes(9, 9)
+        other = png_bytes(1000, 801)
         second = self.upload('b.png', other).json()['uploaded'][0]
         self.addCleanup(FeaturePhoto.objects.get(id=first['id']).image.delete, save=False)
         self.addCleanup(FeaturePhoto.objects.get(id=second['id']).image.delete, save=False)

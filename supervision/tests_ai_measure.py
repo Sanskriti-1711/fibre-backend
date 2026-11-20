@@ -37,9 +37,16 @@ from testutils.factories import make_feature, make_ftth_project, make_survey_cop
 from users.models import User
 
 
-def png_bytes(width=16, height=16):
+def png_bytes(width=1000, height=800):
+    """A photo-shaped PNG: big enough and detailed enough to pass upload checks."""
+    from PIL import ImageDraw
+
+    image = Image.new('RGB', (width, height), (200, 30, 30))
+    draw = ImageDraw.Draw(image)
+    for x in range(0, width, 8):
+        draw.line((x, 0, x, height), fill=(30, 200, 30) if (x // 8) % 2 else (200, 200, 30))
     buffer = io.BytesIO()
-    Image.new('RGB', (width, height), (200, 30, 30)).save(buffer, format='PNG')
+    image.save(buffer, format='PNG')
     return buffer.getvalue()
 
 
