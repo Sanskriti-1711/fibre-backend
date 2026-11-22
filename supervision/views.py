@@ -7,7 +7,7 @@ from projects.api.access import engineer_can_access
 from projects.api.layers import editable_feature_ids
 from projects.models import Feature, Project
 from projects.photo_gallery import attach_photos
-from supervision import ai_measure, tape_cloud, tape_measure
+from supervision import ai_measure, tape_cloud, tape_measure, tape_vision
 from supervision.design_change import (
     REQUEST_PENDING,
     project_requests,
@@ -465,7 +465,11 @@ class FeatureTapeMeasurementView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not tape_measure.ocr_available() and not tape_cloud.configured():
+        if (
+            not tape_measure.ocr_available()
+            and not tape_vision.configured()
+            and not tape_cloud.configured()
+        ):
             return Response(
                 {
                     'detail': (
@@ -478,6 +482,10 @@ class FeatureTapeMeasurementView(APIView):
 
         diagnostics: dict = {}
         read = tape_measure.read_tape(photo, diagnostics)
+        if read is None and tape_vision.configured():
+            # The model reads blades tesseract cannot, but it is a paid call per
+            # photo: only after the free engine came up short.
+            read = tape_vision.read_tape(photo)
         if read is None and tape_cloud.configured():
             # Only after the free local engine comes up short: that is what keeps
             # a few hundred photos a month inside Cloud Vision's free tier.

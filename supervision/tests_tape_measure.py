@@ -248,7 +248,12 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
         self.assertTrue(response.json()['notes'])
 
     def test_a_host_without_tesseract_says_so(self):
-        with mock.patch('supervision.tape_measure.ocr_available', return_value=False):
+        # No engine at all: no tesseract, no vision key, no Cloud Vision key.
+        with mock.patch(
+            'supervision.tape_measure.ocr_available', return_value=False
+        ), mock.patch(
+            'supervision.tape_vision.configured', return_value=False
+        ), mock.patch('supervision.tape_cloud.configured', return_value=False):
             response = self.post(
                 photo_id=str(self.photo.id), element_type='trench', dimension='depth'
             )
@@ -326,6 +331,32 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['engine'], 'google-vision')
+        self.assertEqual(response.json()['measurement']['value'], 200)
+
+    def test_the_vision_model_answers_when_the_local_one_comes_up_short(self):
+        vision = {
+            'engine': 'vision-model',
+            'unit': 'cm',
+            'agreement': 1,
+            'bounds': None,
+            'readings': cm_readings(10, 30),
+        }
+
+        with mock.patch(
+            'supervision.tape_measure.ocr_available', return_value=True
+        ), mock.patch(
+            'supervision.tape_measure.read_tape', return_value=None
+        ), mock.patch(
+            'supervision.tape_vision.configured', return_value=True
+        ), mock.patch(
+            'supervision.tape_vision.read_tape', return_value=vision
+        ), mock.patch('supervision.tape_cloud.configured', return_value=False):
+            response = self.post(
+                photo_id=str(self.photo.id), element_type='trench', dimension='depth'
+            )
+
+        self.assertEqual(response.status_code, 200, response.content[:300])
+        self.assertEqual(response.json()['engine'], 'vision-model')
         self.assertEqual(response.json()['measurement']['value'], 200)
 
     def test_a_glare_blown_photo_says_what_to_change(self):
