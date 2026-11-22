@@ -40,9 +40,12 @@ RUN DJANGO_SECRET_KEY=build-only-collectstatic python manage.py collectstatic --
 EXPOSE 8000
 
 # Honour $PORT so the same image runs locally (8000) and on platforms that
-# inject their own port. Migrations are deliberately NOT here: running them in
-# the start command races when several workers boot at once. Run
-# `python manage.py migrate` as the platform's pre-deploy/release step.
+# inject their own port. Migrations run here, before gunicorn is exec'd: the
+# service had no pre-deploy step applying them, so the database sat one
+# migration behind (field_templates missing) and every layer request answered
+# 500 while the app drew an empty project. One instance means one migrate
+# process, so there is nothing to race; if this ever scales out, move it to a
+# pre-deploy hook instead, because concurrent migrates do race.
 #
 # The worker layout is pinned, and the reason is that the platform's liveness
 # probe shares the worker pool with every API request: one slow request on a
@@ -60,4 +63,4 @@ EXPOSE 8000
 # by gunicorn and surfaced as a 502 to the page, no matter what the call itself
 # allowed. The budget here must stay ABOVE the longest blocking call; raise it
 # with them or the mismatch comes back. 1300 = 1200 + a margin for the reply.
-CMD ["sh", "-c", "gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 2 --worker-class gthread --threads 4 --preload --max-requests 800 --max-requests-jitter 100 --timeout 1300 --graceful-timeout 30 --access-logfile - --error-logfile -"]
+CMD ["sh", "-c", "python manage.py migrate --noinput && exec gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 2 --worker-class gthread --threads 4 --preload --max-requests 800 --max-requests-jitter 100 --timeout 1300 --graceful-timeout 30 --access-logfile - --error-logfile -"]
