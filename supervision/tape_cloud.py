@@ -118,7 +118,7 @@ def read_tape_bytes(data: bytes) -> dict | None:
     run = tape_measure._reading_run(
         tape_measure._drop_outliers(tape_measure._cluster_tokens(tokens))
     )
-    if len(run) < 2:
+    if not tape_measure._run_is_usable(run):
         return None
 
     unit = tape_measure._infer_unit([token['value'] for token in run])

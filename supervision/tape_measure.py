@@ -40,6 +40,12 @@ MIN_OCR_CONFIDENCE = 55
 # never find that support.
 LOW_OCR_CONFIDENCE = 35
 
+# The two numbers that bound the span are the whole reading. On a real field
+# photo a date stamp read at 0.96 next to a smudge at 0.41 became a 2 m trench
+# depth, so an endpoint has to be read, not guessed — a digit with support from
+# another equalisation clears this, an isolated one does not.
+SPAN_MIN_CONFIDENCE = 0.6
+
 # Gray-level step (0–255) between the two sides of a boundary before it counts
 # as the end of the trench or duct rather than a stone or a shadow.
 EDGE_MIN_STEP = 12.0
@@ -871,6 +877,27 @@ def _run_score(run: list[dict]) -> float:
     return len(run) * 10.0 - irregular * 8.0 + mean_confidence * 5.0 - weak * 4.0
 
 
+def _run_is_usable(run: list[dict]) -> bool:
+    """Whether a run is a tape and not a coincidence of numbers.
+
+    Two things earn a reading. The numbers that bound the span must have been
+    read confidently, because they are what the measurement is. And the numbers
+    must sit on a steady pitch: a blade prints every number at the same
+    spacing, so one number several pitches away is a street sign, a depth stamp
+    or a date caught by the same pass, and a span built from it is wrong even
+    when each digit was read well.
+    """
+    if len(run) < 2:
+        return False
+    if min(run[0]['confidence'], run[-1]['confidence']) < SPAN_MIN_CONFIDENCE:
+        return False
+    gaps = [later['value'] - earlier['value'] for earlier, later in zip(run, run[1:])]
+    if not gaps or any(gap <= 0 for gap in gaps):
+        return False
+    step = statistics.median(gaps)
+    return all(abs(gap - step) <= step * 0.6 for gap in gaps)
+
+
 def _infer_unit(values: list[int]) -> str:
     """Centimetre tapes stop in the hundreds; millimetre tapes print thousands."""
     return 'mm' if max(values) >= 1000 else 'cm'
@@ -931,7 +958,7 @@ def read_tape_bytes(data: bytes, diagnostics: dict | None = None) -> dict | None
                 score = _run_score(run)
                 if len(run) >= 2:
                     spans.append(run[-1]['value'] - run[0]['value'])
-                if score > best_score:
+                if _run_is_usable(run) and score > best_score:
                     best, best_score = run, score
                     best_crop, best_rotation = crop, rotation
             # Three numbers in order already are a tape; further equalisations

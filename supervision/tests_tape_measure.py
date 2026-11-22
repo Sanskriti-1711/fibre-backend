@@ -136,6 +136,26 @@ class ReadTapeTests(SimpleTestCase):
 
         self.assertIsNone(result)
 
+    def test_a_span_bound_by_a_weak_read_is_refused(self):
+        # A date stamp read at 0.96 beside a smudge at 0.41 is what turned a
+        # field photo into a 2 m trench depth.
+        run = [
+            {'value': 8, 'x': 0.1, 'confidence': 0.41},
+            {'value': 2026, 'x': 0.8, 'confidence': 0.96},
+        ]
+
+        self.assertFalse(tape_measure._run_is_usable(run))
+
+    def test_a_number_off_the_blades_pitch_is_refused(self):
+        run = [
+            {'value': 0, 'x': 0.1, 'confidence': 0.8},
+            {'value': 5, 'x': 0.3, 'confidence': 0.8},
+            {'value': 9, 'x': 0.5, 'confidence': 0.8},
+            {'value': 55, 'x': 0.8, 'confidence': 0.8},
+        ]
+
+        self.assertFalse(tape_measure._run_is_usable(run))
+
     def test_no_digits_anywhere_is_none(self):
         self.assertIsNone(self.read({}))
 
