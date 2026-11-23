@@ -35,6 +35,54 @@ def _photo(angle: float = 7.0, width: int = 1000, height: int = 650) -> np.ndarr
     return np.asarray(canvas)
 
 
+def _perspective_photo(
+    tau: float = 0.0006,
+    width: int = 1000,
+    height: int = 650,
+    pitch: float = 8.0,
+    ticks: int = 80,
+) -> np.ndarray:
+    """A printed blade seen off-square: its far end is narrower and its marks crowd.
+
+    The marks sit on a projective ladder, ``u / (1 + tau * u)``, which is what a
+    camera looking along a tape produces. A rectangle warp leaves exactly that
+    drift in the strip, so this is the fixture the four-corner warp has to square.
+    """
+    from PIL import ImageDraw
+
+    rng = np.random.default_rng(9)
+    soil = rng.normal(95, 12, (height, width)).clip(0, 255).astype(np.uint8)
+    origin_x, centre_y, half_height, scale = 40.0, 200.0, 34.0, 0.92
+
+    def project(u: float, v: float) -> tuple[float, float]:
+        factor = 1.0 / (1.0 + tau * u)
+        return origin_x + scale * u * factor, centre_y + scale * v * factor
+
+    span = ticks * pitch
+    body = [
+        project(0.0, -half_height),
+        project(span, -half_height),
+        project(span, half_height),
+        project(0.0, half_height),
+    ]
+    mask = Image.new('L', (width, height), 0)
+    ImageDraw.Draw(mask).polygon(body, fill=255)
+    photo = soil.copy()
+    photo[np.asarray(mask) > 0] = 215
+
+    canvas = Image.fromarray(photo)
+    draw = ImageDraw.Draw(canvas)
+    for index in range(ticks):
+        spot = index * pitch
+        length = 46.0 if index % 10 == 0 else 26.0
+        draw.line(
+            [project(spot, half_height), project(spot, half_height - length)],
+            fill=40,
+            width=2,
+        )
+    return np.asarray(canvas)
+
+
 class TapeFrameTests(SimpleTestCase):
     def test_a_tilted_blade_is_found_and_brought_level(self):
         framed = tape_frame.frame_gray(_photo(7.0))
@@ -78,6 +126,26 @@ class TapeFrameTests(SimpleTestCase):
         self.assertIsNotNone(framed)
         self.assertTrue(framed['tick_usable'], framed.get('ticks'))
         self.assertLess(abs(framed['angle']), 2.0)
+
+    def test_a_blade_in_perspective_is_squared_up_from_four_corners(self):
+        # The far end prints 38% narrower than the near one, so the marks crowd
+        # together there. A centre-line rectangle keeps that drift in the strip,
+        # which is how field-1 to field-5 failed (residual 1.3-4.4).
+        framed = tape_frame.frame_gray(_perspective_photo())
+
+        self.assertIsNotNone(framed)
+        corners = framed['corners']
+        self.assertEqual(len(corners), 4)
+        (ul, ur), (lr, ll) = (corners[0], corners[1]), (corners[2], corners[3])
+        near = float(np.hypot(ul[0] - ll[0], ul[1] - ll[1]))
+        far = float(np.hypot(ur[0] - lr[0], ur[1] - lr[1]))
+        # Four corners, not a rectangle: the two ends are measurably different.
+        self.assertGreater(near / max(far, 1e-6), 1.15, corners)
+
+        lattice = tape_ticks.read_strip(framed['strip'])
+        self.assertIsNotNone(lattice)
+        self.assertTrue(lattice['usable'], lattice)
+        self.assertLess(lattice['residual'], 0.12, lattice)
 
     def test_a_frame_with_no_blade_is_refused(self):
         self.assertIsNone(tape_frame.frame_gray(np.full((400, 600), 200, dtype=np.uint8)))

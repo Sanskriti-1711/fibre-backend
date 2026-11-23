@@ -255,7 +255,14 @@ def read_strip(strip) -> dict | None:
 
     height, width = pixels.shape
     stripe = max(10, int(height * STRIPE_SHARE))
-    starts = range(0, max(1, height - stripe + 1), max(4, height // 10))
+    step = max(4, height // 10)
+    starts = list(range(0, max(1, height - stripe + 1), step))
+    # The grid is coarse, and its last stripe stopped short of the bottom edge.
+    # A warped blade's marks hug that edge, so on a 180-row strip the one stripe
+    # that contained the ladder cleanly (row 155 down) was never examined, and
+    # the strip was reported as having no ladder at all.
+    if starts and starts[-1] != height - stripe:
+        starts.append(height - stripe)
 
     best: dict | None = None
     for start in starts:
