@@ -165,6 +165,33 @@ class DigitLabelTests(SimpleTestCase):
         self.assertIn('too few', scale['reason'])
         self.assertEqual(scale['anchors'], [])
 
+    def test_a_shaded_blade_still_has_readable_labels(self):
+        # The trench darkens whole columns of the blade. A threshold taken from
+        # the strip-wide median calls that shade ink, the numbers end up inside
+        # one huge ink band, and a shaded upload finds its edges but no scale.
+        shaded = _trench_strip(300, 900, shade=70)
+        lattice = _lattice(_strip(pitch=12.0, every=10))
+
+        scale = tape_digits.read_labels(
+            shaded,
+            lattice,
+            ocr=FakeOCR({index: str(10 + index) for index in range(0, 120, 10)}),
+        )
+
+        self.assertTrue(scale['usable'], scale)
+        self.assertAlmostEqual(scale['mm_per_px'], 10.0 / 12.0, delta=0.01)
+        # Every label well inside the shade is still one anchor; the ones that
+        # straddle the change of level are the only ones that may be lost.
+        shaded_labels = {
+            index
+            for index, position in enumerate(lattice['positions'])
+            if index % 10 == 0 and 360 <= position <= 840
+        }
+        self.assertTrue(shaded_labels, lattice['positions'])
+        self.assertLessEqual(
+            shaded_labels, {anchor['index'] for anchor in scale['anchors']}
+        )
+
     def test_a_blade_without_printed_numbers_gets_no_regions(self):
         strip = _strip(pitch=12.0, every=10, ink=False)
         lattice = _lattice(strip)

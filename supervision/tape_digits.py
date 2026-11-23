@@ -514,6 +514,33 @@ def _calibrate(
     }
 
 
+def _background_profile(pixels: np.ndarray) -> np.ndarray:
+    """Each column's blade brightness, with any step across the strip smoothed out.
+
+    A trench or chamber shades whole columns of the blade, and a threshold taken
+    from the strip-wide median then calls that shade ink: the printed numbers
+    land inside one enormous ink band and disappear into it (measured on a
+    shaded upload: the edges were found, the numbers were not). Smoothing the
+    column median over a wide window makes a shading step part of the
+    background and leaves only the printing below it. An evenly lit blade gives
+    the same profile back, so nothing changes there.
+
+    The window is a median, not a mean: averaging ramps the background down
+    across the change of level, and every column inside that ramp counts the
+    darker side as ink — measured on a shaded upload, that turned the trench
+    wall into a full-height ink block that fused all the numbers into one run.
+    A median keeps the two levels flat right up to the step.
+    """
+    profile = np.median(pixels, axis=0)
+    width = profile.shape[0]
+    span = max(3, int(round(width * 0.08)))
+    if width <= span:
+        return profile
+    padded = np.pad(profile, span // 2, mode='edge')
+    windows = np.lib.stride_tricks.sliding_window_view(padded, span)
+    return np.median(windows, axis=1)[:width]
+
+
 def read_labels(
     strip, lattice: dict | None, ocr=None, stretch: float = 1.0
 ) -> dict | None:
@@ -544,7 +571,7 @@ def read_labels(
     pixels = np.asarray(strip.convert('L'), dtype=np.float32)
     if pixels.ndim != 2 or pixels.shape[1] < 40:
         return None
-    ink = pixels < (float(np.median(pixels)) - MIN_INK_OFFSET)
+    ink = pixels < (_background_profile(pixels)[None, :] - MIN_INK_OFFSET)
     best: tuple[tuple[int, int, bool], list[dict], tuple[int, int]] | None = None
     for candidate in _digit_bands(ink, positions):
         found, tight = _label_boxes(ink, positions, pitch_px, (candidate[0], candidate[1]))
