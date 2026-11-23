@@ -72,6 +72,11 @@ MIN_ANCHORS = 2
 # A cell shorter than this is a sliver, not a lane of printed numbers.
 MIN_BAND_HEIGHT = 8
 
+# A row that is ink from edge to edge is the strip's own border — the ground
+# beyond the blade — not printing, and counting it fuses every number into one
+# full-width run.
+MAX_ROW_INK = 0.85
+
 # The share of anchors that must survive outlier trimming. If more than a
 # quarter of them are off the line, the numbers are not one printed ladder and
 # the scale they imply is not the blade's.
@@ -172,21 +177,29 @@ def _digit_bands(ink: np.ndarray, positions: list[int]) -> list[tuple[int, int, 
 
 def _label_boxes(
     ink: np.ndarray, positions: list[int], pitch_px: float, band: tuple[int, int]
-) -> list[dict]:
-    """Boxes around the printed numbers, each attached to its mark.
+) -> tuple[list[dict], tuple[int, int]]:
+    """Boxes around the printed numbers, and the rows they occupy.
 
     The numbers are found by their own ink instead of by a fixed slice of the
     ladder. A printed number spans several marks, so slicing per mark cuts it;
     and its width differs between a centimetre blade and a millimetre one, so a
     single share of the pitch cannot fit both.
+
+    The gap that separates one number from the next is measured against the rows
+    that actually carry ink, not the whole band: a blade's number band usually
+    has empty blade above the digits, and measuring gaps against that would fuse
+    neighbouring numbers into one run.
     """
     start, stop = band
-    height = stop - start
-    if height < MIN_BAND_HEIGHT or not positions:
-        return []
-    occupied = ink[start:stop].any(axis=0)
-    if not occupied.any():
-        return []
+    if stop - start < MIN_BAND_HEIGHT or not positions:
+        return [], (start, stop)
+    shares = ink[start:stop].mean(axis=1)
+    rows = np.flatnonzero((shares > 0.0) & (shares < MAX_ROW_INK))
+    if not rows.size:
+        return [], (start, stop)
+    tight = (start + int(rows[0]), start + int(rows[-1]) + 1)
+    height = tight[1] - tight[0]
+    occupied = ink[tight[0] : tight[1]].any(axis=0)
 
     gap = max(2, int(round(height * LABEL_GAP_SHARE)))
     runs: list[tuple[int, int]] = []
@@ -223,7 +236,7 @@ def _label_boxes(
                 'index': index,
             }
         )
-    return boxes[:MAX_CELLS]
+    return boxes[:MAX_CELLS], tight
 
 
 def _cell_image(strip, box: tuple[int, int, int, int]):
@@ -452,15 +465,16 @@ def read_labels(strip, lattice: dict | None, ocr=None) -> dict | None:
     if pixels.ndim != 2 or pixels.shape[1] < 40:
         return None
     ink = pixels < (float(np.median(pixels)) - MIN_INK_OFFSET)
-    best: tuple[tuple[int, int, bool], list[dict]] | None = None
+    best: tuple[tuple[int, int, bool], list[dict], tuple[int, int]] | None = None
     for candidate in _digit_bands(ink, positions):
-        found = _label_boxes(ink, positions, pitch_px, (candidate[0], candidate[1]))
+        found, tight = _label_boxes(ink, positions, pitch_px, (candidate[0], candidate[1]))
         if found and (best is None or len(found) > len(best[1])):
-            best = (candidate, found)
+            best = (candidate, found, tight)
     if best is None:
         return _refused('no printed numbers could be told apart from the marks')
-    band, boxes = best
-    start, stop, _from_bottom = band
+    band, boxes, tight = best
+    start, stop = tight
+    _from_bottom = band[2]
 
     read = ocr or _default_ocr
     anchors: list[dict] = []

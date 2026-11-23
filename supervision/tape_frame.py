@@ -290,13 +290,22 @@ def _grade_ticks(framed: dict) -> None:
 
 
 def _rank(framed: dict | None) -> tuple:
-    """A ladder that can set a scale beats one that cannot; then tightness."""
+    """A usable ladder beats an unusable one, then a taller strip, then tightness.
+
+    Two ladders within a tenth of a pitch of each other are the same ladder, so
+    height decides between them. That matters for what comes next: a strip cut
+    to the mark row alone reads its ticks perfectly and leaves the printed
+    numbers above the marks outside the frame, where the number reader can never
+    reach them. The blade is the strip, not its most regular sliver.
+    """
     if framed is None:
-        return (-1, -1e9, 0.0)
-    residual = framed.get('tick_residual')
+        return (-1, 0, -1, 0.0)
+    raw = framed.get('tick_residual')
+    residual = 9.0 if raw is None else float(raw)
     return (
         1 if framed.get('tick_usable') else 0,
-        -(float(residual) if residual is not None else 9.0),
+        -round(residual, 1),
+        int(framed.get('height_px') or 0),
         float(framed.get('tick_score') or 0.0),
     )
 
