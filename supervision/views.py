@@ -7,7 +7,7 @@ from projects.api.access import engineer_can_access
 from projects.api.layers import editable_feature_ids
 from projects.models import Feature, Project
 from projects.photo_gallery import attach_photos
-from supervision import ai_measure, tape_cloud, tape_measure, tape_vision
+from supervision import ai_measure, tape_cloud, tape_framing, tape_measure, tape_vision
 from supervision.design_change import (
     REQUEST_PENDING,
     project_requests,
@@ -481,6 +481,15 @@ class FeatureTapeMeasurementView(APIView):
             )
 
         diagnostics: dict = {}
+        dimension_spec = tape_measure.dimension_spec(element_type, dimension)
+        # Whether the blade itself is legible and whole is a separate question
+        # from what it reads, and the one the engineer can fix by moving.
+        framing = tape_framing.check_photo(
+            photo,
+            dimension_spec['label'].lower().removeprefix('actual ')
+            if dimension_spec
+            else 'measurement',
+        )
         read = tape_measure.read_tape(photo, diagnostics)
         if read is None and tape_vision.configured():
             # The model reads blades tesseract cannot, but it is a paid call per
@@ -491,11 +500,16 @@ class FeatureTapeMeasurementView(APIView):
             # a few hundred photos a month inside Cloud Vision's free tier.
             read = tape_cloud.read_tape(photo)
         if read is None:
-            note = (
-                'No tape numbers could be read. Lay the blade along the dimension, '
-                'keep two printed numbers in the frame and avoid glare.'
-            )
             reasons = tape_measure.retake_reasons(diagnostics)
+            if framing and not framing['ok']:
+                # The framing verdict is the one instruction the engineer can act
+                # on with the camera in hand, so it replaces the generic note.
+                note = framing['message']
+            else:
+                note = (
+                    'No tape numbers could be read. Lay the blade along the dimension, '
+                    'keep two printed numbers in the frame and avoid glare.'
+                )
             if reasons:
                 # 'Nothing could be read' gives the engineer nothing to change;
                 # naming the glare or the focus does.
@@ -508,6 +522,7 @@ class FeatureTapeMeasurementView(APIView):
                     'notes': note,
                     'photo_id': str(photo.id),
                     'engine': 'tesseract',
+                    'framing': framing,
                 }
             )
 
@@ -528,6 +543,10 @@ class FeatureTapeMeasurementView(APIView):
                 f"{note} Confirmed by {int(read['agreement'])} independent reads of "
                 'the blade.'
             )
+        if framing and not framing['ok']:
+            # A reading taken from a blade that leaves the frame is still worth
+            # showing, but not worth trusting without the caveat.
+            note = f'{note} Framing check: {framing["message"]}'
         return Response(
             {
                 'measurement': measurement,
@@ -537,5 +556,6 @@ class FeatureTapeMeasurementView(APIView):
                 'photo_id': str(photo.id),
                 'engine': read['engine'],
                 'bounds': bounds,
+                'framing': framing,
             }
         )
