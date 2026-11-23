@@ -265,12 +265,16 @@ def _grade_ticks(framed: dict) -> None:
     except Exception:
         lattice = None
     if lattice is None:
+        framed['lattice'] = None
         framed['ticks'] = None
         framed['tick_pitch'] = None
         framed['tick_residual'] = None
         framed['tick_score'] = 0.0
         framed['tick_usable'] = False
         return
+    # Private to the caller: the mark positions are what the digit stage
+    # aligns its cells to, and they are too numerous to ship in a response.
+    framed['lattice'] = lattice
     framed['ticks'] = {
         'pitch_px': round(lattice['pitch'], 2),
         'residual': round(lattice['residual'], 3),

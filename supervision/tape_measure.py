@@ -934,6 +934,7 @@ def _geometry(image, diagnostics: dict) -> None:
         if framed is None:
             diagnostics['blade'] = None
             diagnostics['ticks'] = None
+            diagnostics['digits'] = None
             return
         diagnostics['blade'] = {
             'angle': round(framed['angle'], 1),
@@ -943,6 +944,17 @@ def _geometry(image, diagnostics: dict) -> None:
         # The frame grades the ladder while choosing the band, so this is the
         # same verdict the choice was made on — not a second, disagreeing read.
         diagnostics['ticks'] = framed.get('ticks')
+        # The strip and its lattice are already here, so the printed numbers can
+        # be pinned to their marks without framing the photo a second time.
+        digits = None
+        if framed.get('strip') is not None and framed.get('lattice'):
+            try:
+                from supervision import tape_digits
+
+                digits = tape_digits.read_labels(framed['strip'], framed['lattice'])
+            except Exception:
+                digits = None
+        diagnostics['digits'] = digits
     except Exception:
         # A diagnosis must never be the reason a read fails.
         diagnostics['blade'] = 'unavailable'
