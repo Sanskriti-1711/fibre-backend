@@ -381,7 +381,14 @@ def frame_gray(gray: np.ndarray) -> dict | None:
     if upright is None:
         return found
     mapped = _from_transposed(upright, gray)
-    return mapped if _rank(mapped) > _rank(found) else found
+    # A quarter turn is a rescue for a blade that runs down the frame, not a
+    # competitor: it has to actually yield a ladder, or the horizontal result is
+    # kept even when that result is imperfect. Without this, a horizontal blade
+    # came back reported at 92 degrees because a transposed nonsense strip
+    # happened to have a slightly smaller residual.
+    if mapped.get('tick_usable'):
+        return mapped if _rank(mapped) > _rank(found) else found
+    return found if found is not None else mapped
 
 
 def frame_image(image) -> dict | None:
