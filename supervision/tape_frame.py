@@ -77,6 +77,15 @@ def _candidate_bands(gray: np.ndarray) -> list[tuple[int, int]]:
     except Exception:
         bands = []
     rows = [(int(band['top']), int(band['bottom'])) for band in bands]
+    # The search prefers short spans of bright rows, so on a blade carrying a
+    # blown highlight it can return the row of printed numbers and the row of
+    # marks as two separate bands. Their union covers both, which is what the
+    # strip needs: the ladder comes from the marks and the scale from the
+    # numbers printed above them.
+    if len(rows) >= 2:
+        union = (min(top for top, _ in rows), max(bottom for _, bottom in rows))
+        if union[1] > union[0] and union not in rows:
+            rows.append(union)
     rows.append((0, gray.shape[0]))
     return rows
 

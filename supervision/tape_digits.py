@@ -26,6 +26,10 @@ pitch and the numbers are independent measurements of the same blade — and a
 scale the marks cannot explain is refused, because a confident wrong scale is
 worse than no reading at all.
 
+The scale is then what turns the object into a number: a trench wall, a chamber
+rim and a duct's side are pixel positions along the calibrated blade, and
+millimetres per pixel is the only thing between those positions and a span.
+
 Env: none. Tesseract needs no key.
 """
 
@@ -436,8 +440,13 @@ def _calibrate(
 
     # Two halves of the blade are two independent scales. A single bad anchor
     # that survived the trim shows up as a slope only one half agrees with.
+    # Each half needs three anchors to be a scale at all: a two-label half has
+    # one gap in it, so its slope is that single mark spacing shifted by half a
+    # pixel of box centre, and two such halves disagree by a per cent on
+    # rounding alone. A glared blade with five readable labels was refused for
+    # exactly that, while its residual and its tick pitch both agreed.
     agreement = None
-    if len(anchors) >= 4:
+    if len(anchors) >= 6:
         middle = len(anchors) // 2
         halves = []
         for subset in (anchors[:middle], anchors[middle:]):
@@ -547,3 +556,52 @@ def read_labels(
     if len(trimmed) < MIN_ANCHORS or len(trimmed) < len(anchors) * MIN_AGREEING_SHARE:
         return _refused('the numbers on the blade disagree about their spacing', anchors)
     return _calibrate(trimmed, pitch_px, band, pixels.shape[1])
+
+
+def _no_span(reason: str) -> dict:
+    """A span that could not be measured, with the reason it failed."""
+    return {
+        'usable': False,
+        'reason': reason,
+        'span_mm': None,
+        'span_m': None,
+        'edges_px': None,
+        'mm_per_px': None,
+        'unit': None,
+    }
+
+
+def span_mm(scale: dict | None, first_px: float, second_px: float) -> dict:
+    """The millimetres between two edges along the blade the scale came from.
+
+    An edge is a boundary the blade crosses — a trench wall, a chamber rim, a
+    duct's side — and on a rectified strip it is one pixel position along the
+    blade. The calibration is what makes that a measurement: the ticks gave
+    millimetres per pixel, so the distance between the two edges converts without
+    asking the OCR to read the blade again.
+
+    The order of the edges does not matter: a span is a distance, not a direction.
+    """
+    if not scale:
+        return _no_span('no scale was read from the blade')
+    if not scale.get('usable') or not scale.get('mm_per_px'):
+        return _no_span(scale.get('reason') or 'the numbers did not set a scale')
+    try:
+        first, second = float(first_px), float(second_px)
+    except (TypeError, ValueError):
+        return _no_span('the object edges are not positions along the blade')
+    per_px = float(scale['mm_per_px'])
+    millimetres = abs(second - first) * per_px
+    if not np.isfinite(millimetres):
+        return _no_span('the object edges are not positions along the blade')
+    if millimetres <= 0.0:
+        return _no_span('the two edges sit at the same place on the blade')
+    return {
+        'usable': True,
+        'reason': None,
+        'span_mm': round(millimetres, 1),
+        'span_m': round(millimetres / 1000.0, 3),
+        'edges_px': [round(first, 1), round(second, 1)],
+        'mm_per_px': per_px,
+        'unit': scale.get('unit'),
+    }

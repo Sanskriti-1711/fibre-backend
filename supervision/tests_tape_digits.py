@@ -209,3 +209,61 @@ class DigitLabelTests(SimpleTestCase):
 
         self.assertFalse(scale['usable'], scale)
         self.assertEqual(readings.calls, [])
+
+
+class EdgeSpanTests(SimpleTestCase):
+    """Two edges on the calibrated blade, turned into the millimetres between them.
+
+    A trench wall or a chamber rim is a pixel position along the rectified strip;
+    what makes it a measurement is the scale the printed numbers set. No more OCR
+    runs here: the calibration is fixed and the arithmetic is what is checked.
+    """
+
+    def _scale(self):
+        strip = _strip(pitch=12.0, every=10)
+        lattice = _lattice(strip)
+        scale = tape_digits.read_labels(
+            strip,
+            lattice,
+            ocr=FakeOCR({index: str(10 + index) for index in range(0, 120, 10)}),
+        )
+        assert scale['usable'], scale
+        return scale
+
+    def test_two_edges_become_the_millimetres_between_them(self):
+        scale = self._scale()
+
+        span = tape_digits.span_mm(scale, 200.0, 840.0)
+
+        self.assertTrue(span['usable'], span)
+        # 12 px per printed centimetre, so 640 px is 10 mm * 640 / 12.
+        self.assertAlmostEqual(span['span_mm'], 640.0 * 10.0 / 12.0, delta=0.5)
+        self.assertAlmostEqual(span['span_m'], span['span_mm'] / 1000.0, delta=0.002)
+        self.assertEqual(span['unit'], 'cm')
+        self.assertEqual(span['edges_px'], [200.0, 840.0])
+
+    def test_the_edges_may_be_given_in_either_order(self):
+        scale = self._scale()
+
+        forward = tape_digits.span_mm(scale, 200.0, 840.0)
+        backward = tape_digits.span_mm(scale, 840.0, 200.0)
+
+        self.assertEqual(forward['span_mm'], backward['span_mm'])
+        self.assertEqual(backward['edges_px'], [840.0, 200.0])
+
+    def test_a_refused_scale_measures_nothing(self):
+        strip = _strip(pitch=12.0, every=10)
+        refused = tape_digits.read_labels(strip, _lattice(strip), ocr=FakeOCR({}))
+
+        span = tape_digits.span_mm(refused, 100.0, 400.0)
+
+        self.assertFalse(span['usable'], span)
+        self.assertIn('too few', span['reason'])
+        self.assertIsNone(span['span_mm'])
+
+    def test_edges_that_sit_together_are_refused(self):
+        span = tape_digits.span_mm(self._scale(), 400.0, 400.0)
+
+        self.assertFalse(span['usable'], span)
+        self.assertIn('same place', span['reason'])
+        self.assertIsNone(span['span_m'])
