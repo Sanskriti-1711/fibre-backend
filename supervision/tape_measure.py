@@ -935,6 +935,7 @@ def _geometry(image, diagnostics: dict) -> None:
             diagnostics['blade'] = None
             diagnostics['ticks'] = None
             diagnostics['digits'] = None
+            diagnostics['span'] = None
             return
         diagnostics['blade'] = {
             'angle': round(framed['angle'], 1),
@@ -965,6 +966,17 @@ def _geometry(image, diagnostics: dict) -> None:
             except Exception:
                 digits = None
         diagnostics['digits'] = digits
+        # The object's edges are on the same strip the scale came from, so the
+        # millimetres between them cost nothing beyond the edge search itself.
+        span = None
+        if digits is not None and framed.get('strip') is not None:
+            try:
+                from supervision import tape_digits
+
+                span = tape_digits.read_span(framed['strip'], digits)
+            except Exception:
+                span = None
+        diagnostics['span'] = span
     except Exception:
         # A diagnosis must never be the reason a read fails.
         diagnostics['blade'] = 'unavailable'

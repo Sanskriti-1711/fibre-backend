@@ -29,6 +29,10 @@ worse than no reading at all.
 The scale is then what turns the object into a number: a trench wall, a chamber
 rim and a duct's side are pixel positions along the calibrated blade, and
 millimetres per pixel is the only thing between those positions and a span.
+Those positions come from the strip itself. Where the blade crosses the edge of
+a trench or a chamber it changes brightness along its whole height at one x,
+which is exactly what a smudge, a stone or the shadow of one side of the blade
+does not do.
 
 Env: none. Tesseract needs no key.
 """
@@ -95,6 +99,33 @@ TICK_TOLERANCE = 0.12
 # The two halves of the blade are two independent scales; they must agree with
 # each other to this share, or one of them has been misread.
 SCALE_AGREEMENT = 0.02
+
+# The object the blade crosses — a trench wall, a chamber rim, a duct's side —
+# is a brightness boundary across the whole blade, not a smudge: the strip
+# changes level along its height at the same x. Below this gray-level step it is
+# soil texture or a shadow, not the end of the object.
+EDGE_MIN_STEP = 12.0
+
+# Each half of the blade must see the boundary too, at this share of the full
+# step: a mark, a stain or a hand shadow covers one side of the blade and would
+# otherwise read as an object edge.
+EDGE_BAND_STEP_SHARE = 0.5
+
+# The step is measured over this share of the strip's width each side of a
+# column, so a soft photographic boundary still registers as one change.
+EDGE_WINDOW_SHARE = 1.0 / 40.0
+
+# Two changes closer than this are one boundary (or a mark), not an object.
+EDGE_MIN_SEPARATION = 0.06
+
+# A half of the blade may place the boundary this far from where the whole
+# blade does and still be the same boundary.
+EDGE_BAND_SHARE = 0.04
+
+# An object narrower than this share of the blade is a mark or a gap, and one
+# touching the strip's own ends has no measurable span.
+EDGE_MIN_SPAN_SHARE = 0.15
+EDGE_BORDER_SHARE = 0.03
 
 # `--psm 7` is one line of text, which is one label; the whitelist stops the
 # engine offering letters, which the digit filter would only have to drop.
@@ -605,3 +636,182 @@ def span_mm(scale: dict | None, first_px: float, second_px: float) -> dict:
         'mm_per_px': per_px,
         'unit': scale.get('unit'),
     }
+
+
+def _no_edges(reason: str) -> dict:
+    """Edges that were not found, with the reason they were not."""
+    return {'usable': False, 'reason': reason, 'edges_px': None, 'contrast': None}
+
+
+def _column_profile(pixels: np.ndarray) -> np.ndarray:
+    """Each column's brightness as the median of its rows.
+
+    The median, not the mean: a printed number or a mark darkens only the rows it
+    covers, while the object the blade crosses changes every row. On the
+    rendered blade the mean profile stepped by 21 gray levels at every printed
+    number and the median profile was flat to the level, which is the difference
+    between finding a boundary and finding the printing.
+    """
+    return np.median(pixels, axis=0)
+
+
+def _smoothed_profile(profile: np.ndarray) -> np.ndarray:
+    """A profile with single-column noise averaged out.
+
+    One dusty column or one blown highlight is not the end of a trench; a
+    boundary is a change that holds over many columns.
+    """
+    radius = max(1, profile.size // 80)
+    kernel = np.ones(2 * radius + 1) / float(2 * radius + 1)
+    return np.convolve(profile.astype(np.float64), kernel, mode='same')
+
+
+def _signed_steps(profile: np.ndarray, window: int) -> np.ndarray:
+    """Brightness change at each column, signed, over a window each side.
+
+    Signed, not absolute: an object edge is a step down into the trench and a
+    step back up out of it, and two like-signed steps are two shadows or two
+    marks, not the two ends of one thing.
+    """
+    values = profile.astype(np.float64)
+    count = values.size
+    window = max(2, min(int(window), max(2, count // 4)))
+    prefix = np.concatenate([[0.0], np.cumsum(values)])
+    columns = np.arange(count)
+    left_start = np.clip(columns - window, 0, count)
+    right_stop = np.clip(columns + window, 0, count)
+    left_mean = (prefix[columns] - prefix[left_start]) / np.maximum(
+        1, columns - left_start
+    )
+    right_mean = (prefix[right_stop] - prefix[columns]) / np.maximum(
+        1, right_stop - columns
+    )
+    return right_mean - left_mean
+
+
+def _strong_steps(steps: np.ndarray, min_gap: int, threshold: float) -> list[int]:
+    """The strongest separated changes in a signed step profile, left to right."""
+    magnitude = np.abs(steps)
+    candidates = [
+        (float(magnitude[x]), x)
+        for x in range(1, magnitude.size - 1)
+        if magnitude[x] >= threshold
+        and magnitude[x] >= magnitude[x - 1]
+        and magnitude[x] >= magnitude[x + 1]
+    ]
+    candidates.sort(reverse=True)
+    chosen: list[int] = []
+    for _score, x in candidates:
+        if all(abs(x - other) >= min_gap for other in chosen):
+            chosen.append(x)
+    return sorted(chosen)
+
+
+def _row_bands(pixels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The two halves of the blade, clear of the strip's own border rows."""
+    height = pixels.shape[0]
+    top = pixels[int(height * 0.05) : max(int(height * 0.05) + 1, int(height * 0.45))]
+    bottom = pixels[max(1, int(height * 0.55)) : max(2, int(height * 0.95))]
+    return top, bottom
+
+
+def find_edges(strip) -> dict:
+    """The two ends of the object the blade crosses, as x positions on the strip.
+
+    On a rectified strip the object's edge is one column: the blade over the
+    trench or the chamber opening is in shadow and the same blade over the
+    ground is not, so the strip's column brightness steps down at one wall and
+    back up at the other. A tape lying along the object instead of across it has
+    no such pair, and is refused rather than given a span from two smudges.
+
+    Both halves of the blade have to change at the same x. That is what separates
+    the end of an object, which the whole blade crosses, from a mark, a patch of
+    dust or the shadow of one side of the tape.
+    """
+    if strip is None:
+        return _no_edges('no strip was rectified to find an edge on')
+    pixels = np.asarray(strip.convert('L'), dtype=np.float32)
+    if pixels.ndim != 2 or pixels.shape[0] < 8 or pixels.shape[1] < 80:
+        return _no_edges('the strip is too small to carry an object edge')
+    width = pixels.shape[1]
+    window = max(2, int(round(width * EDGE_WINDOW_SHARE)))
+    profile = _column_profile(pixels)
+    steps = _signed_steps(_smoothed_profile(profile), window)
+
+    border = int(round(width * EDGE_BORDER_SHARE))
+    gap = max(4, int(round(width * EDGE_MIN_SEPARATION)))
+    candidates = [
+        x
+        for x in _strong_steps(steps, gap, EDGE_MIN_STEP)
+        if border <= x < width - border
+    ]
+    min_span = int(round(width * EDGE_MIN_SPAN_SHARE))
+    pair: tuple[float, int, int] | None = None
+    for index, left in enumerate(candidates):
+        for right in candidates[index + 1 :]:
+            if right - left < min_span or steps[left] * steps[right] >= 0.0:
+                continue
+            score = min(abs(steps[left]), abs(steps[right]))
+            if pair is None or score > pair[0]:
+                pair = (score, left, right)
+    if pair is None:
+        return _no_edges('no boundary crosses the blade')
+
+    _score, left, right = pair
+    tolerance = max(2, int(round(width * EDGE_BAND_SHARE)))
+    for band in _row_bands(pixels):
+        band_steps = _signed_steps(_smoothed_profile(_column_profile(band)), window)
+        for edge in (left, right):
+            low, high = max(0, edge - tolerance), min(width, edge + tolerance + 1)
+            local = band_steps[low:high]
+            peak = int(np.argmax(np.abs(local)))
+            if (
+                np.sign(local[peak]) != np.sign(steps[edge])
+                or abs(local[peak]) < EDGE_MIN_STEP * EDGE_BAND_STEP_SHARE
+            ):
+                return _no_edges('the boundary is on one side of the blade only')
+
+    # Between the edges the blade must be over a genuinely different surface:
+    # a step without a level behind it is a gradient or a row of printing, not
+    # the end of an object.
+    inside = profile[left + 2 * window : right - 2 * window]
+    if inside.size < 2:
+        return _no_edges('the two edges are too close together to measure')
+    inside_level = float(np.median(inside))
+    outside_left = float(np.median(profile[border : max(border + 1, left - 2 * window)]))
+    outside_right = float(
+        np.median(profile[min(width - 1, right + 2 * window) : width - border])
+    )
+    if (
+        abs(inside_level - outside_left) < EDGE_MIN_STEP
+        or abs(inside_level - outside_right) < EDGE_MIN_STEP
+        or np.sign(inside_level - outside_left) != np.sign(inside_level - outside_right)
+    ):
+        return _no_edges('the blade does not cross a different surface between them')
+    return {
+        'usable': True,
+        'reason': None,
+        'edges_px': [float(left), float(right)],
+        'contrast': round(
+            float(min(abs(steps[left]), abs(steps[right]))), 1
+        ),
+    }
+
+
+def read_span(strip, scale: dict | None) -> dict:
+    """The millimetres between the two edges of the object the blade crosses.
+
+    ``scale`` is what ``read_labels`` returned for this same strip, so the edge
+    positions and the millimetres per pixel are measured on one image and no
+    second OCR pass is needed. A refused scale still reports the edges that were
+    found, which is what keeps a failed field read diagnosable.
+    """
+    edges = find_edges(strip)
+    if not edges['usable']:
+        span = _no_span(edges['reason'])
+        span['contrast'] = None
+        return span
+    span = span_mm(scale, *edges['edges_px'])
+    span['edges_px'] = edges['edges_px']
+    span['contrast'] = edges['contrast']
+    return span

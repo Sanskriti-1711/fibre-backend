@@ -57,6 +57,20 @@ class FakeOCR:
         return text, self.confidence
 
 
+def _trench_strip(left=300, right=900, shade=70, rows=None):
+    """The same blade laid across a trench: darker between two columns.
+
+    ``rows`` restricts the darkening to some rows, which is what a mark, a stain
+    or a hand shadow looks like — only part of the blade changes level.
+    """
+    strip = np.asarray(_strip().convert('L')).copy()
+    top, bottom = rows if rows else (0, strip.shape[0])
+    strip[top:bottom, left:right] = np.clip(
+        strip[top:bottom, left:right].astype(np.int16) - shade, 0, 255
+    ).astype(np.uint8)
+    return Image.fromarray(strip)
+
+
 def _lattice(strip):
     lattice = tape_ticks.read_strip(strip)
     assert lattice is not None and lattice['usable'], lattice
@@ -267,3 +281,53 @@ class EdgeSpanTests(SimpleTestCase):
         self.assertFalse(span['usable'], span)
         self.assertIn('same place', span['reason'])
         self.assertIsNone(span['span_m'])
+
+    def test_the_edges_found_on_the_strip_become_that_span(self):
+        scale = self._scale()
+
+        span = tape_digits.read_span(_trench_strip(300, 900), scale)
+
+        self.assertTrue(span['usable'], span)
+        self.assertEqual(len(span['edges_px']), 2)
+        self.assertAlmostEqual(span['span_mm'], 500.0, delta=4.0)
+        self.assertGreater(span['contrast'], tape_digits.EDGE_MIN_STEP)
+
+    def test_a_shadow_on_one_side_of_the_blade_is_not_an_edge(self):
+        # The trench darkens only the lower rows of the blade: a hand shadow or
+        # a mark, which must not become a measurement.
+        shadow = _trench_strip(300, 900, rows=(0, 55))
+
+        span = tape_digits.read_span(shadow, self._scale())
+
+        self.assertFalse(span['usable'], span)
+        self.assertIn('one side', span['reason'])
+
+    def test_printing_that_covers_part_of_the_blade_is_not_an_edge(self):
+        # A printed number darkens the rows it covers and leaves the rest of the
+        # blade alone; the median column level is what tells that from an edge.
+        span = tape_digits.read_span(
+            _trench_strip(300, 900, rows=(0, 36)), self._scale()
+        )
+
+        self.assertFalse(span['usable'], span)
+        self.assertIsNone(span['edges_px'])
+
+    def test_a_blade_lying_along_the_object_has_no_edges(self):
+        span = tape_digits.read_span(_strip(), self._scale())
+
+        self.assertFalse(span['usable'], span)
+        self.assertIn('crosses the blade', span['reason'])
+
+    def test_edges_are_still_reported_when_the_scale_was_refused(self):
+        strip = _strip(pitch=12.0, every=10)
+        refused = tape_digits.read_labels(strip, _lattice(strip), ocr=FakeOCR({}))
+
+        span = tape_digits.read_span(_trench_strip(300, 900), refused)
+
+        self.assertFalse(span['usable'], span)
+        self.assertIsNone(span['span_mm'])
+        # The step is measured over a window, so an edge lands within a few
+        # pixels of the boundary itself.
+        self.assertAlmostEqual(span['edges_px'][0], 300.0, delta=5.0)
+        self.assertAlmostEqual(span['edges_px'][1], 900.0, delta=5.0)
+        self.assertGreater(span['edges_px'][1] - span['edges_px'][0], 590.0)

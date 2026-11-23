@@ -522,6 +522,7 @@ class FeatureTapeMeasurementView(APIView):
                     'notes': note,
                     'photo_id': str(photo.id),
                     'engine': 'tesseract',
+                    'span': diagnostics.get('span'),
                     'framing': framing,
                     'diagnostics': diagnostics,
                 }
@@ -544,6 +545,15 @@ class FeatureTapeMeasurementView(APIView):
                 f"{note} Confirmed by {int(read['agreement'])} independent reads of "
                 'the blade.'
             )
+        # The rectified blade gives the object's two edges in millimetres on the
+        # same scale as the printed numbers, which is an independent check on
+        # the reading rather than another guess at it.
+        span = diagnostics.get('span')
+        if span and span.get('usable'):
+            note = (
+                f"{note} From the blade's edges: {span['span_mm']:.0f} mm "
+                'wall to wall.'
+            )
         if framing and not framing['ok']:
             # A reading taken from a blade that leaves the frame is still worth
             # showing, but not worth trusting without the caveat.
@@ -557,6 +567,7 @@ class FeatureTapeMeasurementView(APIView):
                 'photo_id': str(photo.id),
                 'engine': read['engine'],
                 'bounds': bounds,
+                'span': span,
                 'framing': framing,
                 'diagnostics': diagnostics,
             }
