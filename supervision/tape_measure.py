@@ -907,14 +907,63 @@ def read_tape_bytes(data: bytes, diagnostics: dict | None = None) -> dict | None
     """The tape's readings, or None when no blade could be read.
 
     ``diagnostics`` is filled with the cheap quality measures (glare, focus,
-    blade angle) so the endpoint can say why a photo failed instead of only
-    that it did.
+    blade angle, blade and tick geometry) so the endpoint can say why a photo
+    failed instead of only that it did — and so a read on a phone can be
+    diagnosed from its own response, without server logs.
     """
+    started = time.monotonic()
+    try:
+        return _read_tape_bytes(data, diagnostics)
+    finally:
+        if diagnostics is not None:
+            diagnostics['elapsed_ms'] = int((time.monotonic() - started) * 1000)
+
+
+def _geometry(image, diagnostics: dict) -> None:
+    """Blade and tick geometry for the response, never for the reading.
+
+    The reader below still works on the whole frame. This summary is what makes
+    a field failure diagnosable: it says whether the blade was found, how far
+    it was tilted and what pitch its ladder printed — the information a "no
+    reading" toast cannot carry.
+    """
+    try:
+        from supervision import tape_frame, tape_ticks
+
+        framed = tape_frame.frame_gray(np.asarray(image))
+        if framed is None:
+            diagnostics['blade'] = None
+            return
+        lattice = tape_ticks.read_strip(framed['strip'])
+        diagnostics['blade'] = {
+            'angle': round(framed['angle'], 1),
+            'thickness_px': framed['thickness_px'],
+            'coverage': round(framed['coverage'], 2),
+        }
+        diagnostics['ticks'] = (
+            None
+            if lattice is None
+            else {
+                'pitch_px': round(lattice['pitch'], 2),
+                'residual': round(lattice['residual'], 3),
+                'count': lattice['count'],
+                'coverage': round(lattice['coverage'], 2),
+                'major_every': lattice['major_every'],
+                'usable': lattice['usable'],
+            }
+        )
+    except Exception:
+        # A diagnosis must never be the reason a read fails.
+        diagnostics['blade'] = 'unavailable'
+
+
+def _read_tape_bytes(data: bytes, diagnostics: dict | None = None) -> dict | None:
     image = _prepare(data)
     if image is None:
         return None
     if diagnostics is not None:
         diagnostics.update(_quality(image))
+        _geometry(image, diagnostics)
 
     angle = _blade_angle(image)
     if diagnostics is not None:

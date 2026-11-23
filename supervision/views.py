@@ -523,6 +523,7 @@ class FeatureTapeMeasurementView(APIView):
                     'photo_id': str(photo.id),
                     'engine': 'tesseract',
                     'framing': framing,
+                    'diagnostics': diagnostics,
                 }
             )
 
@@ -557,5 +558,6 @@ class FeatureTapeMeasurementView(APIView):
                 'engine': read['engine'],
                 'bounds': bounds,
                 'framing': framing,
+                'diagnostics': diagnostics,
             }
         )
