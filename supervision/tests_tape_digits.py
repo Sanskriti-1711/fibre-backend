@@ -165,6 +165,38 @@ class DigitLabelTests(SimpleTestCase):
         self.assertIn('too few', scale['reason'])
         self.assertEqual(scale['anchors'], [])
 
+    def test_a_label_clipped_away_from_its_mark_is_dropped_not_the_scale(self):
+        # A box clipped by the strip's end, or fused with the shade at a trench
+        # wall, still reads the right number but its centre lands on another
+        # mark. Its value fits the line and its position does not; on a shaded
+        # angled upload that single anchor made the halves disagree and the span
+        # was refused although every number had read.
+        anchors = [
+            {
+                'index': index,
+                'x_px': x_px,
+                'text': str(value),
+                'value': value,
+                'confidence': 0.95,
+            }
+            for index, x_px, value in (
+                (11, 155.0, 10),  # clipped: hangs over mark 11, reads the 10
+                (10, 260.0, 20),
+                (20, 380.0, 30),
+                (30, 500.0, 40),
+                (40, 620.0, 50),
+                (50, 740.0, 60),
+                (60, 860.0, 70),
+            )
+        ]
+
+        kept = tape_digits._trim_outliers(anchors, pitch_px=12.0)
+        scale = tape_digits._calibrate(kept, 12.0, (0, 40, True), 1200)
+
+        self.assertNotIn(155.0, [anchor['x_px'] for anchor in kept])
+        self.assertTrue(scale['usable'], scale)
+        self.assertAlmostEqual(scale['mm_per_px'], 10.0 / 12.0, delta=0.01)
+
     def test_a_shaded_blade_still_has_readable_labels(self):
         # The trench darkens whole columns of the blade. A threshold taken from
         # the strip-wide median calls that shade ink, the numbers end up inside

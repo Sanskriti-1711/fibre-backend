@@ -69,6 +69,13 @@ MAX_LABEL_HEIGHTS = 8.0
 # may sit and still be that mark's number.
 MARK_REACH = 1.5
 
+# After the fit, a label may sit this share of a mark spacing from where its
+# number says it belongs. A box clipped by the strip's end — or fused with the
+# shade at a trench wall — keeps its number but moves its centre onto another
+# mark, and that shifted anchor is what made a shaded angled blade's two halves
+# disagree while every number had actually read.
+POSITION_TOLERANCE = 0.5
+
 # A digit tesseract is not at least this sure of is worse than no digit: it would
 # land on the wrong mark and drag the fitted scale towards itself.
 MIN_LABEL_CONFIDENCE = 0.45
@@ -381,12 +388,20 @@ def _line(xs: np.ndarray, values: np.ndarray) -> tuple[float, float] | None:
     return slope, float(np.median(values - slope * xs))
 
 
-def _trim_outliers(anchors: list[dict]) -> list[dict]:
+def _trim_outliers(anchors: list[dict], pitch_px: float = 0.0) -> list[dict]:
     """Drop digits that do not sit on the blade's line of numbers.
 
     A blade prints its numbers evenly, so a digit a whole step off that line was
     misread. Dropping it keeps a single bad cell from tilting the scale that
     every measurement would later inherit.
+
+    The same trim is done on the positions when the mark spacing is known. A
+    label whose cell was clipped by the strip's end, or fused with the shade at
+    a trench wall, still reads the right number but its centre lands on the
+    wrong mark: its value fits the line and its position does not. Left in, that
+    one anchor skews a half-blade fit enough to refuse a scale every number
+    agreed with (measured on a shaded angled upload, where the span was lost
+    for one clipped label at the blade's end).
     """
     kept = list(anchors)
     for _ in range(2):
@@ -408,6 +423,25 @@ def _trim_outliers(anchors: list[dict]) -> list[dict]:
         if len(survivors) < MIN_ANCHORS:
             return []
         kept = survivors
+    # Four anchors are the least that can show one of them sitting off its mark:
+    # with three, removing one leaves the two the line was drawn through.
+    if pitch_px >= 2.0 and len(kept) > MIN_ANCHORS + 1:
+        for _ in range(2):
+            positions = np.array([anchor['x_px'] for anchor in kept], dtype=float)
+            measured = np.array([anchor['value'] for anchor in kept], dtype=float)
+            fit = _line(measured, positions)
+            if fit is None:
+                break
+            slope, intercept = fit
+            reach = POSITION_TOLERANCE * pitch_px
+            survivors = [
+                anchor
+                for anchor in kept
+                if abs(anchor['x_px'] - (intercept + slope * anchor['value'])) <= reach
+            ]
+            if len(survivors) == len(kept) or len(survivors) < MIN_ANCHORS + 1:
+                break
+            kept = survivors
     return kept
 
 
@@ -610,7 +644,7 @@ def read_labels(
     if len(anchors) < MIN_ANCHORS:
         return _refused('too few printed numbers were readable to set a scale', anchors)
 
-    trimmed = _trim_outliers(anchors)
+    trimmed = _trim_outliers(anchors, pitch_px)
     if len(trimmed) < MIN_ANCHORS or len(trimmed) < len(anchors) * MIN_AGREEING_SHARE:
         return _refused('the numbers on the blade disagree about their spacing', anchors)
     return _calibrate(trimmed, pitch_px, band, pixels.shape[1])
