@@ -951,7 +951,17 @@ def _geometry(image, diagnostics: dict) -> None:
             try:
                 from supervision import tape_digits
 
-                digits = tape_digits.read_labels(framed['strip'], framed['lattice'])
+                # The strip is resampled to a clamped height, so a thick
+                # blade's digits arrive flattened; true thickness over strip
+                # height is what gives them their shape back for the OCR.
+                squash = float(framed.get('thickness_px') or 0) / max(
+                    1.0, float(framed.get('height_px') or 1)
+                )
+                digits = tape_digits.read_labels(
+                    framed['strip'],
+                    framed['lattice'],
+                    stretch=min(4.0, max(0.5, squash)),
+                )
             except Exception:
                 digits = None
         diagnostics['digits'] = digits

@@ -175,6 +175,32 @@ def _digit_bands(ink: np.ndarray, positions: list[int]) -> list[tuple[int, int, 
     return bands
 
 
+def _printed_rows(shares: np.ndarray) -> tuple[int, int] | None:
+    """The rows of a band that carry printing, as a half-open range.
+
+    A warped strip has its own border in the frame — a row or two of ink from
+    edge to edge — and a blurred blade edge can leave a nearly-empty row stuck to
+    it. Neither is printing, so the run carrying the most ink wins rather than
+    the widest span: a line of numbers is tall and dense, a blade edge is one
+    thin row.
+    """
+    printed = (shares > 0.0) & (shares < MAX_ROW_INK)
+    runs: list[tuple[int, int]] = []
+    start = None
+    for row, on in enumerate(printed):
+        if on and start is None:
+            start = row
+        elif not on and start is not None:
+            runs.append((start, row))
+            start = None
+    if start is not None:
+        runs.append((start, len(printed)))
+    if not runs:
+        return None
+    best = max(runs, key=lambda run: float(np.sum(shares[run[0] : run[1]])))
+    return int(best[0]), int(best[1])
+
+
 def _label_boxes(
     ink: np.ndarray, positions: list[int], pitch_px: float, band: tuple[int, int]
 ) -> tuple[list[dict], tuple[int, int]]:
@@ -194,10 +220,10 @@ def _label_boxes(
     if stop - start < MIN_BAND_HEIGHT or not positions:
         return [], (start, stop)
     shares = ink[start:stop].mean(axis=1)
-    rows = np.flatnonzero((shares > 0.0) & (shares < MAX_ROW_INK))
-    if not rows.size:
+    printed = _printed_rows(shares)
+    if printed is None:
         return [], (start, stop)
-    tight = (start + int(rows[0]), start + int(rows[-1]) + 1)
+    tight = (start + printed[0], start + printed[1])
     height = tight[1] - tight[0]
     occupied = ink[tight[0] : tight[1]].any(axis=0)
 
@@ -239,8 +265,13 @@ def _label_boxes(
     return boxes[:MAX_CELLS], tight
 
 
-def _cell_image(strip, box: tuple[int, int, int, int]):
-    """One label's cell, upscaled and padded for tesseract."""
+def _cell_image(strip, box: tuple[int, int, int, int], stretch: float = 1.0):
+    """One label's cell, upscaled, unsquashed and padded for tesseract.
+
+    ``stretch`` undoes the strip's vertical squash. The warp resamples a blade to
+    a clamped height, so a thick blade's digits arrive flattened — wide and
+    short — and tesseract reads nothing until they are given back their shape.
+    """
     from PIL import Image, ImageOps
 
     cell = ImageOps.autocontrast(strip.convert('L').crop(box))
@@ -251,6 +282,11 @@ def _cell_image(strip, box: tuple[int, int, int, int]):
                 max(1, int(round(cell.width * scale))),
                 max(1, int(round(cell.height * scale))),
             ),
+            Image.Resampling.LANCZOS,
+        )
+    if abs(stretch - 1.0) > 0.02:
+        cell = cell.resize(
+            (cell.width, max(1, int(round(cell.height * stretch)))),
             Image.Resampling.LANCZOS,
         )
     padded = Image.new(
@@ -438,13 +474,17 @@ def _calibrate(
     }
 
 
-def read_labels(strip, lattice: dict | None, ocr=None) -> dict | None:
+def read_labels(
+    strip, lattice: dict | None, ocr=None, stretch: float = 1.0
+) -> dict | None:
     """The blade's printed numbers pinned to its lattice, as a scale.
 
     ``lattice`` is the dict ``tape_ticks.read_strip`` returns; each printed
     number is attached to the mark whose position it sits over. ``ocr(cell,
     mark)`` returns ``(digits, confidence)`` and defaults to tesseract - tests
     pass their own so the calibration can be checked without an OCR install.
+    ``stretch`` is the strip's true thickness over its height, which undoes the
+    vertical squash a clamped warp leaves in the glyphs.
 
     Returns None when there is no lattice to align to, otherwise a dict whose
     ``usable`` says whether the numbers earned a scale; a refusal still carries
@@ -484,7 +524,7 @@ def read_labels(strip, lattice: dict | None, ocr=None) -> dict | None:
         right = min(pixels.shape[1], box['right'] + pad)
         if right - left < 4:
             continue
-        cell = _cell_image(strip, (left, start, right, stop))
+        cell = _cell_image(strip, (left, start, right, stop), stretch)
         text, confidence = read(
             cell, {'index': box['index'], 'x_px': int(round(box['centre']))}
         )
