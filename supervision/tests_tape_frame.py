@@ -2,7 +2,10 @@
 
 The failure these tests lock down is the one measured on the field set: the old
 angle search reported 0 degrees on a blade visibly tilted 7 degrees, so every
-column profile afterwards mixed the marks with the ground.
+column profile afterwards mixed the marks with the ground. They also pin the
+second failure: two field photos were thrown away because bright ground beside
+the blade pushed a geometry threshold past its limit, so the band is now chosen
+by the ladder it yields.
 """
 import numpy as np
 from django.test import SimpleTestCase
@@ -50,6 +53,7 @@ class TapeFrameTests(SimpleTestCase):
         self.assertIsNotNone(lattice)
         self.assertLess(abs(lattice['pitch'] - 8.0) / 8.0, 0.15, lattice)
         self.assertTrue(lattice['usable'], lattice)
+        self.assertTrue(framed['tick_usable'], framed['ticks'])
 
     def test_a_vertical_blade_is_still_brought_level(self):
         framed = tape_frame.frame_gray(np.rot90(_photo(0.0), k=1))
@@ -58,6 +62,22 @@ class TapeFrameTests(SimpleTestCase):
         lattice = tape_ticks.read_strip(framed['strip'])
         self.assertIsNotNone(lattice)
         self.assertTrue(lattice['usable'], lattice)
+
+    def test_bright_ground_does_not_outrank_the_blade(self):
+        # A wide, bright, textured patch of gravel sits under the blade. It wins
+        # any brightness or area comparison, and it has no ladder, so the band
+        # chosen by tick score must still be the blade.
+        photo = _photo(0.0).copy()
+        rng = np.random.default_rng(11)
+        photo[470:640, 30:970] = rng.normal(228, 12, (170, 940)).clip(0, 255).astype(
+            np.uint8
+        )
+
+        framed = tape_frame.frame_gray(np.asarray(photo))
+
+        self.assertIsNotNone(framed)
+        self.assertTrue(framed['tick_usable'], framed.get('ticks'))
+        self.assertLess(abs(framed['angle']), 2.0)
 
     def test_a_frame_with_no_blade_is_refused(self):
         self.assertIsNone(tape_frame.frame_gray(np.full((400, 600), 200, dtype=np.uint8)))

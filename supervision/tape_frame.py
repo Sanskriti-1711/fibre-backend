@@ -8,15 +8,21 @@ This module localises the blade, fits its centre line, and warps it into a
 canonical strip so ticks, digits and the object's edges become one-dimensional
 problems.
 
-Two choices were forced by the field set:
+The candidate band is chosen by the ladder its strip yields, not by geometry.
+An extent threshold could not separate a blade from pale gravel beside it: two
+of six field photos were thrown away because their bright neighbour pushed the
+mask past the limit. A ladder is a far stronger signal than brightness — the
+blade is the only thing in the frame that prints one — so each candidate is
+warped, graded by the ticks it produces, and the best grade wins.
 
-* The band is picked by how *regular* a strip its content forms, not by
-  brightness. The bright-sand photo put the first candidate band on sunlit
-  gravel at the bottom of the frame, 200 px thick instead of the blade's 53.
-* The mask is an Otsu split of that band, because a blade's flat middle matches
+Two other choices were forced by the field set:
+
+* The mask is an Otsu split of the band, because a blade's flat middle matches
   its own blurred background and a local-contrast mask keeps only the rim.
+* A densest-window trim removes pale ground above and below before the line fit;
+  on the rendered blade it took the quad from 418 px thick to the blade's 136.
 
-Deliberately not a learned detector: a tape is the longest regular structure in
+Deliberately not a learned detector: a tape is the longest printed structure in
 the frame, and a detector would need a labelled set this project does not have.
 
 Env: none.
@@ -33,13 +39,8 @@ from PIL import Image
 # full size, and 400 px keeps the percentile maths in microseconds.
 MASK_EDGE = 400
 
-# A plausible blade occupies this share of its band's height. Thinner is a
-# cable or a kerb, thicker is a wall or a sheet of paper.
-BAND_MIN_EXTENT_SHARE = 0.04
-BAND_MAX_EXTENT_SHARE = 0.62
-
-# A blade thinner than this share of its own length is a cable; thicker than the
-# upper share is a wall.
+# A blade thinner than this share of its own length is a cable or a kerb;
+# thicker than the upper share is a wall or a sheet of paper.
 MIN_THICKNESS_FRACTION = 0.012
 MAX_THICKNESS_FRACTION = 0.45
 
@@ -57,7 +58,7 @@ COVER_BINS = 40
 
 
 def _candidate_bands(gray: np.ndarray) -> list[tuple[int, int]]:
-    """Rows of the bright bands worth testing, thinnest first.
+    """Rows of the bright bands worth testing.
 
     Reuses the reader's proven band search; the import stays inside the function
     because the reader calls back here for its diagnostics.
@@ -102,9 +103,7 @@ def _densest_window(mask: np.ndarray) -> slice | None:
 
     A blade is a band of roughly constant height; pale ground or a white patch
     beside it is not. Sliding a window 2.5x the median column extent and keeping
-    the densest one cuts those neighbours away before the line fit sees them —
-    on the rendered blade that alone took the quad from 418 px thick to the
-    blade's own 136.
+    the densest one cuts those neighbours away before the line fit sees them.
     """
     if not mask.any():
         return None
@@ -122,29 +121,19 @@ def _densest_window(mask: np.ndarray) -> slice | None:
     return slice(start, start + window)
 
 
-def _band_quality(mask: np.ndarray, band_height: int) -> float:
-    """How much this mask looks like one long strip of constant thickness.
-
-    A blade gives the same number of bright rows in almost every column, so the
-    per-column extent is large and even. Sunlit gravel gives a jagged extent and
-    a patch of white paint gives a short one; both score low.
-    """
-    if not mask.any():
-        return 0.0
-    extent = mask.sum(axis=0)
-    used = extent[extent > 0]
-    if used.size < 20:
-        return 0.0
-    share = float(used.size) / mask.shape[1]
-    mean = float(used.mean())
-    if not (
-        BAND_MIN_EXTENT_SHARE
-        <= mean / max(1, band_height)
-        <= BAND_MAX_EXTENT_SHARE
-    ):
-        return 0.0
-    regularity = mean / (mean + float(used.std()))
-    return share * regularity
+def _mask_for_band(base: np.ndarray, start: int, stop: int) -> np.ndarray | None:
+    """The bright class of one candidate band, trimmed to its densest window."""
+    keep = np.zeros(base.shape[0], dtype=bool)
+    keep[start:stop] = True
+    level = _otsu(base[keep, :])
+    mask = np.zeros_like(base, dtype=bool)
+    mask[keep, :] = base[keep, :] > level
+    window = _densest_window(mask)
+    if window is None:
+        return None
+    trimmed = np.zeros_like(mask)
+    trimmed[window] = mask[window]
+    return trimmed if int(trimmed.sum()) >= 200 else None
 
 
 def _centre_line(u: np.ndarray, v: np.ndarray) -> tuple[float, float, float] | None:
@@ -174,49 +163,11 @@ def _centre_line(u: np.ndarray, v: np.ndarray) -> tuple[float, float, float] | N
     return float(slope), float(intercept), half_thickness
 
 
-def _frame_once(gray: np.ndarray) -> dict | None:
-    """The blade as a level strip, searched in this orientation only."""
-    if gray is None or getattr(gray, 'ndim', 0) != 2:
-        return None
-    gray = np.ascontiguousarray(gray.astype(np.uint8, copy=False))
-    height, width = gray.shape
-    if min(height, width) < 60:
-        return None
-
-    ratio = MASK_EDGE / float(max(width, height))
-    small = Image.fromarray(gray).resize(
-        (max(1, int(width * ratio)), max(1, int(height * ratio))), Image.BILINEAR
-    )
-    small_width, small_height = small.size
-    base = np.asarray(small, dtype=np.float32)
-
-    best_mask = None
-    best_quality = 0.0
-    for top, bottom in _candidate_bands(gray):
-        keep = np.zeros(small_height, dtype=bool)
-        start = max(0, int(top * small_height / height))
-        stop = min(small_height, max(start + 1, int(np.ceil(bottom * small_height / height))))
-        if stop - start < 6:
-            continue
-        keep[start:stop] = True
-
-        level = _otsu(base[keep, :])
-        mask = np.zeros_like(base, dtype=bool)
-        mask[keep, :] = base[keep, :] > level
-        # Pale ground beside the blade passes the same Otsu split, so keep only
-        # the densest horizontal window before measuring anything from it.
-        window = _densest_window(mask)
-        if window is None:
-            continue
-        trimmed = np.zeros_like(mask)
-        trimmed[window] = mask[window]
-        quality = _band_quality(trimmed, window.stop - window.start)
-        if quality > best_quality:
-            best_quality, best_mask = quality, trimmed
-    if best_mask is None or best_quality <= 0.0:
-        return None
-
-    ys, xs = np.nonzero(best_mask)
+def _strip_from_mask(
+    gray: np.ndarray, mask: np.ndarray, scale_x: float, scale_y: float
+) -> dict | None:
+    """Warp the masked strip into a level blade, or None if it is not one."""
+    ys, xs = np.nonzero(mask)
     if len(ys) < 200:
         return None
     points = np.stack([xs, ys], axis=1).astype(np.float64)
@@ -266,9 +217,11 @@ def _frame_once(gray: np.ndarray) -> dict | None:
         to_small(u1, slope * u1 + intercept + half_thickness),
         to_small(u1, slope * u1 + intercept - half_thickness),
     ]
-    scale_x = width / float(small_width)
-    scale_y = height / float(small_height)
-    quad = [coordinate for x, y in quad_small for coordinate in (x * scale_x, y * scale_y)]
+    quad = [
+        coordinate
+        for x, y in quad_small
+        for coordinate in (x * scale_x, y * scale_y)
+    ]
 
     target_width = min(
         STRIP_MAX_WIDTH, max(STRIP_MIN_WIDTH, int(round((u1 - u0) * scale_x)))
@@ -295,8 +248,89 @@ def _frame_once(gray: np.ndarray) -> dict | None:
         'width_px': target_width,
         'height_px': target_height,
         'coverage': round(float((histogram > 0).mean()), 2),
-        'band_quality': round(best_quality, 3),
     }
+
+
+def _grade_ticks(framed: dict) -> None:
+    """Score this strip by the ladder it yields and keep that summary.
+
+    The grade is what chooses between candidate bands, and it is also what the
+    endpoint reports, so a field failure can say "blade found, marks uneven"
+    rather than only "no reading".
+    """
+    try:
+        from supervision import tape_ticks
+
+        lattice = tape_ticks.read_strip(framed['strip'])
+    except Exception:
+        lattice = None
+    if lattice is None:
+        framed['ticks'] = None
+        framed['tick_pitch'] = None
+        framed['tick_residual'] = None
+        framed['tick_score'] = 0.0
+        framed['tick_usable'] = False
+        return
+    framed['ticks'] = {
+        'pitch_px': round(lattice['pitch'], 2),
+        'residual': round(lattice['residual'], 3),
+        'count': lattice['count'],
+        'coverage': round(lattice['coverage'], 2),
+        'major_every': lattice['major_every'],
+        'usable': bool(lattice['usable']),
+    }
+    framed['tick_pitch'] = framed['ticks']['pitch_px']
+    framed['tick_residual'] = framed['ticks']['residual']
+    framed['tick_score'] = float(lattice.get('score') or 0.0)
+    framed['tick_usable'] = bool(lattice['usable'])
+
+
+def _rank(framed: dict | None) -> tuple:
+    """A ladder that can set a scale beats one that cannot; then tightness."""
+    if framed is None:
+        return (-1, -1e9, 0.0)
+    residual = framed.get('tick_residual')
+    return (
+        1 if framed.get('tick_usable') else 0,
+        -(float(residual) if residual is not None else 9.0),
+        float(framed.get('tick_score') or 0.0),
+    )
+
+
+def _frame_once(gray: np.ndarray) -> dict | None:
+    """The best blade strip in this orientation, or None."""
+    height, width = gray.shape
+    if min(height, width) < 60:
+        return None
+
+    ratio = MASK_EDGE / float(max(width, height))
+    small = Image.fromarray(gray).resize(
+        (max(1, int(width * ratio)), max(1, int(height * ratio))), Image.BILINEAR
+    )
+    small_width, small_height = small.size
+    base = np.asarray(small, dtype=np.float32)
+    scale_x = width / float(small_width)
+    scale_y = height / float(small_height)
+
+    best: dict | None = None
+    for top, bottom in _candidate_bands(gray):
+        start = max(0, int(top * small_height / height))
+        stop = min(
+            small_height,
+            max(start + 1, int(np.ceil(bottom * small_height / height))),
+        )
+        if stop - start < 6:
+            continue
+        mask = _mask_for_band(base, start, stop)
+        if mask is None:
+            continue
+        framed = _strip_from_mask(gray, mask, scale_x, scale_y)
+        if framed is None:
+            continue
+        _grade_ticks(framed)
+        if best is None or _rank(framed) > _rank(best):
+            best = framed
+    return best
 
 
 def _from_transposed(found: dict, gray: np.ndarray) -> dict:
@@ -334,15 +368,20 @@ def frame_gray(gray: np.ndarray) -> dict | None:
     if gray is None or getattr(gray, 'ndim', 0) != 2:
         return None
     gray = np.ascontiguousarray(gray.astype(np.uint8, copy=False))
+
     found = _frame_once(gray)
-    if found is not None:
+    if found is not None and found.get('tick_usable'):
         return found
+
     # A blade running down the frame — the depth shot, with the tape against a
     # trench wall — has no horizontal bright band for the band search to find.
     # The same search on the transposed frame does, and the strip is then warped
     # a quarter turn so its ladder still lies across the result.
     upright = _frame_once(np.ascontiguousarray(gray.T))
-    return None if upright is None else _from_transposed(upright, gray)
+    if upright is None:
+        return found
+    mapped = _from_transposed(upright, gray)
+    return mapped if _rank(mapped) > _rank(found) else found
 
 
 def frame_image(image) -> dict | None:

@@ -928,30 +928,21 @@ def _geometry(image, diagnostics: dict) -> None:
     reading" toast cannot carry.
     """
     try:
-        from supervision import tape_frame, tape_ticks
+        from supervision import tape_frame
 
         framed = tape_frame.frame_gray(np.asarray(image))
         if framed is None:
             diagnostics['blade'] = None
+            diagnostics['ticks'] = None
             return
-        lattice = tape_ticks.read_strip(framed['strip'])
         diagnostics['blade'] = {
             'angle': round(framed['angle'], 1),
             'thickness_px': framed['thickness_px'],
             'coverage': round(framed['coverage'], 2),
         }
-        diagnostics['ticks'] = (
-            None
-            if lattice is None
-            else {
-                'pitch_px': round(lattice['pitch'], 2),
-                'residual': round(lattice['residual'], 3),
-                'count': lattice['count'],
-                'coverage': round(lattice['coverage'], 2),
-                'major_every': lattice['major_every'],
-                'usable': lattice['usable'],
-            }
-        )
+        # The frame grades the ladder while choosing the band, so this is the
+        # same verdict the choice was made on — not a second, disagreeing read.
+        diagnostics['ticks'] = framed.get('ticks')
     except Exception:
         # A diagnosis must never be the reason a read fails.
         diagnostics['blade'] = 'unavailable'
