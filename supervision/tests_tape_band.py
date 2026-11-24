@@ -131,3 +131,7 @@ class BandTrackingTests(SimpleTestCase):
         )
         self.assertTrue(result['found'], result.get('reason'))
         self.assertAlmostEqual(result['width_px'], 110.0, delta=16.0)
+        # The angle matters as much as the width: a merged band came back 22
+        # degrees off a horizontal blade once, and it passed a width-only
+        # assertion. A band at the wrong angle is the wrong band.
+        self.assertAlmostEqual(result['angle_deg'], 0.0, delta=3.0)

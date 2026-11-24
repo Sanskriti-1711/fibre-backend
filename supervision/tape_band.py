@@ -711,6 +711,18 @@ def _find_at(rgb: np.ndarray, work_edge: int) -> dict:
     }
 
 
+def _as_band(result: dict) -> dict:
+    """A graded result in the shape `_is_fragment` compares, in photo pixels."""
+    band = result.get('band') or {}
+    return {
+        'centre': np.array(band.get('centre') or result['centre'], dtype=float),
+        'axis': np.array(band.get('axis') or result['axis'], dtype=float),
+        'across': np.array(band.get('across') or result['across'], dtype=float),
+        'width': float(band.get('width_px') or result['width_px']),
+        'length': float(band.get('length_px') or result['length_px']),
+    }
+
+
 def find_band(rgb: np.ndarray, work_edge: int = WORK_EDGE) -> dict:
     """The blade in a photo: where it runs, how wide it is, and how sure we are.
 
@@ -731,6 +743,23 @@ def find_band(rgb: np.ndarray, work_edge: int = WORK_EDGE) -> dict:
     ]
     found = [result for result in attempts if result.get('found')]
     if found:
+        # A slice of the blade is a band too: the blank margin beside the printed
+        # row grades cleanly on its own, and once the ruler allowance lets a
+        # crossed blade through, a 25 px sliver of a 110 px blade could be the
+        # only thing that graded at one resolution and win the whole photo. A
+        # narrow band lying inside a wider one is that wider band seen partially,
+        # whichever resolution produced it, so it is dropped before the scores
+        # are compared.
+        whole = [
+            result
+            for result in found
+            if not any(
+                _is_fragment(_as_band(result), _as_band(other))
+                for other in found
+                if other is not result
+            )
+        ]
+        found = whole or found
         found.sort(key=lambda result: result.get('score', 0.0), reverse=True)
         best = found[0]
         # Two resolutions agreeing on where the band is and which way it runs is
