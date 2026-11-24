@@ -11,6 +11,8 @@ runs 42, 41, 40, 39 and the reading is 38, i.e. the face *past* the clip in the
 direction the numbers fall.
 """
 
+from unittest.mock import patch
+
 from django.test import SimpleTestCase
 import numpy as np
 
@@ -157,10 +159,60 @@ class ReaderTests(SimpleTestCase):
         # division from it either way.
         self.assertLessEqual(result['divisions_to_face'], 1.0)
 
-    def test_an_unconfirmed_blade_is_refused(self):
+    def test_a_rendered_blade_is_confirmed_by_its_own_ladder(self):
         # The real detector on a rendered blade: it finds the clip but cannot
-        # confirm the blade, and the policy is that no reading is taken.
+        # confirm the blade at two working resolutions. This test used to pin
+        # the refusal that followed. It is reversed deliberately: a strip that
+        # prints a ladder is a printed blade whatever the locator's agreement,
+        # and `20261124_141314` is a genuine tape the locator never confirms.
+        # The run therefore goes on, and stops where there is genuinely nothing
+        # to read -- the fixture draws no printed numbers.
         result = tape_reader.read(clip_photo((420, 452, (20, 20, 20))))
+        self.assertFalse(result['usable'])
+        self.assertEqual(result['stage'], 'numbers')
+        self.assertTrue(result['clip']['blade_confirmed'])
+        self.assertNotIn('second working resolution', result['reason'])
+
+    def test_a_blade_that_prints_a_ladder_confirms_itself(self):
+        # `20261124_141314` is a genuine tape whose locator only ever reports
+        # `confirmed=None`. A strip printing this many marks at this periodicity
+        # is not a trench edge, so the ladder is the second opinion and the
+        # reading goes on to look for the clip.
+        blade = {
+            'found': True,
+            'confirmed': None,
+            'reason': None,
+            'centre': BAND['centre'],
+            'axis': BAND['axis'],
+            'across': BAND['across'],
+            'length_px': BAND['length_px'],
+            'width_px': BAND['width_px'],
+            'band': dict(BAND),
+        }
+        with patch.object(tape_reader.tape_band, 'find_band', return_value=blade):
+            result = tape_reader.read(ladder_photo(), ocr=ladder_ocr())
+
+        self.assertNotEqual(result['stage'], 'blade', result.get('reason'))
+        self.assertNotIn('second working resolution', result.get('reason') or '')
+
+    def test_a_blade_without_a_ladder_still_needs_confirmation(self):
+        # A blank frame behind a band: nothing printed, so the ladder cannot be
+        # the second opinion and the two-resolution policy stands.
+        blade = {
+            'found': True,
+            'confirmed': None,
+            'reason': None,
+            'centre': BAND['centre'],
+            'axis': BAND['axis'],
+            'across': BAND['across'],
+            'length_px': BAND['length_px'],
+            'width_px': BAND['width_px'],
+            'band': dict(BAND),
+        }
+        blank = np.zeros((560, 940, 3), dtype=np.uint8)
+        with patch.object(tape_reader.tape_band, 'find_band', return_value=blade):
+            result = tape_reader.read(blank)
+
         self.assertFalse(result['usable'])
         self.assertEqual(result['stage'], 'blade')
         self.assertIn('second working resolution', result['reason'])

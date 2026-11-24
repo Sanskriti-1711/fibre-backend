@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from supervision.tape_ticks import MIN_INK_OFFSET
+from supervision.tape_ticks import MIN_INK_OFFSET, MIN_LADDER_SCORE, MIN_LADDER_TICKS
 
 # Labels OCR'd per blade. A long blade prints far more than the scale needs, and
 # every label is a subprocess on the free host.
@@ -638,7 +638,15 @@ def read_labels(
     pitch_px = float(lattice.get('pitch') or 0.0)
     if len(positions) < 2 or pitch_px < 2.0:
         return None
-    if not lattice.get('usable'):
+    # An `uneven` ladder is still a ladder. The cells need marks to align to,
+    # not a ruler: the millimetres come from the printed numbers (`_calibrate`),
+    # and the pitch is only cross-checked against the standard tick spacings.
+    # Refusing here was the gate that locked `20261124_141314` out -- a genuine
+    # tape with 77 marks at 0.898 -- because a blade sagging over a trench does
+    # not hold one pitch (2.3 px of scatter on an 8.5 px pitch).
+    if int(lattice.get('count') or 0) < MIN_LADDER_TICKS or float(
+        lattice.get('score') or 0.0
+    ) < MIN_LADDER_SCORE:
         return _refused('the marks are not even enough to align numbers to')
 
     pixels = np.asarray(strip.convert('L'), dtype=np.float32)

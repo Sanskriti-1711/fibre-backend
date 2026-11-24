@@ -102,6 +102,26 @@ def _ladder_refusal_stage(problem: str) -> str:
     return 'marks' if problem == 'uneven' else 'blade'
 
 
+def _ladder_evidence(lattice: dict | None) -> bool:
+    """Whether a fit is printed marks, whatever its marks do about one pitch.
+
+    This is the second opinion a blade can be confirmed with. The two-resolution
+    policy exists because the locator can return a confident-looking band that is
+    not the tape; a ladder of ``MIN_LADDER_TICKS`` marks printed at
+    ``MIN_LADDER_SCORE`` periodicity is not something ground texture produces,
+    and it is checked on the blade's own strip rather than on a resampled copy.
+
+    Deliberately *not* a residual test: a tape lying over a trench sags, and its
+    marks then scatter around a pitch instead of sitting on it. The millimetres
+    come from the printed numbers, so a ladder only has to be a ladder here.
+    """
+    if not lattice:
+        return False
+    return int(lattice.get('count') or 0) >= tape_ticks.MIN_LADDER_TICKS and float(
+        lattice.get('score') or 0.0
+    ) >= tape_ticks.MIN_LADDER_SCORE
+
+
 def _bilinear(rgb: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
     """Sample a colour image at fractional positions, edge-clamped."""
     height, width = rgb.shape[0], rgb.shape[1]
@@ -211,18 +231,6 @@ def read(
                 'blade',
                 blade=blade,
             )
-        # Policy, decided with the crew 2026-11-24: a reading is only taken on a
-        # blade two working resolutions agree about. The locator can return a
-        # confident-looking band that is not the tape (`20261124_140332` returns
-        # a band at -33 degrees where the tape runs at +12), and a millimetre
-        # value measured on that would be a number taken off a trench edge.
-        if not blade.get('confirmed'):
-            return _refused(
-                'no tape found: the blade was not confirmed by a second working '
-                'resolution, so no reading is taken from it',
-                'blade',
-                blade=blade,
-            )
         # A band the locator believes in is still not a tape until it carries a
         # ladder: a caption has letters where the marks should be, and a pipe has
         # nothing at all. This is checked before the clip so the answer arrives
@@ -231,10 +239,40 @@ def read(
         strip, scale = _rectify(rgb, blade['band'])
         lattice = tape_ticks.read_strip(strip)
         problem = tape_ticks.ladder_problem(lattice)
-        if problem:
+
+        # Policy, decided with the crew 2026-11-24: a reading is only taken on a
+        # blade two working resolutions agree about, *or* on one whose strip
+        # carries a printed ladder. The locator can return a confident-looking
+        # band that is not the tape (`20261124_140332` returns a band at -33
+        # degrees where the tape runs at +12), and a millimetre value measured on
+        # that would be a number taken off a trench edge -- but a band that
+        # prints 24+ marks at 0.70 periodicity is not a trench edge either. That
+        # second opinion is what `20261124_141314` has: a genuine tape whose
+        # locator only ever reports `confirmed=None`.
+        if not blade.get('confirmed') and not _ladder_evidence(lattice):
+            return _refused(
+                'no tape found: the blade was not confirmed by a second working '
+                'resolution, so no reading is taken from it',
+                'blade',
+                blade=blade,
+            )
+        # `uneven` is not a refusal to read: a tape sagging over a trench has
+        # marks that scatter around its pitch (measured 2.3 px on an 8.5 px
+        # pitch, `20261124_141314`), and the pitch is not where the millimetres
+        # come from. The printed numbers set the scale and the pitch is checked
+        # against the standard spacings there, so an uneven ladder still reads.
+        if problem and problem != 'uneven':
             return _refused(
                 _ladder_refusal(problem), _ladder_refusal_stage(problem), blade=blade
             )
+        if _ladder_evidence(lattice):
+            # The clip stage reads the confirmation flag off this same geometry
+            # and refuses on it a second time, so the ladder's answer is carried
+            # into what it is handed. Without this the blade passed the gate
+            # above and was refused again below, which is how `141314` still
+            # reported "not confirmed by a second working resolution" after the
+            # ladder had answered the question.
+            blade = {**blade, 'confirmed': True, 'confirmed_by': 'ladder'}
         clip = tape_clip.find_clip(rgb, band=blade)
     if not clip.get('found'):
         return _refused(
@@ -268,10 +306,20 @@ def read(
         strip, scale = _rectify(rgb, band)
         lattice = tape_ticks.read_strip(strip)
     problem = tape_ticks.ladder_problem(lattice)
-    if problem:
+    # Same rule as the blade stage above: `uneven` still reads, because the
+    # millimetres come from the numbers and not from the pitch. It is carried
+    # through to the response instead, so the engineer can see the marks
+    # wandered rather than being told there is no reading.
+    if problem and problem != 'uneven':
         return _refused(
             _ladder_refusal(problem), _ladder_refusal_stage(problem), clip=clip
         )
+    lattice_note = (
+        'the marks wander along this blade, so the scale is taken from the '
+        'printed numbers'
+        if problem == 'uneven'
+        else None
+    )
 
     numbers = tape_digits.read_labels(strip, lattice, ocr=ocr)
     if not numbers or not numbers.get('usable'):
@@ -344,6 +392,7 @@ def read(
         'mm_per_px': numbers.get('mm_per_px'),
         'mm_per_tick': numbers.get('mm_per_tick'),
         'blade_confirmed': True,
+        'lattice_note': lattice_note,
         'tape_angle_deg': clip.get('tape_angle_deg'),
         'clip': clip,
         'numbers': numbers,

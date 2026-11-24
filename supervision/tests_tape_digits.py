@@ -127,6 +127,20 @@ class DigitLabelTests(SimpleTestCase):
         self.assertAlmostEqual(scale['mm_per_px'], 10.0 / 12.0, delta=0.01)
         self.assertNotIn('300', [anchor['text'] for anchor in scale['anchors']])
 
+    def test_a_weak_ladder_cannot_align_numbers(self):
+        # Texture repeats a little; it is not a ladder, whatever its residual.
+        strip = _strip(pitch=12.0, every=10)
+        lattice = dict(_lattice(strip), usable=False, score=0.40)
+
+        scale = tape_digits.read_labels(
+            strip,
+            lattice,
+            ocr=FakeOCR({index: str(10 + index) for index in range(0, 120, 10)}),
+        )
+
+        self.assertFalse(scale['usable'], scale)
+        self.assertIn('even', scale['reason'])
+
     def test_numbers_that_do_not_share_one_spacing_earn_no_scale(self):
         strip = _strip(pitch=12.0, every=10)
         lattice = _lattice(strip)
@@ -272,16 +286,28 @@ class DigitLabelTests(SimpleTestCase):
             tape_digits.read_labels(strip, {'positions': [], 'pitch': 12.0})
         )
 
-    def test_an_uneven_ladder_is_refused_before_any_ocr_runs(self):
+    def test_an_uneven_ladder_is_read_from_its_numbers(self):
+        # This test used to pin the opposite: an `uneven` ladder refused before
+        # any OCR ran. That policy is reversed deliberately, on measurement.
+        # `20261124_141314` is a genuine tape that scatters 2.3 px on an 8.5 px
+        # pitch because it sags over the trench, and the millimetres come from
+        # the printed numbers, not the pitch. Refusing here is what kept the
+        # crew's own tape unreadable. The pitch still has to agree with the
+        # numbers before a scale exists (`_calibrate`), which is where a false
+        # ladder is actually caught.
         strip = _strip(pitch=12.0, every=10)
-        lattice = dict(_lattice(strip))
-        lattice['usable'] = False
-        readings = FakeOCR({})
+        lattice = dict(_lattice(strip), usable=False, residual=0.30)
 
-        scale = tape_digits.read_labels(strip, lattice, ocr=readings)
+        scale = tape_digits.read_labels(
+            strip,
+            lattice,
+            ocr=FakeOCR({index: str(10 + index) for index in range(0, 120, 10)}),
+        )
 
-        self.assertFalse(scale['usable'], scale)
-        self.assertEqual(readings.calls, [])
+        self.assertTrue(scale['usable'], scale)
+        self.assertEqual(scale['unit'], 'cm')
+        self.assertAlmostEqual(scale['mm_per_tick'], 10.0, delta=0.2)
+        self.assertAlmostEqual(scale['mm_per_px'], 10.0 / 12.0, delta=0.01)
 
 
 class EdgeSpanTests(SimpleTestCase):
