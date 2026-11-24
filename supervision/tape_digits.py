@@ -243,6 +243,37 @@ def _printed_rows(shares: np.ndarray) -> tuple[int, int] | None:
     return int(best[0]), int(best[1])
 
 
+def _widest_ink_run(ink: np.ndarray, rows: tuple[int, int], gap: int) -> int:
+    """The longest run of inked columns once gaps under `gap` are closed.
+
+    Merged exactly as `_label_boxes` merges it, because that is the run that got
+    rejected: a strict run measures 108 px on a strip whose marks span all 853,
+    since the millimetre gaps between them break it. Kept only so a failure can
+    say what actually happened — when the row range still contains the marks,
+    every column fuses into one run, and "no printed numbers could be told
+    apart from the marks" makes that sound like an OCR failure, which is how
+    `08.38.21` was misdiagnosed for a day.
+    """
+    start, stop = rows
+    if stop <= start:
+        return 0
+    occupied = ink[start:stop].any(axis=0)
+    longest = 0
+    left: int | None = None
+    last = -1
+    for x, filled in enumerate(occupied):
+        if filled:
+            if left is None:
+                left = x
+            last = x
+        elif left is not None and x - last > gap:
+            longest = max(longest, last + 1 - left)
+            left = None
+    if left is not None:
+        longest = max(longest, last + 1 - left)
+    return int(longest)
+
+
 def _label_boxes(
     ink: np.ndarray, positions: list[int], pitch_px: float, band: tuple[int, int]
 ) -> tuple[list[dict], tuple[int, int]]:
@@ -615,11 +646,29 @@ def read_labels(
         return None
     ink = pixels < (_background_profile(pixels)[None, :] - MIN_INK_OFFSET)
     best: tuple[tuple[int, int, bool], list[dict], tuple[int, int]] | None = None
+    widest = 0
     for candidate in _digit_bands(ink, positions):
         found, tight = _label_boxes(ink, positions, pitch_px, (candidate[0], candidate[1]))
+        widest = max(
+            widest,
+            _widest_ink_run(
+                ink,
+                tight,
+                max(2, int(round((tight[1] - tight[0]) * LABEL_GAP_SHARE))),
+            ),
+        )
         if found and (best is None or len(found) > len(best[1])):
             best = (candidate, found, tight)
     if best is None:
+        # Ink across nine tenths of the strip is the blade's ladder, not a line
+        # of numbers: the band was never separated from the marks, so no box
+        # could be formed. Saying so is the difference between "re-aim the
+        # camera" and "this module needs fixing".
+        if widest >= 0.9 * pixels.shape[1]:
+            return _refused(
+                'the marks on the blade fill the strip, so no printed numbers could '
+                'be told apart from them'
+            )
         return _refused('no printed numbers could be told apart from the marks')
     band, boxes, tight = best
     start, stop = tight
