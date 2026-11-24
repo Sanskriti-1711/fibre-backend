@@ -219,8 +219,14 @@ def _fit_lattice(profile: np.ndarray, pitch: float) -> dict:
     if len(positions) < 3:
         return empty
 
-    steps = np.arange(len(positions), dtype=float)
+    # Tooth numbers come from the positions, not from their order. The clip the
+    # reader exists for covers a whole division of the blade, so a real ladder
+    # has a gap in it; fitting consecutive indices across that gap tilts the
+    # line, and every mark beyond it then reads as a deviation. Measured on a
+    # rendered blade with a clip, that reported a residual of 2.5 pitches where
+    # the surviving marks were within 0.02 of their lattice.
     measured = np.array(positions, dtype=float)
+    steps = np.round((measured - measured[0]) / pitch)
     slope, intercept = np.polyfit(steps, measured, 1)
     if slope <= 0:
         return empty

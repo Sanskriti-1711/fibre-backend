@@ -1,0 +1,153 @@
+"""Tests for the phase-3 reader: the ladder, the reference face, and the refusals.
+
+The field photos are not in the repository, so the ladder is rendered with a
+known truth: one tick per millimetre at 6 px, one printed number per centimetre
+at 60 px, and a clip drawn over a known span. The OCR is injected -- the same
+hook ``tape_digits.read_labels`` takes -- so what is checked here is the
+geometry and the counting, not tesseract's eyes.
+
+The convention under test is the one confirmed on `20261124_140332`: the ladder
+runs 42, 41, 40, 39 and the reading is 38, i.e. the face *past* the clip in the
+direction the numbers fall.
+"""
+
+from django.test import SimpleTestCase
+import numpy as np
+
+from supervision import tape_reader
+from supervision.tests_tape_clip import photo as clip_photo
+
+BLADE = (232, 226, 205)
+GROUND = (70, 66, 60)
+INK = (40, 40, 40)
+PALE = (252, 250, 246)
+
+BLADE_TOP, BLADE_BOTTOM = 240, 304      # a 64 px blade
+STRIP_LEFT = 40                          # original x of strip x = 0
+LABEL_FIRST = 60                         # strip x of the first printed number
+LABEL_STEP = 60                          # strip px per printed division (1 cm)
+TICK_STEP = 6                            # strip px per millimetre
+LABELS = 13
+
+BAND = {
+    'centre': [470.0, 272.0],
+    'axis': [1.0, 0.0],
+    'across': [0.0, 1.0],
+    'length_px': 860.0,
+    'width_px': 64.0,
+}
+
+
+def ladder_photo(ascending: bool = False, clip: tuple[int, int] = (720, 780)) -> np.ndarray:
+    """A blade whose marks are 1 mm apart and whose numbers are 1 cm apart."""
+    rgb = np.zeros((560, 940, 3), dtype=np.uint8)
+    rgb[:, :] = GROUND
+    rgb[BLADE_TOP:BLADE_BOTTOM, STRIP_LEFT:900] = BLADE
+    for strip_x in range(TICK_STEP, 860, TICK_STEP):
+        if clip[0] <= strip_x < clip[1]:
+            continue
+        rgb[BLADE_BOTTOM - 12 : BLADE_BOTTOM, STRIP_LEFT + strip_x : STRIP_LEFT + strip_x + 1] = INK
+    for index in range(LABELS):
+        strip_x = LABEL_FIRST + index * LABEL_STEP
+        if clip[0] <= strip_x < clip[1]:
+            continue
+        left = STRIP_LEFT + strip_x - 6
+        rgb[BLADE_TOP + 8 : BLADE_TOP + 30, left : left + 12] = INK
+    # Pale, so it displaces the blade's own tone instead of printing ink on it:
+    # this is the clip the depth signal cannot see and the breadth signal can.
+    rgb[232:330, STRIP_LEFT + clip[0] : STRIP_LEFT + clip[1]] = PALE
+    return rgb
+
+
+def clip_result(clip: tuple[int, int] = (720, 780)) -> dict:
+    """The clip the reader is handed: confirmed, with its two faces."""
+    left = float(STRIP_LEFT + clip[0])
+    right = float(STRIP_LEFT + clip[1])
+    return {
+        'found': True,
+        'reason': None,
+        'blade_confirmed': True,
+        'faces': [[left, 272.0], [right, 272.0]],
+        'tape_angle_deg': 0.0,
+        'band': dict(BAND),
+    }
+
+
+def ladder_ocr(ascending: bool = False, readable_to: float | None = None):
+    """A perfect OCR of the rendered ladder, keyed on the cell's position."""
+
+    def read_cell(cell, mark):
+        x = float(mark['x_px'])
+        if readable_to is not None and x > readable_to:
+            return '', 0.0
+        offset = (x - LABEL_FIRST) / LABEL_STEP
+        value = (20.0 + offset) if ascending else (50.0 - offset)
+        return str(int(round(value))), 0.95
+
+    return read_cell
+
+
+class ReaderTests(SimpleTestCase):
+    def test_the_reading_is_the_face_on_the_lower_number_side(self):
+        # 42, 41, 40, 39, clip -- the far face is the next division down.
+        result = tape_reader.read(
+            ladder_photo(), clip=clip_result(), ocr=ladder_ocr()
+        )
+        self.assertTrue(result['usable'], result.get('reason'))
+        self.assertAlmostEqual(result['reading_mm'], 380.0, delta=1.0)
+        self.assertEqual(result['unit'], 'cm')
+        # The far face of the clip, in photo pixels.
+        self.assertAlmostEqual(result['reference_face'][0], 820.0, delta=6.0)
+
+    def test_an_ascending_ladder_takes_the_other_face(self):
+        # Numbers climb along the blade, so the lower ones are behind the clip
+        # and the near face carries the reading.
+        result = tape_reader.read(
+            ladder_photo(ascending=True), clip=clip_result(), ocr=ladder_ocr(ascending=True)
+        )
+        self.assertTrue(result['usable'], result.get('reason'))
+        self.assertAlmostEqual(result['reading_mm'], 310.0, delta=1.0)
+        self.assertAlmostEqual(result['reference_face'][0], 760.0, delta=6.0)
+
+    def test_the_marks_and_the_numbers_set_the_scale(self):
+        result = tape_reader.read(
+            ladder_photo(), clip=clip_result(), ocr=ladder_ocr()
+        )
+        self.assertTrue(result['usable'], result.get('reason'))
+        # 1 cm over 60 px, whichever stripe the ladder was fitted on.
+        self.assertAlmostEqual(result['mm_per_px'], 10.0 / LABEL_STEP, delta=0.002)
+        self.assertEqual(result['blade_confirmed'], True)
+        # The number the count starts from is the one nearest the clip; on this
+        # fixture that is the label under the clip's edge, and the face is one
+        # division from it either way.
+        self.assertLessEqual(result['divisions_to_face'], 1.0)
+
+    def test_an_unconfirmed_blade_is_refused(self):
+        # The real detector on a rendered blade: it finds the clip but cannot
+        # confirm the blade, and the policy is that no reading is taken.
+        result = tape_reader.read(clip_photo((420, 452, (20, 20, 20))))
+        self.assertFalse(result['usable'])
+        self.assertEqual(result['stage'], 'blade')
+        self.assertIn('second working resolution', result['reason'])
+
+    def test_a_photo_without_a_clip_is_refused(self):
+        result = tape_reader.read(clip_photo())
+        self.assertFalse(result['usable'])
+        self.assertEqual(result['stage'], 'clip')
+
+    def test_a_face_more_than_one_division_from_a_number_is_refused(self):
+        # Nothing readable within one division of the clip: counting past that
+        # would be guessing which division the clip covers.
+        result = tape_reader.read(
+            ladder_photo(), clip=clip_result(), ocr=ladder_ocr(readable_to=500.0)
+        )
+        self.assertFalse(result['usable'])
+        self.assertEqual(result['stage'], 'reading')
+        self.assertIn('division', result['reason'])
+        self.assertGreater(result['divisions_to_face'], 1.0)
+
+    def test_a_blank_frame_is_refused(self):
+        blank = np.zeros((400, 400, 3), dtype=np.uint8)
+        result = tape_reader.read(blank)
+        self.assertFalse(result['usable'])
+        self.assertIn(result['stage'], ('clip', 'blade'))

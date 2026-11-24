@@ -383,7 +383,12 @@ def _line(xs: np.ndarray, values: np.ndarray) -> tuple[float, float] | None:
     if not slopes:
         return None
     slope = float(np.median(slopes))
-    if not np.isfinite(slope) or slope <= 0:
+    # The sign is kept rather than refused. The strip's axis is normalised to
+    # point rightwards whichever way the blade's numbers run, and the ground-truth
+    # photo `20261124_140332` prints 42, 41, 40, 39 left to right: a ladder that
+    # falls is still one line, and refusing it made that blade unreadable here
+    # while the reader needed exactly the direction it prints in.
+    if not np.isfinite(slope) or slope == 0.0:
         return None
     return slope, float(np.median(values - slope * xs))
 
@@ -472,7 +477,7 @@ def _calibrate(
     measured = np.array(values, dtype=float)
     fit = _line(xs, measured)
     if fit is None:
-        return _refused('the numbers on the blade do not step upward', anchors, unit=unit)
+        return _refused('the numbers on the blade do not step along the blade', anchors, unit=unit)
     slope, intercept = fit
 
     residual_mm = (
@@ -490,7 +495,10 @@ def _calibrate(
             residual_mm=round(residual_mm, 2),
         )
 
-    mm_per_px = slope * unit_mm
+    # Millimetres per pixel is a distance, so the ladder's direction does not
+    # enter it: a descending ladder and an ascending one of the same pitch give
+    # the same scale.
+    mm_per_px = abs(slope) * unit_mm
     mm_per_tick = mm_per_px * pitch_px
     standard, tick_error = _nearest_standard(mm_per_tick)
     if tick_error > TICK_TOLERANCE:
@@ -521,7 +529,7 @@ def _calibrate(
             if local is not None:
                 halves.append(local[0])
         if len(halves) == 2:
-            agreement = abs(halves[0] - halves[1]) / slope
+            agreement = abs(halves[0] - halves[1]) / abs(slope)
             if agreement > SCALE_AGREEMENT:
                 return _refused(
                     'the two ends of the blade disagree about the scale',
