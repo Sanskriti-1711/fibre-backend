@@ -79,16 +79,21 @@ class MeasureArithmeticTests(SimpleTestCase):
         self.assertIsNone(row)
         self.assertIn('only one number', note.lower())
 
-    def test_a_depth_below_what_a_trench_can_be_is_refused(self):
+    def test_a_depth_below_what_a_trench_can_be_is_still_given(self):
+        # The crew has the tape in hand; a span outside the spec's range is a
+        # caveat on the reading, not a reason to withhold it.
         row, note = tape_measure.measure('trench', 'depth', cm_readings(100, 105))
 
-        self.assertIsNone(row)
+        self.assertEqual(row['value'], 50)
         self.assertIn('outside', note)
+        self.assertIn('150', note)
 
-    def test_a_length_beyond_the_plausible_range_is_refused(self):
-        row, _ = tape_measure.measure('trench', 'length', cm_readings(0, 99999))
+    def test_a_length_beyond_the_plausible_range_is_still_given(self):
+        row, note = tape_measure.measure('trench', 'length', cm_readings(0, 99999))
 
-        self.assertIsNone(row)
+        self.assertEqual(row['unit'], 'm')
+        self.assertEqual(row['value'], 999.99)
+        self.assertIn('outside', note)
 
     def test_a_dimension_the_element_does_not_have_is_refused(self):
         row, _ = tape_measure.measure('cable', 'depth', cm_readings(0, 100))

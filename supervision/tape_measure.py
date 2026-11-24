@@ -91,6 +91,10 @@ TAPE_UNIT_MM = {'cm': 10.0, 'mm': 1.0}
 # One entry per dimension the engineer can photograph the tape against.
 # min/max are the plausible as-built ranges: they catch a misread (a "170" read
 # as "70" turns a 5 m length into 1 m) without pretending to know the design.
+# A span outside them is reported as a caveat on the reading, not as a refusal:
+# the crew has the tape in hand and can see whether the photo misread a digit,
+# while the app only has this range. Withholding the number they can check is a
+# worse answer than giving it with the range beside it.
 DIMENSION_SPECS: dict[str, list[dict]] = {
     'trench': [
         {
@@ -1169,13 +1173,7 @@ def measure(
     step = statistics.median(gaps)
     irregular = sum(1 for gap in gaps if step <= 0 or abs(gap - step) > step * 0.6)
 
-    if not (spec['min_mm'] <= span <= spec['max_mm']):
-        return None, (
-            f'The tape spans {span:.0f} mm, outside the '
-            f'{spec["min_mm"]:.0f}–{spec["max_mm"]:.0f} mm a '
-            f'{spec["label"].lower()} can be. Check the photo — a misread digit '
-            'is the likely cause.'
-        )
+    outside = not (spec['min_mm'] <= span <= spec['max_mm'])
 
     confidence = 0.9 if len(values) >= 4 else 0.8 if len(values) == 3 else 0.65
     if irregular:
@@ -1184,6 +1182,15 @@ def measure(
     value = round(span / 1000.0, 2) if spec['unit'] == 'm' else round(span)
     first = f'{values[0] / scale:g}'
     last = f'{values[-1] / scale:g}'
+    note = f'Tape reads {first} to {last} {unit}: {value} {spec["unit"]}. '
+    if outside:
+        note += (
+            f'That is outside the {spec["min_mm"]:.0f}–{spec["max_mm"]:.0f} mm '
+            f'range for {spec["label"].lower()} — check the photo for a misread '
+            'digit, then correct it before saving.'
+        )
+    else:
+        note += 'Filled as a tape reading for you to confirm before saving.'
     return (
         {
             'key': spec['key'],
@@ -1192,8 +1199,5 @@ def measure(
             'unit': spec['unit'],
             'confidence': round(confidence, 2),
         },
-        (
-            f'Tape reads {first} to {last} {unit}: {value} {spec["unit"]}. '
-            'Filled as a tape reading for you to confirm before saving.'
-        ),
+        note,
     )
