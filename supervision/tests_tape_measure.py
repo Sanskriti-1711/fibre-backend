@@ -304,6 +304,78 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
         self.assertEqual(response.json()['readings'], [])
         self.assertTrue(response.json()['notes'])
 
+    def test_the_endpoint_returns_the_clip_reading_at_its_reference_face(self):
+        # The clip decides which millimetre is meant; the span read above is a
+        # different number (the distance between two printed labels), so the
+        # clip reading travels beside it and never becomes the form value.
+        clip = {
+            'usable': True,
+            'reason': None,
+            'stage': None,
+            'reading_mm': 380.0,
+            'unit': 'cm',
+            'reference_face': [820.0, 272.0],
+            'label': {'value': 39, 'text': '39', 'x_px': 719.5},
+            'divisions_to_face': 1.0,
+            'clip': {'blade_confirmed': True, 'tape_angle_deg': 12.0},
+        }
+
+        with mock.patch(
+            'supervision.tape_measure.ocr_available', return_value=True
+        ), mock.patch(
+            'supervision.tape_measure.read_tape', return_value=self.read()
+        ), mock.patch(
+            'supervision.views.tape_reader.read_bytes', return_value=clip
+        ):
+            response = self.post(
+                photo_id=str(self.photo.id), element_type='trench', dimension='depth'
+            )
+
+        self.assertEqual(response.status_code, 200, response.content[:300])
+        body = response.json()
+        self.assertTrue(body['clip']['usable'])
+        self.assertEqual(body['clip']['reading_mm'], 380.0)
+        self.assertEqual(body['clip']['reference_face'], [820.0, 272.0])
+        self.assertTrue(body['clip']['blade_confirmed'])
+        self.assertIn('380 mm', body['notes'])
+        # The span reading is untouched by the clip reading.
+        self.assertEqual(body['measurement']['value'], 500)
+
+    def test_an_unconfirmed_blade_comes_back_as_a_refusal_not_a_reading(self):
+        refusal = {
+            'usable': False,
+            'reason': (
+                'the blade was not confirmed by a second working resolution, so no '
+                'reading is taken from it'
+            ),
+            'stage': 'blade',
+            'reading_mm': None,
+            'clip': {'blade_confirmed': False, 'tape_angle_deg': -33.0},
+        }
+
+        with mock.patch(
+            'supervision.tape_measure.ocr_available', return_value=True
+        ), mock.patch(
+            'supervision.tape_measure.read_tape', return_value=None
+        ), mock.patch(
+            'supervision.views.tape_reader.read_bytes', return_value=refusal
+        ):
+            response = self.post(
+                photo_id=str(self.photo.id), element_type='trench', dimension='depth'
+            )
+
+        self.assertEqual(response.status_code, 200, response.content[:300])
+        body = response.json()
+        self.assertFalse(body['clip']['usable'])
+        self.assertEqual(body['clip']['stage'], 'blade')
+        self.assertFalse(body['clip']['blade_confirmed'])
+        self.assertEqual(body['clip']['tape_angle_deg'], -33.0)
+        self.assertIsNone(body['clip']['reading_mm'])
+        self.assertIn('second working resolution', body['clip']['reason'])
+        # The refusal is also spelled out where the engineer is looking.
+        self.assertIn('The clip could not be read', body['notes'])
+        self.assertIsNone(body['measurement'])
+
     def test_a_host_without_tesseract_says_so(self):
         # No engine at all: no tesseract, no vision key, no Cloud Vision key.
         with mock.patch(

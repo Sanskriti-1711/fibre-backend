@@ -1,3 +1,5 @@
+import logging
+
 from django.core.exceptions import ValidationError
 from rest_framework import status
 from rest_framework.response import Response
@@ -13,6 +15,7 @@ from supervision import (
     tape_cloud,
     tape_framing,
     tape_measure,
+    tape_reader,
     tape_vision,
 )
 from supervision.design_change import (
@@ -23,6 +26,59 @@ from supervision.design_change import (
 )
 from supervision.models import FeatureDecisionRecord, FeaturePhoto
 from supervision.serializers import FeatureDecisionRecordSerializer, FeaturePhotoSerializer
+
+
+logger = logging.getLogger(__name__)
+
+# What the clip reading adds to the tape-measurement response, and none of the
+# detector's working detail: the app shows the number, the face it was taken at
+# and, when there is no number, why.
+CLIP_FIELDS = (
+    'usable',
+    'reason',
+    'stage',
+    'reading_mm',
+    'unit',
+    'reference_face',
+    'label',
+    'divisions_to_face',
+)
+
+
+def _clip_reading(photo) -> dict:
+    """The clip's reference-face reading on this photo, refusals included.
+
+    A separate stage from the span read, and deliberately unable to break it:
+    the clip pipeline is new against the field set, and one photo it trips on
+    must not turn a working endpoint into a 500. The verdict, the reason and
+    the stage that stopped it all travel in the response either way.
+    """
+    try:
+        photo.image.open('rb')
+        data = photo.image.read()
+        photo.image.close()
+    except Exception:
+        return {'usable': False, 'reason': 'the photo could not be opened', 'stage': 'photo'}
+    if not data:
+        return {'usable': False, 'reason': 'the photo could not be opened', 'stage': 'photo'}
+    try:
+        return tape_reader.read_bytes(data)
+    except Exception:
+        logger.exception('Clip reading failed for photo %s', photo.id)
+        return {
+            'usable': False,
+            'reason': 'the clip reader failed on this photo',
+            'stage': 'reader',
+        }
+
+
+def _clip_summary(result: dict) -> dict:
+    """The clip reading, trimmed for the response."""
+    summary = {key: result.get(key) for key in CLIP_FIELDS}
+    blade = result.get('clip') or {}
+    summary['blade_confirmed'] = bool(blade.get('blade_confirmed'))
+    summary['tape_angle_deg'] = blade.get('tape_angle_deg')
+    return summary
 
 
 def _can_edit_feature_photos(request, feature) -> bool:
@@ -522,6 +578,10 @@ class FeatureTapeMeasurementView(APIView):
             )
 
         diagnostics: dict = {}
+        # The clip decides where the reading sits; the tape's own ladder supplies
+        # the millimetres. Both are asked for on every measurement, and a clip
+        # that cannot be read is reported as a refusal rather than omitted.
+        clip = _clip_summary(_clip_reading(photo))
         dimension_spec = tape_measure.dimension_spec(element_type, dimension)
         # Whether the blade itself is legible and whole is a separate question
         # from what it reads, and the one the engineer can fix by moving.
@@ -555,12 +615,18 @@ class FeatureTapeMeasurementView(APIView):
                 # 'Nothing could be read' gives the engineer nothing to change;
                 # naming the glare or the focus does.
                 note = f'{note} The photo shows {" and ".join(reasons)}.'
+            if not clip['usable'] and clip.get('reason'):
+                # A second, independent diagnosis of the same photo: the blade
+                # may be there and the numbers missing, or the clip missing with
+                # the ladder fine. The app can show it next to the reshoot hint.
+                note = f"{note} The clip could not be read: {clip['reason']}"
             return Response(
                 {
                     'measurement': None,
                     'readings': [],
                     'unit': 'cm',
                     'notes': note,
+                    'clip': clip,
                     'photo_id': str(photo.id),
                     'engine': 'tesseract',
                     'span': diagnostics.get('span'),
@@ -610,6 +676,14 @@ class FeatureTapeMeasurementView(APIView):
                 'verdict': 'readable',
                 'caveat': framing.get('message'),
             }
+        if clip['usable']:
+            # Named as a position on the blade, not as the span: the clip says
+            # which millimetre is meant, while the span above is the distance
+            # between two printed numbers. Different numbers, both real.
+            note = (
+                f"{note} The clip's reference face sits at {clip['reading_mm']:.0f} mm "
+                'on the blade.'
+            )
         # Keep the reading as an editable draft in the form's own storage: the
         # app fills the field from the response, but a dropped response or a
         # reopened span must still show what the blade said. Merge the one key
@@ -644,6 +718,7 @@ class FeatureTapeMeasurementView(APIView):
                 'readings': read['readings'],
                 'unit': read['unit'],
                 'notes': note,
+                'clip': clip,
                 'photo_id': str(photo.id),
                 'engine': read['engine'],
                 'bounds': bounds,
