@@ -205,7 +205,15 @@ def _major_every(positions: list[int], heights: list[float], pitch: float) -> in
 
 
 def _fit_lattice(profile: np.ndarray, pitch: float) -> dict:
-    """Marks on one pitch, their residual, and how many are real."""
+    """Marks on one pitch, their residual, and how many are real.
+
+    A half-pitch search window that re-fitted itself to the marks it found was
+    tried here and reverted: on the 3000 px field tape it doubled the pitch
+    (8.2 -> 18.4) by settling on every other mark, and the caption -- letters,
+    not marks -- started scoring above the periodicity floor and being reported
+    as a tape with uneven marks. A fit that can move the ladder it is measuring
+    is not a measurement.
+    """
     best_phase, best_weight = 0.0, -1.0
     for phase in np.arange(0.0, pitch, max(0.5, pitch / 16.0)):
         index = np.round(np.arange(phase, profile.size, pitch)).astype(int)
@@ -251,7 +259,7 @@ def _fit_lattice(profile: np.ndarray, pitch: float) -> dict:
     measured = np.array(positions, dtype=float)
     steps = np.round((measured - measured[0]) / pitch)
     slope, intercept = np.polyfit(steps, measured, 1)
-    if slope <= 0:
+    if not np.isfinite(slope) or slope <= 0:
         return empty
     deviations = measured - (intercept + slope * steps)
     residual = float(np.sqrt(np.mean(deviations**2)) / slope)

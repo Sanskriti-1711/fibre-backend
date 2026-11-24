@@ -121,10 +121,18 @@ def _bilinear(rgb: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
 def _rectify(rgb: np.ndarray, band: dict) -> tuple[Image.Image, float]:
     """The blade as a horizontal strip, and the strip's px per photo px.
 
-    A straight warp is enough because ``tape_band`` already fits the blade's
-    centre line and reports the axis it was tracked along; the strip is that
-    line made horizontal, wide enough to hold the whole band and tall enough to
-    hold its full width.
+    A straight warp, because ``tape_band`` already fits the blade's centre line
+    and reports the axis it was tracked along; the strip is that line made
+    horizontal, wide enough to hold the whole band and tall enough to hold its
+    full width.
+
+    A bend-aware warp that followed the walk's per-column centres was built and
+    reverted: those centres are not a curve. On the field photos they span up to
+    1.9x the blade width, because the walk jumps between bright regions, and
+    following them doubled and tripled the ladder's pitch (140332: 5.6 -> 27.1 px)
+    while raising the residual it was meant to lower (141314: 0.24 -> 0.33). It
+    also warped the caption enough that its letters passed the periodicity floor
+    and were reported as a tape. See `tmp/bend_check.py`.
     """
     centre = np.array(band['centre'], dtype=float)
     axis = np.array(band['axis'], dtype=float)
