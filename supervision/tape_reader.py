@@ -42,7 +42,7 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image
 
-from . import tape_clip, tape_digits, tape_ticks
+from . import tape_band, tape_clip, tape_digits, tape_ticks
 
 # The blade is resampled to a strip this wide at most, so a 3840 px original
 # costs a bounded warp. Every reported position is scaled back up.
@@ -82,6 +82,24 @@ def _refused(reason: str, stage: str, **extra) -> dict:
         'mm_per_px': None,
         **extra,
     }
+
+
+def _ladder_refusal(problem: str) -> str:
+    """Why a blade's ladder cannot be measured from.
+
+    "No tape found" is only said when the evidence says there is no ladder: both
+    genuine field tapes *do* have one, and their marks simply wander. Saying the
+    tape is missing on a photo of a tape would send the engineer to re-aim at a
+    tape they had already framed.
+    """
+    if problem == 'uneven':
+        return 'the marks on this blade are not even and regular enough to set a scale'
+    return 'no tape found: this blade carries no tick ladder'
+
+
+def _ladder_refusal_stage(problem: str) -> str:
+    """The stage that stopped a ladder: the blade if there is none, else the marks."""
+    return 'marks' if problem == 'uneven' else 'blade'
 
 
 def _bilinear(rgb: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
@@ -166,8 +184,50 @@ def read(
     if rgb is None or getattr(rgb, 'ndim', 3) != 3:
         return _refused('the photo is not a colour image', 'photo')
 
+    strip = None
+    scale = 1.0
+    lattice = None
     if clip is None:
-        clip = tape_clip.find_clip(rgb)
+        # The tape is decided before the clip is looked for. A photo of a
+        # caption, or of a length of metal, has no clip on it either, so "no
+        # clip found" sends the engineer looking for the wrong thing and costs a
+        # clip detection to say it. "No tape found" is the honest answer, and it
+        # arrives on the first stage instead of the second.
+        # At the resolution the clip detector uses: the locator's answer, and
+        # whether a second resolution agreed with it, depends on the scale it
+        # works at, and the clip is looked for on the same frame either way.
+        blade = tape_band.find_band(rgb, work_edge=tape_clip.WORK_EDGE)
+        if not blade.get('found'):
+            return _refused(
+                'no tape found: %s' % (blade.get('reason') or 'no blade was found'),
+                'blade',
+                blade=blade,
+            )
+        # Policy, decided with the crew 2026-11-24: a reading is only taken on a
+        # blade two working resolutions agree about. The locator can return a
+        # confident-looking band that is not the tape (`20261124_140332` returns
+        # a band at -33 degrees where the tape runs at +12), and a millimetre
+        # value measured on that would be a number taken off a trench edge.
+        if not blade.get('confirmed'):
+            return _refused(
+                'no tape found: the blade was not confirmed by a second working '
+                'resolution, so no reading is taken from it',
+                'blade',
+                blade=blade,
+            )
+        # A band the locator believes in is still not a tape until it carries a
+        # ladder: a caption has letters where the marks should be, and a pipe has
+        # nothing at all. This is checked before the clip so the answer arrives
+        # without a clip detection, and reported on the marks stage because the
+        # blade itself was found.
+        strip, scale = _rectify(rgb, blade['band'])
+        lattice = tape_ticks.read_strip(strip)
+        problem = tape_ticks.ladder_problem(lattice)
+        if problem:
+            return _refused(
+                _ladder_refusal(problem), _ladder_refusal_stage(problem), blade=blade
+            )
+        clip = tape_clip.find_clip(rgb, band=blade)
     if not clip.get('found'):
         return _refused(
             clip.get('reason') or 'no clip was found, so there is no reading to take',
@@ -196,14 +256,13 @@ def read(
     if len(faces) != 2:
         return _refused('the clip did not report the two faces of its reading', 'clip', clip=clip)
 
-    strip, scale = _rectify(rgb, band)
-    lattice = tape_ticks.read_strip(strip)
-    if not lattice:
-        return _refused('the blade carries no readable mark ladder', 'marks', clip=clip)
-    if not lattice.get('usable'):
+    if strip is None:
+        strip, scale = _rectify(rgb, band)
+        lattice = tape_ticks.read_strip(strip)
+    problem = tape_ticks.ladder_problem(lattice)
+    if problem:
         return _refused(
-            'the marks on the blade are not even enough to measure from', 'marks',
-            clip=clip,
+            _ladder_refusal(problem), _ladder_refusal_stage(problem), clip=clip
         )
 
     numbers = tape_digits.read_labels(strip, lattice, ocr=ocr)

@@ -342,8 +342,15 @@ def _grade(
     return (band, runs, length) if runs else None
 
 
-def find_clip(rgb: np.ndarray, work_edge: int = WORK_EDGE) -> dict:
-    """The clip on the blade, or a refusal saying why it could not be found."""
+def find_clip(
+    rgb: np.ndarray, work_edge: int = WORK_EDGE, band: dict | None = None
+) -> dict:
+    """The clip on the blade, or a refusal saying why it could not be found.
+
+    `band` is a `tape_band.find_band` result the caller has already decided is
+    the blade; passing it in is what lets the reader check the blade before it
+    looks for a clip without running the locator twice.
+    """
     if rgb is None or getattr(rgb, 'ndim', 3) != 3:
         return {'found': False, 'reason': 'the photo is not a colour image'}
     if rgb.shape[0] < 60 or rgb.shape[1] < 60:
@@ -363,7 +370,7 @@ def find_clip(rgb: np.ndarray, work_edge: int = WORK_EDGE) -> dict:
     # find its own band from the largest bright patch, and that patch was wrong
     # on the field set often enough that the clip was then looked for on a kerb.
     # One locator, used by both stages, is the point of phase 1.
-    blade = tape_band.find_band(rgb, work_edge=work_edge)
+    blade = band if band is not None else tape_band.find_band(rgb, work_edge=work_edge)
     if not blade.get('found'):
         return {
             'found': False,

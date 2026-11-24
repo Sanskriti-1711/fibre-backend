@@ -46,8 +46,31 @@ MIN_SCORE = 0.18
 # ladder.
 MAX_RESIDUAL = 0.18
 
+# ... and neither is one whose marks wander more than this many pixels. The
+# share alone is the wrong unit on a coarse ladder: 0.18 of a 22 px pitch is
+# 4 px, where printed marks sit within a pixel or two of their lattice. The gate
+# is the tighter of the two.
+#
+# It is deliberately *not* the looser of the two. A ladder stretched by
+# perspective wanders 0.21-0.27 of a pitch, which is only 0.6-0.8 px at a 3 px
+# pitch, so a pixel floor would let the one distortion this gate exists to catch
+# straight through. Measured on the rendered strips in `tmp/residual_units.py`.
+MAX_RESIDUAL_PX = 1.5
+
 # Fewer marks than this cannot set a scale, however regular they look.
 MIN_TICKS = 6
+
+# A ladder that can set a scale has at least this many marks on it, and this
+# much periodicity. Measured on the field strips (`tmp/bar_ladder.py`): the two
+# genuine tapes score 0.88 and 0.907 where they are confirmed, and at the other
+# working resolution they are refused on their residual, never on this. The
+# smooth metal bar that the locator accepted as a blade scores 0.577 with 24
+# marks at 700 px, and 0.784 with 19 marks at 900 px -- so it is refused on
+# periodicity at one resolution and on mark count at the other. 0.70 sits above
+# the bar and below both tapes; it is a floor for "this repeats because it is
+# printed", not a tuned threshold.
+MIN_LADDER_TICKS = 24
+MIN_LADDER_SCORE = 0.70
 
 # A tick this much longer than the ordinary one is a major (cm or 5 mm) mark.
 MAJOR_RATIO = 1.4
@@ -245,6 +268,37 @@ def _fit_lattice(profile: np.ndarray, pitch: float) -> dict:
     }
 
 
+def ladder_problem(lattice: dict | None) -> str | None:
+    """What keeps a fit from setting a scale, or None when it can.
+
+    The four answers are not one refusal:
+
+    * ``absent``, ``few``, ``weak`` — there is no printed ladder here. Letters
+      of a caption and the grain of a metal bar both repeat a little; neither is
+      a ruler. This is a *blade that is not tape*, and the reader says so.
+    * ``uneven`` — there is a ladder, its marks just do not sit on one pitch.
+      Both genuine field tapes land here, and telling the engineer "no tape" on
+      a photo of a tape would be wrong.
+    """
+    if not lattice:
+        return 'absent'
+    pitch = float(lattice.get('pitch') or 0.0)
+    if pitch <= 0.0:
+        return 'absent'
+    if int(lattice.get('count') or 0) < MIN_LADDER_TICKS:
+        return 'few'
+    if float(lattice.get('score') or 0.0) < MIN_LADDER_SCORE:
+        return 'weak'
+    if float(lattice.get('residual', 1.0)) > min(MAX_RESIDUAL, MAX_RESIDUAL_PX / pitch):
+        return 'uneven'
+    return None
+
+
+def ladder_ok(lattice: dict | None) -> bool:
+    """Whether a fit is a printed ladder that sits on one pitch."""
+    return ladder_problem(lattice) is None
+
+
 def read_strip(strip) -> dict | None:
     """The tick ladder of a rectified blade strip, or None when there is none.
 
@@ -279,11 +333,7 @@ def read_strip(strip) -> dict | None:
         lattice = _fit_lattice(profile, pitch)
         lattice['score'] = round(score, 3)
         lattice['stripe'] = start
-        lattice['usable'] = (
-            lattice['count'] >= MIN_TICKS
-            and lattice['residual'] <= MAX_RESIDUAL
-            and score >= MIN_SCORE
-        )
+        lattice['usable'] = ladder_ok(lattice)
         if best is None or (lattice['usable'], lattice['score']) > (
             best['usable'],
             best['score'],

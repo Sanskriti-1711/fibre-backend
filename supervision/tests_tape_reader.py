@@ -87,6 +87,41 @@ def ladder_ocr(ascending: bool = False, readable_to: float | None = None):
     return read_cell
 
 
+def caption_photo() -> np.ndarray:
+    """A bright band carrying a line of caption text, not a tape.
+
+    `WhatsApp ... 08.38.21` is this: the NoteCam caption burned into the frame,
+    long and thin and the brightest thing in it, so the locator locks onto it.
+    """
+    rgb = np.zeros((700, 900, 3), dtype=np.uint8)
+    rgb[:, :] = GROUND
+    rgb[300:360, :] = (238, 236, 232)
+    rng = np.random.default_rng(5)
+    x = 20
+    while x < 860:
+        width = int(rng.integers(6, 16))
+        height = int(rng.integers(12, 26))
+        top = int(rng.integers(310, 336))
+        rgb[top : top + height, x : x + width] = (46, 44, 42)
+        x += width + int(rng.integers(4, 18))
+    return rgb
+
+
+def metal_bar_photo() -> np.ndarray:
+    """A smooth bright bar with nothing printed on it.
+
+    `WhatsApp ... 08.38.28 (1)` is this: a length of pipe, one blade wide and
+    bright, which the locator accepted as a blade for a whole session.
+    """
+    rgb = np.zeros((700, 900, 3), dtype=np.uint8)
+    rgb[:, :] = GROUND
+    ramp = np.linspace(244.0, 206.0, 900)
+    rgb[300:366, :, 0] = ramp
+    rgb[300:366, :, 1] = ramp * 0.99
+    rgb[300:366, :, 2] = ramp * 0.97
+    return rgb
+
+
 class ReaderTests(SimpleTestCase):
     def test_the_reading_is_the_face_on_the_lower_number_side(self):
         # 42, 41, 40, 39, clip -- the far face is the next division down.
@@ -131,7 +166,18 @@ class ReaderTests(SimpleTestCase):
         self.assertIn('second working resolution', result['reason'])
 
     def test_a_photo_without_a_clip_is_refused(self):
-        result = tape_reader.read(clip_photo())
+        # The detector's own answer for a blade with nothing interrupting it,
+        # injected: on the rendered tape the locator does not *confirm* the
+        # blade at any resolution it tries, so an end-to-end run stops one gate
+        # earlier. The caption and metal-bar cases pin that earlier gate.
+        result = tape_reader.read(
+            clip_photo(),
+            clip={
+                'found': False,
+                'reason': 'the blade was found but nothing interrupts it',
+                'stage': 'clip',
+            },
+        )
         self.assertFalse(result['usable'])
         self.assertEqual(result['stage'], 'clip')
 
@@ -151,3 +197,19 @@ class ReaderTests(SimpleTestCase):
         result = tape_reader.read(blank)
         self.assertFalse(result['usable'])
         self.assertIn(result['stage'], ('clip', 'blade'))
+
+    def test_a_caption_on_a_bright_band_is_reported_as_no_tape(self):
+        # Three of the five "confirmed" field blades are not tape. The refusal
+        # has to say so on the blade stage, before a clip is looked for: there
+        # is no clip on a caption, and "no clip found" sends the engineer
+        # looking for the wrong thing.
+        result = tape_reader.read(caption_photo())
+        self.assertFalse(result['usable'])
+        self.assertEqual(result['stage'], 'blade')
+        self.assertIn('no tape found', result['reason'])
+
+    def test_a_smooth_metal_bar_is_reported_as_no_tape(self):
+        result = tape_reader.read(metal_bar_photo())
+        self.assertFalse(result['usable'])
+        self.assertEqual(result['stage'], 'blade')
+        self.assertIn('no tape found', result['reason'])

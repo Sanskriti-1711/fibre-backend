@@ -67,6 +67,36 @@ class TapeTickTests(SimpleTestCase):
         if lattice is not None:
             self.assertGreater(lattice['residual'], tape_ticks.MAX_RESIDUAL, lattice)
 
+    def test_a_coarse_ladder_whose_marks_wander_is_refused(self):
+        # Three pixels of wander is 0.14 of a 22 px pitch, so the share gate let
+        # it through. Printed marks sit within a pixel or two of their lattice
+        # whatever the pitch, and on a coarse ladder the share is 4 px of slack.
+        canvas = np.full((160, 1320), 215, dtype=np.uint8)
+        rng = np.random.default_rng(11)
+        x = 20.0
+        while x < 1300:
+            left = int(round(x + rng.uniform(-3.0, 3.0)))
+            canvas[160 - 40 :, left : left + 3] = 40
+            x += 22.0
+
+        lattice = tape_ticks.read_strip(Image.fromarray(canvas))
+
+        self.assertIsNotNone(lattice)
+        self.assertGreater(
+            lattice['residual'], tape_ticks.MAX_RESIDUAL_PX / lattice['pitch'], lattice
+        )
+        self.assertFalse(lattice['usable'], lattice)
+
+    def test_a_repeating_texture_is_not_a_ladder(self):
+        # The measured numbers, both sides of the gate: the metal bar that passed
+        # as a blade (24 marks, 0.577) and a genuine tape's fit (121 marks, 0.88).
+        self.assertFalse(tape_ticks.ladder_ok(
+            {'pitch': 4.91, 'score': 0.577, 'count': 24, 'residual': 0.169}
+        ))
+        self.assertTrue(tape_ticks.ladder_ok(
+            {'pitch': 5.57, 'score': 0.88, 'count': 121, 'residual': 0.12}
+        ))
+
     def test_a_blank_strip_is_refused(self):
         blank = Image.fromarray(np.full((120, 600), 210, dtype=np.uint8))
 
