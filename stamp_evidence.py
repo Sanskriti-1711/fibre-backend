@@ -48,7 +48,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from supervision import photo_stamp, tape_framing, tape_measure  # noqa: E402
+from supervision import photo_stamp, tape_framing, tape_measure, tape_reader  # noqa: E402
 
 IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png')
 TITLE = 'FIBRE FTTH | TAPE EVIDENCE'
@@ -91,8 +91,31 @@ def read_photo(data: bytes, element_type: str, dimension: str) -> dict:
         proposal, note = tape_measure.measure(
             element_type, dimension, found.get('readings') or [], found.get('unit') or 'cm'
         )
+    try:
+        clip = tape_reader.read_bytes(data)
+    except Exception as error:  # a clip refusal must not cost the whole panel
+        clip = {'usable': False, 'stage': 'exception',
+                'reason': f'{type(error).__name__}: {error}'}
     return {'found': found, 'framing': framing, 'proposal': proposal, 'note': note,
-            'diagnostics': diagnostics}
+            'diagnostics': diagnostics, 'clip': clip}
+
+
+def clip_text(clip: dict) -> str:
+    """The clip reading in one panel line: a millimetre, or the stage that refused.
+
+    This is the reading the crew asked the app for -- one printed number and the
+    millimetres counted from it to the clip's face -- so a refusal is shown with
+    its stage rather than left blank, which would read as "not attempted".
+    """
+    if clip.get('usable'):
+        label = clip.get('label') or {}
+        return (
+            f"{clip['reading_mm']:g} mm at the clip face, "
+            f"{clip['divisions_to_face']:.2f} div past {label.get('value')}"
+        )
+    stage = clip.get('stage') or 'clip'
+    reason = str(clip.get('reason') or 'refused').split('. ')[0].rstrip('.')
+    return f'refused at {stage}: {reason}'[:120]
 
 
 def panel_rows(meta: dict, read: dict) -> list[tuple[str, str]]:
@@ -116,6 +139,7 @@ def panel_rows(meta: dict, read: dict) -> list[tuple[str, str]]:
         )
     else:
         rows.append(('Tape', 'no numbers read'))
+    rows.append(('Clip', clip_text(read.get('clip') or {})))
 
     latitude, longitude = meta.get('latitude'), meta.get('longitude')
     if latitude is not None and longitude is not None:
@@ -206,6 +230,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--dimension', default='depth')
     parser.add_argument('--corner', default='top-right',
                         choices=['top-left', 'top-right', 'bottom-left', 'bottom-right'])
+    parser.add_argument('--skip-existing', action='store_true',
+                        help='leave photos that already have an annotated copy alone')
     args = parser.parse_args(argv)
 
     source_dir = os.path.abspath(args.dir)
@@ -248,6 +274,7 @@ def main(argv: list[str] | None = None) -> int:
 
     read_count = 0
     failed: list[str] = []
+    skipped: list[str] = []
     for index, name in enumerate(names, start=1):
         path = os.path.join(source_dir, name)
         with open(path, 'rb') as handle:
@@ -256,6 +283,12 @@ def main(argv: list[str] | None = None) -> int:
         meta = {**photo_stamp.exif_location(data), **defaults, **metadata.get(name, {})}
         element_type = meta.get('element_type') or args.element_type
         dimension = meta.get('dimension') or args.dimension
+
+        destination = os.path.join(out_dir, os.path.splitext(name)[0] + '_annotated.jpg')
+        if args.skip_existing and os.path.exists(destination):
+            skipped.append(name)
+            print(f'[{index}/{len(names)}] {name}\n      already stamped, left alone')
+            continue
 
         started = time.monotonic()
         try:
@@ -274,7 +307,6 @@ def main(argv: list[str] | None = None) -> int:
             footer=footer_for(read, meta),
             corner=args.corner,
         )
-        destination = os.path.join(out_dir, os.path.splitext(name)[0] + '_annotated.jpg')
         with open(destination, 'wb') as handle:
             handle.write(stamped)
         elapsed = time.monotonic() - started
@@ -298,7 +330,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f'      saved {destination} ({len(stamped) // 1024} KB)')
 
     print()
-    print(f'{len(names) - len(failed)}/{len(names)} stamped, {read_count} with a tape reading')
+    stamped_count = len(names) - len(failed) - len(skipped)
+    print(
+        f'{stamped_count}/{len(names)} stamped, {read_count} with a tape reading'
+        + (f', {len(skipped)} already had a copy' if skipped else '')
+    )
     if failed:
         print('failed:')
         for line in failed:
