@@ -57,6 +57,11 @@ class FeaturePhoto(models.Model):
     sha256 = models.CharField(max_length=64, blank=True, default='', db_index=True)
     size_bytes = models.PositiveBigIntegerField(default=0)
     storage_backend = models.CharField(max_length=16, blank=True, default='')
+    # The stamped copy supervision.evidence_stamp writes: the uploaded bytes stay
+    # exactly as they arrived (their sha256 is the proof of what was submitted)
+    # and the panel carrying the reading and the place goes on this sibling
+    # object. Empty when the photo predates the panel or stamping failed.
+    annotated_image = models.CharField(max_length=500, blank=True, default='')
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

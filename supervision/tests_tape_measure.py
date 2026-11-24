@@ -214,8 +214,15 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
             'readings': cm_readings(120, 130, 140, 150, 160, 170),
         }
 
-    def test_a_tape_photo_fills_the_depth_field_and_writes_nothing(self):
-        before = self.feature.field_measurements
+    def test_a_tape_photo_fills_the_depth_field_as_an_editable_draft(self):
+        # The app fills the field from the response, but the reading is also
+        # kept in field_measurements so reopening the span still shows it --
+        # as a draft the engineer can overwrite, never a locked value.
+        self.feature.field_schema = [
+            {'key': 'DEPTH_MM', 'label': 'Depth Mm', 'editable': True, 'role': 'measurement'}
+        ]
+        self.feature.field_measurements = {'surface_type': 'Asphalt'}
+        self.feature.save(update_fields=['field_schema', 'field_measurements'])
 
         with mock.patch('supervision.tape_measure.ocr_available', return_value=True), mock.patch(
             'supervision.tape_measure.read_tape', return_value=self.read()
@@ -232,7 +239,57 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
         self.assertIn('tape reads', body['notes'].lower())
 
         self.feature.refresh_from_db()
-        self.assertEqual(self.feature.field_measurements, before)
+        self.assertEqual(
+            self.feature.field_measurements,
+            {
+                'surface_type': 'Asphalt',
+                'DEPTH_MM': {'value': 500, 'unit': 'mm'},
+            },
+        )
+
+    def test_a_read_puts_the_reading_on_the_photo(self):
+        # The panel on the evidence is what the app and the review page show, so
+        # a read has to refresh it -- the upload-time copy predates the reading.
+        with mock.patch('supervision.tape_measure.ocr_available', return_value=True), mock.patch(
+            'supervision.tape_measure.read_tape', return_value=self.read()
+        ), mock.patch('supervision.tape_framing.check_photo', return_value=None):
+            response = self.post(
+                photo_id=str(self.photo.id), element_type='trench', dimension='depth'
+            )
+
+        self.assertEqual(response.status_code, 200, response.content[:300])
+        self.photo.refresh_from_db()
+        self.assertTrue(self.photo.annotated_image)
+        storage = self.photo.image.storage
+        self.assertTrue(storage.exists(self.photo.annotated_image))
+        self.addCleanup(storage.delete, self.photo.annotated_image)
+
+    def test_a_read_that_succeeds_is_not_turned_into_a_reshoot_by_framing(self):
+        # The framing pass is a heuristic; a read is evidence. A blade whose
+        # printed pitch is wider than the ladder expects reads fine and was yet
+        # reported as "No even row of printed numbers" -- the app then showed
+        # the reshoot instruction instead of the measurement it already had.
+        framing_miss = {
+            'ok': False,
+            'verdict': 'no_tape',
+            'message': 'No even row of printed numbers was found.',
+            'detail': {},
+        }
+
+        with mock.patch('supervision.tape_measure.ocr_available', return_value=True), mock.patch(
+            'supervision.tape_measure.read_tape', return_value=self.read()
+        ), mock.patch(
+            'supervision.views.tape_framing.check_photo', return_value=framing_miss
+        ):
+            response = self.post(
+                photo_id=str(self.photo.id), element_type='trench', dimension='depth'
+            )
+
+        self.assertEqual(response.status_code, 200, response.content[:300])
+        body = response.json()
+        self.assertEqual(body['measurement']['value'], 500)
+        self.assertTrue(body['framing']['ok'])
+        self.assertEqual(body['framing']['caveat'], framing_miss['message'])
 
     def test_a_tape_that_cannot_be_read_returns_no_measurement(self):
         with mock.patch('supervision.tape_measure.ocr_available', return_value=True), mock.patch(

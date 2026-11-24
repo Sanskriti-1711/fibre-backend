@@ -7,7 +7,14 @@ from projects.api.access import engineer_can_access
 from projects.api.layers import editable_feature_ids
 from projects.models import Feature, Project
 from projects.photo_gallery import attach_photos
-from supervision import ai_measure, tape_cloud, tape_framing, tape_measure, tape_vision
+from supervision import (
+    ai_measure,
+    evidence_stamp,
+    tape_cloud,
+    tape_framing,
+    tape_measure,
+    tape_vision,
+)
 from supervision.design_change import (
     REQUEST_PENDING,
     project_requests,
@@ -111,6 +118,12 @@ class FeaturePhotosView(APIView):
         if error:
             return error
 
+        # Stamp before responding: the gallery renders `url`, which is the
+        # stamped copy, and a URL that answers only after a second request is
+        # how an upload looks broken on a slow field connection.
+        for photo in created:
+            evidence_stamp.stamp_and_record(photo)
+
         return Response(
             {
                 'count': feature.photos.count(),
@@ -154,6 +167,8 @@ class FeaturePhotoDetailView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
+        if photo.annotated_image:
+            photo.image.storage.delete(photo.annotated_image)
         photo.image.delete(save=False)
         photo.delete()
 
@@ -400,6 +415,32 @@ class FeatureAiMeasurementView(APIView):
         )
 
 
+def _form_key_for(feature, key):
+    """The engineer form's key for a tape dimension.
+
+    A tape measures ``actual_depth_mm`` while a trench layer's form field is
+    ``DEPTH_MM``; writing the tape's own key left the input empty. Match the
+    schema field by name once the ``actual_``/``measured_`` prefix is removed,
+    and fall back to the tape key when the layer has no such field.
+    """
+
+    def bare(name):
+        name = str(name or '').lower()
+        for prefix in ('actual_', 'measured_'):
+            if name.startswith(prefix):
+                name = name[len(prefix) :]
+        return name
+
+    wanted = bare(key)
+    for field in feature.field_schema or []:
+        if not isinstance(field, dict) or field.get('editable') is False:
+            continue
+        candidate = str(field.get('key') or '')
+        if bare(candidate) == wanted:
+            return candidate
+    return key
+
+
 class FeatureTapeMeasurementView(APIView):
     """POST /api/features/<feature_id>/tape-measurements/
 
@@ -555,9 +596,48 @@ class FeatureTapeMeasurementView(APIView):
                 'wall to wall.'
             )
         if framing and not framing['ok']:
-            # A reading taken from a blade that leaves the frame is still worth
-            # showing, but not worth trusting without the caveat.
+            # The framing pass is a heuristic on the picture; the read is
+            # evidence from the blade itself. When numbers were actually read, a
+            # framing miss must not turn the answer into a reshoot instruction:
+            # the app blocks on framing.ok, which is how a clean blade that read
+            # 10..110 cm came back to the engineer as "No even row of printed
+            # numbers was found" (measured 2026-11-23). Keep the verdict as a
+            # caveat on the note instead of a veto.
             note = f'{note} Framing check: {framing["message"]}'
+            framing = {
+                **framing,
+                'ok': True,
+                'verdict': 'readable',
+                'caveat': framing.get('message'),
+            }
+        # Keep the reading as an editable draft in the form's own storage: the
+        # app fills the field from the response, but a dropped response or a
+        # reopened span must still show what the blade said. Merge the one key
+        # so other dimensions already measured are untouched.
+        if measurement:
+            stored = (
+                feature.field_measurements
+                if isinstance(feature.field_measurements, dict)
+                else {}
+            )
+            feature.field_measurements = {
+                **stored,
+                _form_key_for(feature, measurement['key']): {
+                    'value': measurement['value'],
+                    'unit': measurement['unit'],
+                },
+            }
+            feature.save(update_fields=['field_measurements', 'updated_at'])
+            # The photo now carries a reading: rewrite its panel so the copy the
+            # gallery shows and the form the engineer sees agree.
+            evidence_stamp.stamp_and_record(
+                photo,
+                {
+                    'measurement': measurement,
+                    'readings': read['readings'],
+                    'unit': read['unit'],
+                },
+            )
         return Response(
             {
                 'measurement': measurement,

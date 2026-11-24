@@ -12,6 +12,7 @@ import io
 import shutil
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -145,6 +146,51 @@ class FeaturePhotoEvidenceTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(FeaturePhoto.objects.count(), 0)
+
+    def test_upload_writes_a_stamped_copy_and_the_gallery_shows_it(self):
+        body = self.upload().json()['uploaded'][0]
+        photo = FeaturePhoto.objects.get(id=body['id'])
+        self.addCleanup(photo.image.delete, save=False)
+        storage = photo.image.storage
+        self.addCleanup(storage.delete, photo.annotated_image)
+
+        self.assertIn('_annotated', photo.annotated_image)
+        self.assertTrue(photo.annotated_image.endswith('.jpg'))
+        self.assertTrue(storage.exists(photo.annotated_image))
+        self.assertIn('_annotated', body['url'])
+        self.assertNotIn('_annotated', body['original_url'])
+
+        # The panel is a copy: the submitted bytes and their checksum stay put.
+        self.assertTrue(storage.exists(photo.image.name))
+        self.assertEqual(photo.sha256, hashlib.sha256(self.payload).hexdigest())
+        self.assertEqual(photo.image.size, len(self.payload))
+
+    def test_a_stamp_failure_still_keeps_the_upload(self):
+        # A font or a bucket hiccup must not turn a stored photo into a failed
+        # upload: the gallery falls back to the original bytes.
+        with mock.patch(
+            'supervision.photo_stamp.stamp_bytes', side_effect=RuntimeError('no font')
+        ):
+            response = self.upload()
+
+        self.assertEqual(response.status_code, 201, response.content[:300])
+        body = response.json()['uploaded'][0]
+        photo = FeaturePhoto.objects.get(id=body['id'])
+        self.addCleanup(photo.image.delete, save=False)
+        self.assertEqual(photo.annotated_image, '')
+        self.assertEqual(body['url'], body['original_url'])
+        self.assertTrue(FeaturePhoto.objects.filter(id=body['id']).exists())
+
+    def test_delete_removes_the_stamped_copy_too(self):
+        body = self.upload().json()['uploaded'][0]
+        photo = FeaturePhoto.objects.get(id=body['id'])
+        storage, annotated = photo.image.storage, photo.annotated_image
+        self.assertTrue(storage.exists(annotated))
+
+        response = self.client.delete(self.url('{}/'.format(body['id'])), **self.auth)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(storage.exists(annotated))
 
     def test_delete_removes_the_stored_object(self):
         body = self.upload().json()['uploaded'][0]
