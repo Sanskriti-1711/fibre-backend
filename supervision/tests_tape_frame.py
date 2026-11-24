@@ -1,154 +1,108 @@
-"""Locating and straightening the blade: a tilted tape must come out level.
+"""The live viewfinder's frame route: refusals, auth, and no writes.
 
-The failure these tests lock down is the one measured on the field set: the old
-angle search reported 0 degrees on a blade visibly tilted 7 degrees, so every
-column profile afterwards mixed the marks with the ground. They also pin the
-second failure: two field photos were thrown away because bright ground beside
-the blade pushed a geometry threshold past its limit, so the band is now chosen
-by the ladder it yields.
+The overlay reads through the same ``tape_reader`` the stored-photo route uses,
+so what is pinned here is the contract around it rather than the detector:
+
+* a signed-out caller cannot poll frames;
+* a frame is required, and an oversized one is refused before it is read;
+* a frame the reader trips on comes back as a refusal naming the stage instead
+  of a 500 — the viewfinder polls, so one bad frame must not end the session;
+* nothing is persisted, because a frame was never kept.
 """
-import numpy as np
-from django.test import SimpleTestCase
+
+import io
+from unittest import mock
+
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase
 from PIL import Image
+from rest_framework.test import APIClient
 
-from supervision import tape_frame, tape_ticks
+from supervision.models import FeaturePhoto
+from testutils.factories import make_user
+from users.models import User
 
-
-def _photo(angle: float = 7.0, width: int = 1000, height: int = 650) -> np.ndarray:
-    """A printed blade on gravel, tilted by ``angle`` degrees."""
-    rng = np.random.default_rng(7)
-    soil = rng.normal(95, 12, (height, width)).clip(0, 255).astype(np.uint8)
-
-    blade = np.full((70, 820), 215, dtype=np.uint8)
-    for i, x in enumerate(range(30, 800, 8)):
-        top = 70 - (46 if i % 10 == 0 else 26)
-        blade[top:, x : x + 2] = 40
-    for i, x in enumerate(range(30, 800, 8)):
-        if i % 10 == 0:
-            blade[4:20, x - 2 : x + 22] = 35
-
-    tape = Image.fromarray(blade).rotate(
-        angle, resample=Image.BICUBIC, expand=True, fillcolor=95
-    )
-    canvas = Image.fromarray(soil)
-    canvas.paste(tape, ((width - tape.width) // 2, (height - tape.height) // 2))
-    return np.asarray(canvas)
+URL = '/api/tape/frame/'
 
 
-def _perspective_photo(
-    tau: float = 0.0006,
-    width: int = 1000,
-    height: int = 650,
-    pitch: float = 8.0,
-    ticks: int = 80,
-) -> np.ndarray:
-    """A printed blade seen off-square: its far end is narrower and its marks crowd.
-
-    The marks sit on a projective ladder, ``u / (1 + tau * u)``, which is what a
-    camera looking along a tape produces. A rectangle warp leaves exactly that
-    drift in the strip, so this is the fixture the four-corner warp has to square.
-    """
-    from PIL import ImageDraw
-
-    rng = np.random.default_rng(9)
-    soil = rng.normal(95, 12, (height, width)).clip(0, 255).astype(np.uint8)
-    origin_x, centre_y, half_height, scale = 40.0, 200.0, 34.0, 0.92
-
-    def project(u: float, v: float) -> tuple[float, float]:
-        factor = 1.0 / (1.0 + tau * u)
-        return origin_x + scale * u * factor, centre_y + scale * v * factor
-
-    span = ticks * pitch
-    body = [
-        project(0.0, -half_height),
-        project(span, -half_height),
-        project(span, half_height),
-        project(0.0, half_height),
-    ]
-    mask = Image.new('L', (width, height), 0)
-    ImageDraw.Draw(mask).polygon(body, fill=255)
-    photo = soil.copy()
-    photo[np.asarray(mask) > 0] = 215
-
-    canvas = Image.fromarray(photo)
-    draw = ImageDraw.Draw(canvas)
-    for index in range(ticks):
-        spot = index * pitch
-        length = 46.0 if index % 10 == 0 else 26.0
-        draw.line(
-            [project(spot, half_height), project(spot, half_height - length)],
-            fill=40,
-            width=2,
-        )
-    return np.asarray(canvas)
+def jpeg_bytes(size=(240, 320), colour=(128, 128, 128)):
+    image = Image.new('RGB', size, colour)
+    buffer = io.BytesIO()
+    image.save(buffer, format='JPEG')
+    return buffer.getvalue()
 
 
-class TapeFrameTests(SimpleTestCase):
-    def test_a_tilted_blade_is_found_and_brought_level(self):
-        framed = tape_frame.frame_gray(_photo(7.0))
+class TapeFrameEndpointTests(TestCase):
+    def setUp(self):
+        self.engineer = make_user('live-frame@example.com', role=User.Role.ENGINEER)
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.engineer)
 
-        self.assertIsNotNone(framed)
-        # The sign depends on the rotation direction; the magnitude is what the
-        # warp needs, and the old estimator returned 0 here.
-        self.assertLess(abs(abs(framed['angle']) - 7.0), 2.0)
-        self.assertGreaterEqual(framed['height_px'], tape_frame.STRIP_MIN_HEIGHT)
-        self.assertLessEqual(framed['height_px'], tape_frame.STRIP_MAX_HEIGHT)
-        self.assertGreater(framed['width_px'], 600)
+    def post(self, data=None, name='frame.jpg', content_type='image/jpeg'):
+        payload = {}
+        if data is not None:
+            payload['frame'] = SimpleUploadedFile(name, data, content_type=content_type)
+        return self.client.post(URL, payload, format='multipart')
 
-        # The proof the warp worked: the straightened strip's own tick ladder is
-        # periodic at the pitch the blade was printed with (8 px).
-        lattice = tape_ticks.read_strip(framed['strip'])
-        self.assertIsNotNone(lattice)
-        self.assertLess(abs(lattice['pitch'] - 8.0) / 8.0, 0.15, lattice)
-        self.assertTrue(lattice['usable'], lattice)
-        self.assertTrue(framed['tick_usable'], framed['ticks'])
+    def test_a_signed_out_caller_cannot_poll_frames(self):
+        self.client.force_authenticate(user=None)
 
-    def test_a_vertical_blade_is_still_brought_level(self):
-        framed = tape_frame.frame_gray(np.rot90(_photo(0.0), k=1))
+        response = self.post(jpeg_bytes())
 
-        self.assertIsNotNone(framed)
-        lattice = tape_ticks.read_strip(framed['strip'])
-        self.assertIsNotNone(lattice)
-        self.assertTrue(lattice['usable'], lattice)
+        self.assertIn(response.status_code, (401, 403))
 
-    def test_bright_ground_does_not_outrank_the_blade(self):
-        # A wide, bright, textured patch of gravel sits under the blade. It wins
-        # any brightness or area comparison, and it has no ladder, so the band
-        # chosen by tick score must still be the blade.
-        photo = _photo(0.0).copy()
-        rng = np.random.default_rng(11)
-        photo[470:640, 30:970] = rng.normal(228, 12, (170, 940)).clip(0, 255).astype(
-            np.uint8
-        )
+    def test_a_missing_frame_is_a_400(self):
+        response = self.post(None)
 
-        framed = tape_frame.frame_gray(np.asarray(photo))
+        self.assertEqual(response.status_code, 400)
 
-        self.assertIsNotNone(framed)
-        self.assertTrue(framed['tick_usable'], framed.get('ticks'))
-        self.assertLess(abs(framed['angle']), 2.0)
+    def test_an_oversized_frame_is_refused_before_it_is_read(self):
+        with mock.patch('supervision.views.tape_reader.read_bytes') as read:
+            response = self.post(b'x' * (4 * 1024 * 1024 + 1))
 
-    def test_a_blade_in_perspective_is_squared_up_from_four_corners(self):
-        # The far end prints 38% narrower than the near one, so the marks crowd
-        # together there. A centre-line rectangle keeps that drift in the strip,
-        # which is how field-1 to field-5 failed (residual 1.3-4.4).
-        framed = tape_frame.frame_gray(_perspective_photo())
+        self.assertEqual(response.status_code, 400)
+        read.assert_not_called()
 
-        self.assertIsNotNone(framed)
-        corners = framed['corners']
-        self.assertEqual(len(corners), 4)
-        (ul, ur), (lr, ll) = (corners[0], corners[1]), (corners[2], corners[3])
-        near = float(np.hypot(ul[0] - ll[0], ul[1] - ll[1]))
-        far = float(np.hypot(ur[0] - lr[0], ur[1] - lr[1]))
-        # Four corners, not a rectangle: the two ends are measurably different.
-        self.assertGreater(near / max(far, 1e-6), 1.15, corners)
+    def test_a_plain_frame_answers_with_a_clip_verdict_and_the_framing(self):
+        response = self.post(jpeg_bytes())
 
-        lattice = tape_ticks.read_strip(framed['strip'])
-        self.assertIsNotNone(lattice)
-        self.assertTrue(lattice['usable'], lattice)
-        self.assertLess(lattice['residual'], 0.12, lattice)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn('clip', body)
+        self.assertIn('usable', body['clip'])
+        self.assertIn('framing', body)
+        self.assertGreaterEqual(body['elapsed_ms'], 0)
 
-    def test_a_frame_with_no_blade_is_refused(self):
-        self.assertIsNone(tape_frame.frame_gray(np.full((400, 600), 200, dtype=np.uint8)))
+    def test_a_frame_with_no_tape_in_it_is_refused_rather_than_guessed(self):
+        response = self.post(jpeg_bytes())
 
-    def test_bytes_that_are_not_an_image_do_not_raise(self):
-        self.assertIsNone(tape_frame.frame_bytes(b'not an image'))
+        body = response.json()
+        self.assertFalse(body['clip']['usable'])
+        self.assertTrue(body['clip']['stage'])
+        self.assertTrue(body['clip']['reason'])
+
+    def test_a_reader_exception_is_a_refusal_not_a_500(self):
+        with mock.patch(
+            'supervision.views.tape_reader.read_bytes', side_effect=RuntimeError('boom')
+        ):
+            response = self.post(jpeg_bytes())
+
+        self.assertEqual(response.status_code, 200)
+        clip = response.json()['clip']
+        self.assertFalse(clip['usable'])
+        self.assertEqual(clip['stage'], 'reader')
+
+    def test_bytes_that_are_not_an_image_are_refused_with_the_photo_stage(self):
+        response = self.post(b'not an image at all')
+
+        self.assertEqual(response.status_code, 200)
+        clip = response.json()['clip']
+        self.assertFalse(clip['usable'])
+        self.assertEqual(clip['stage'], 'photo')
+
+    def test_polling_frames_writes_nothing(self):
+        before = FeaturePhoto.objects.count()
+
+        self.post(jpeg_bytes())
+
+        self.assertEqual(FeaturePhoto.objects.count(), before)

@@ -10,6 +10,7 @@ from supervision.views import (
     FeaturePhotoDetailView,
     FeaturePhotosView,
     FeatureTapeMeasurementView,
+    TapeFrameView,
     ProjectDecisionListView,
     ProjectFeatureStatusesAPIView,
 )
@@ -53,6 +54,9 @@ urlpatterns = [
         'features/<uuid:feature_id>/tape-measurements/',
         FeatureTapeMeasurementView.as_view(),
     ),
+    # The live viewfinder's reading: one frame in, the same reader's verdict
+    # out, nothing written and no project involved (see TapeFrameView).
+    path('tape/frame/', TapeFrameView.as_view()),
     path(
         'features/<uuid:feature_id>/photos/<uuid:photo_id>/',
         FeaturePhotoDetailView.as_view(),

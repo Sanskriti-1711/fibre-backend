@@ -1,4 +1,5 @@
 import logging
+import time
 
 from django.core.exceptions import ValidationError
 from rest_framework import status
@@ -725,5 +726,78 @@ class FeatureTapeMeasurementView(APIView):
                 'span': span,
                 'framing': framing,
                 'diagnostics': diagnostics,
+            }
+        )
+
+
+# A live viewfinder sends one frame per refresh, so the frame is bounded: the
+# detector resamples the blade's own strip anyway, and a downscaled frame costs
+# nothing in accuracy that the guide cares about while keeping a field
+# connection's upload short.
+MAX_LIVE_FRAME_BYTES = 4 * 1024 * 1024
+
+
+class TapeFrameView(APIView):
+    """POST /api/tape/frame/ — what the reader says about one viewfinder frame.
+
+    The live overlay must not become a second opinion. It runs the same
+    ``tape_reader`` the stored-photo route runs, on the same confirmation
+    policy, so the number on the viewfinder and the number on the record come
+    from one implementation: an unconfirmed blade is refused in the preview
+    exactly as it is refused on capture.
+
+    Nothing is stored and no feature is involved — a frame every couple of
+    seconds costs a read, not a row. The photo the engineer keeps still goes
+    through ``tape-measurements``, so a saved value stays tied to the bytes it
+    was read from rather than to whichever frame happened to be on screen.
+    """
+
+    def post(self, request):
+        upload = request.FILES.get('frame')
+        if upload is None:
+            return Response(
+                {'detail': 'frame is required (multipart field "frame")'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if upload.size and upload.size > MAX_LIVE_FRAME_BYTES:
+            return Response(
+                {'detail': 'frame is too large; send a downscaled JPEG'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        data = upload.read()
+        if not data:
+            return Response(
+                {'detail': 'frame is empty'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        element_type = str(request.data.get('element_type') or 'trench').strip().lower()
+        dimension = str(request.data.get('dimension') or 'depth').strip().lower()
+        spec = tape_measure.dimension_spec(element_type, dimension)
+        subject = spec['label'].lower().removeprefix('actual ') if spec else 'measurement'
+
+        started = time.monotonic()
+        try:
+            reading = tape_reader.read_bytes(data)
+        except Exception:
+            # A frame the reader trips on is a refusal with a stage, never a 500:
+            # the viewfinder polls, and one bad frame must not end the session.
+            logger.exception('Live clip reading failed')
+            reading = {
+                'usable': False,
+                'reason': 'the clip reader failed on this frame',
+                'stage': 'reader',
+            }
+        try:
+            framing = tape_framing.check_bytes(data, subject)
+        except Exception:
+            logger.exception('Live framing check failed')
+            framing = None
+
+        return Response(
+            {
+                'clip': _clip_summary(reading),
+                'framing': framing,
+                'elapsed_ms': int((time.monotonic() - started) * 1000),
             }
         )
