@@ -152,20 +152,22 @@ def attach_photos(
     """Append uploads to a gallery, returning ``(created, error_response)``.
 
     Validates the whole batch first so a bad file in the middle does not leave a
-    half-saved gallery.
+    half-saved gallery. ``max_per_feature`` of ``None`` means the gallery has no
+    count limit: each file is still capped by ``max_bytes``.
     """
-    existing = photos.count()
-    remaining = max_per_feature - existing
-    if len(uploads) > remaining:
-        return None, Response(
-            {
-                'detail': (
-                    f'Maximum {max_per_feature} photos per feature. '
-                    f'{existing} already uploaded, {max(remaining, 0)} slot(s) left.'
-                )
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    if max_per_feature is not None:
+        existing = photos.count()
+        remaining = max_per_feature - existing
+        if len(uploads) > remaining:
+            return None, Response(
+                {
+                    'detail': (
+                        f'Maximum {max_per_feature} photos per feature. '
+                        f'{existing} already uploaded, {max(remaining, 0)} slot(s) left.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     for upload in uploads:
         error = validate_photo(

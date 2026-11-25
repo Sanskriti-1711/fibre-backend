@@ -21,9 +21,11 @@ class FeaturePhoto(models.Model):
     ``uploaded_at`` so the first photo stays stable as the "primary" one.
     """
 
-    MAX_PER_FEATURE = 20
-    # Per-file cap, overridable by EVIDENCE_MAX_BYTES. With MAX_PER_FEATURE it
-    # bounds a feature's evidence at 200 MB by default.
+    # No per-span cap: a span keeps as many site photos as the crew uploads.
+    # ``None`` means unlimited; MAX_BYTES still bounds each file and
+    # MAX_PHOTO_UPLOAD_BYTES still bounds one request body.
+    MAX_PER_FEATURE = None
+    # Per-file cap, overridable by EVIDENCE_MAX_BYTES.
     MAX_BYTES = getattr(settings, 'EVIDENCE_MAX_BYTES', 10 * 1024 * 1024)
     ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/jpg', 'image/png']
 

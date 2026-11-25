@@ -303,8 +303,9 @@ GOOGLE_VISION_API_KEY = os.getenv('GOOGLE_VISION_API_KEY', '')
 EVIDENCE_PRESIGN_SECONDS = int(os.getenv('EVIDENCE_PRESIGN_SECONDS', '3600'))
 # Per-file cap, checked before the bytes are read in full.
 EVIDENCE_MAX_BYTES = int(os.getenv('EVIDENCE_MAX_BYTES', str(10 * 1024 * 1024)))
-# The largest body a photo endpoint may receive: one full gallery batch
-# (MAX_PER_FEATURE = 20) of maximal photos, plus multipart overhead.
+# The largest body a photo endpoint may receive: one gallery batch of maximal
+# photos, plus multipart overhead. Spans have no photo-count cap, so a gallery
+# grows one request at a time; this still bounds any single request.
 MAX_PHOTO_UPLOAD_BYTES = int(os.getenv('MAX_PHOTO_UPLOAD_BYTES', str(21 * EVIDENCE_MAX_BYTES)))
 
 # CORS Configuration
