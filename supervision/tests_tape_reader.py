@@ -16,7 +16,7 @@ from unittest.mock import patch
 from django.test import SimpleTestCase
 import numpy as np
 
-from supervision import tape_reader
+from supervision import tape_band, tape_reader
 from supervision.tests_tape_clip import photo as clip_photo
 
 BLADE = (232, 226, 205)
@@ -125,6 +125,36 @@ def metal_bar_photo() -> np.ndarray:
 
 
 class ReaderTests(SimpleTestCase):
+    def test_a_blade_rejected_for_being_short_is_still_read(self):
+        # Policy, changed with the crew 2026-11-25 (span TR-000010): the locator
+        # answered "the bright band is too short to be a tape" because the blade
+        # ran out of the top of the frame, and the screen said no numbers could
+        # be read -- the strip was never rectified, so OCR never ran. A shape
+        # rejection is not a statement that the blade prints nothing: the
+        # geometry the walk established is read, and the printed numbers still
+        # have to set a scale.
+        rejected = {
+            'found': False,
+            'reason': 'the bright band is too short to be a tape',
+            'candidate': {key: list(value) if isinstance(value, list) else value
+                          for key, value in BAND.items()},
+        }
+        with patch.object(tape_band, 'find_band', return_value=rejected):
+            result = tape_reader.read(ladder_photo(), ocr=ladder_ocr())
+        self.assertTrue(result['usable'], result.get('reason'))
+        self.assertEqual(result['confidence'], 'low')
+        self.assertIn('only part of the blade', result['confidence_note'] or '')
+
+    def test_a_rejected_blade_with_no_geometry_still_refuses(self):
+        # The fallback needs something to rectify. With no tracked band there is
+        # nothing to read, and saying so on the blade stage is the honest answer.
+        rejected = {'found': False, 'reason': 'the bright band is too short to be a tape'}
+        with patch.object(tape_band, 'find_band', return_value=rejected):
+            result = tape_reader.read(ladder_photo(), ocr=ladder_ocr())
+        self.assertFalse(result['usable'])
+        self.assertEqual(result['stage'], 'blade')
+        self.assertIn('too short', result['reason'])
+
     def test_the_reading_is_the_face_on_the_lower_number_side(self):
         # 42, 41, 40, 39, clip -- the far face is the next division down.
         result = tape_reader.read(
