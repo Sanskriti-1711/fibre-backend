@@ -433,6 +433,35 @@ def _cell_image(strip, box: tuple[int, int, int, int], stretch: float = 1.0):
     return padded
 
 
+_OCR_STATE: tuple[bool, str] | None = None
+
+
+def ocr_availability() -> tuple[bool, str]:
+    """Whether this host can run tesseract, and what it reported.
+
+    pytesseract is only a wrapper around the binary, so on a host that never
+    installed `tesseract-ocr` every cell raises, `_default_ocr` answers ``''``,
+    and the blade is refused for "too few printed numbers" -- a reason that
+    blames the photo for a server that cannot read any photo. The project's
+    `Dockerfile` installs the binary; a host deployed as a plain Python service
+    does not. Measured after a server switch: every one of the 30 field photos
+    refused at the numbers stage, on a host with no OCR engine.
+
+    Cached because it costs a subprocess and cannot change while the process
+    lives.
+    """
+    global _OCR_STATE
+    if _OCR_STATE is not None:
+        return _OCR_STATE
+    try:
+        import pytesseract
+
+        _OCR_STATE = (True, str(pytesseract.get_tesseract_version()))
+    except Exception as exc:  # noqa: BLE001 - every failure here is the same answer
+        _OCR_STATE = (False, f'{type(exc).__name__}: {exc}')
+    return _OCR_STATE
+
+
 def _default_ocr(cell, mark=None) -> tuple[str, float]:
     """Tesseract's best digits-only reading of one cell: (digits, confidence).
 
@@ -782,6 +811,13 @@ def read_labels(
         return _refused('no printed numbers could be told apart from the marks')
 
     read = ocr or _default_ocr
+    if ocr is None:
+        ready, detail = ocr_availability()
+        if not ready:
+            return _refused(
+                'the server has no OCR engine, so no printed number can be read '
+                f'({detail})'
+            )
     # The row whose numbers earn a scale is the blade's line of numbers. Trying
     # them in turn, densest first, is what lets one strip carry a repeating units
     # row and its divisions: only one of them steps evenly along the blade.

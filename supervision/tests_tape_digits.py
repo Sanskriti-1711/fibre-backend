@@ -5,6 +5,8 @@ turns "10 at x=20, 20 at x=140" into a millimetre scale is what these tests are
 about, and a real tesseract run on a rendered blade would make them depend on a
 binary and a version rather than on this module.
 """
+from unittest.mock import patch
+
 import numpy as np
 from django.test import SimpleTestCase
 from PIL import Image
@@ -193,6 +195,24 @@ class DigitLabelTests(SimpleTestCase):
 
         self.assertFalse(scale['usable'], scale)
         self.assertIn('disagree', scale['reason'])
+
+    def test_a_server_without_an_ocr_engine_says_so(self):
+        # pytesseract is a wrapper: on a host that never installed the tesseract
+        # binary every cell raises. Answering '' made that look like 30 bad
+        # photos after a server switch, so the refusal has to name the server.
+        strip = _strip(pitch=12.0, every=10)
+        lattice = _lattice(strip)
+
+        with patch.object(
+            tape_digits,
+            'ocr_availability',
+            return_value=(False, 'TesseractNotFoundError: tesseract is not installed'),
+        ):
+            scale = tape_digits.read_labels(strip, lattice)
+
+        self.assertFalse(scale['usable'], scale)
+        self.assertIn('OCR engine', scale['reason'])
+        self.assertIn('not installed', scale['reason'])
 
     def test_a_blade_with_no_readable_numbers_says_so(self):
         strip = _strip(pitch=12.0, every=10)
