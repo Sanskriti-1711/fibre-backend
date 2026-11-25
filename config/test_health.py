@@ -53,6 +53,20 @@ class LivenessProbeTests(SimpleTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {'status': 'ok'})
 
+    def test_healthz_reports_the_deployed_commit_when_the_platform_sets_one(self):
+        # Without this nothing outside the host can say which code is serving:
+        # every behaviour that differs between two deploys is behind auth.
+        with mock.patch.dict('os.environ', {'RENDER_GIT_COMMIT': 'abcdef1234567890'}):
+            response = self.client.get('/healthz')
+        self.assertEqual(response.json(), {'status': 'ok', 'commit': 'abcdef123456'})
+
+    def test_healthz_omits_the_commit_when_nothing_set_it(self):
+        # Locally and on a host that injects nothing the probe answers exactly
+        # as before, so a monitor keyed on the old body keeps working.
+        with mock.patch.dict('os.environ', {'RENDER_GIT_COMMIT': ''}):
+            response = self.client.get('/healthz')
+        self.assertEqual(response.json(), {'status': 'ok'})
+
     def test_healthz_never_calls_the_engine(self):
         """A dead engine must not make the platform restart a healthy app."""
         with mock.patch('config.health.requests.get') as get:

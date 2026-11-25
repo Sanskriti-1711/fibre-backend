@@ -26,6 +26,7 @@ healthy enough to be useful.
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 import requests
@@ -48,8 +49,19 @@ ENGINE_PROBE_TIMEOUT = 15
 
 
 def healthz(request):
-    """Liveness probe. Deliberately touches no external dependency."""
-    return JsonResponse({'status': 'ok'})
+    """Liveness probe. Deliberately touches no external dependency.
+
+    ``commit`` is the SHA the platform injected into this container, when it
+    injects one (Render sets ``RENDER_GIT_COMMIT``). It is the only way to
+    answer "which code is actually serving this host" from outside without a
+    dashboard login: every other difference between two deploys of this service
+    lives behind authentication. Absent locally and on hosts that set nothing.
+    """
+    payload = {'status': 'ok'}
+    commit = os.environ.get('RENDER_GIT_COMMIT', '').strip()
+    if commit:
+        payload['commit'] = commit[:12]
+    return JsonResponse(payload)
 
 
 def tape_health(request):
