@@ -72,6 +72,38 @@ class ClipDetectionTests(SimpleTestCase):
         result = tape_clip.find_clip(rgb, work_edge=700)
         self.assertFalse(result['found'])
 
+    def test_a_clip_at_the_end_of_the_blade_is_found(self):
+        # `20261124_140444`: the clamp holds the tape's start, so only its rim
+        # falls inside the tracked blade. A search that stopped at the blade's
+        # ends could never see it, and answered "nothing interrupts it" on a
+        # photo whose clip is plainly there.
+        result = tape_clip.find_clip(photo((44, 76, (60, 170, 190))), work_edge=700)
+        self.assertTrue(result['found'], result.get('reason'))
+        left, right = sorted(face[0] for face in result['faces'])
+        self.assertAlmostEqual(left, 44, delta=10)
+        self.assertAlmostEqual(right, 76, delta=10)
+
+    def test_a_printed_mark_does_not_win_over_the_clip(self):
+        # The field failure on `20261124_140332`: a shaded mark scored higher on
+        # the single `dark` signal than the cyan clip did, and the reading was
+        # taken at the mark. A lone signal is not evidence of a clip.
+        rgb = photo((300, 340, (60, 170, 190)))
+        rgb[300:312, 600:616] = (8, 8, 8)   # a deeper, narrower printed mark
+        result = tape_clip.find_clip(rgb, work_edge=700)
+        self.assertTrue(result['found'], result.get('reason'))
+        left, right = sorted(face[0] for face in result['faces'])
+        self.assertAlmostEqual(left, 300, delta=12)
+        self.assertAlmostEqual(right, 340, delta=12)
+
+    def test_a_lone_printed_mark_is_not_a_clip(self):
+        # A number darkens the blade as deeply as a clip does, but it sits
+        # inside the blade and leaves the ground beyond the edges alone. Without
+        # a second signal there is no clip to report.
+        rgb = photo()
+        rgb[250:268, 600:614] = (18, 18, 18)
+        result = tape_clip.find_clip(rgb, work_edge=700)
+        self.assertFalse(result['found'], result.get('method'))
+
     def test_a_blank_frame_is_refused(self):
         blank = np.zeros((400, 400, 3), dtype=np.uint8)
         result = tape_clip.find_clip(blank)

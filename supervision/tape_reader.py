@@ -429,7 +429,23 @@ def read(
             'the reading that face implies is not a number', 'reading',
             clip=clip, label=label,
         )
-    if not (MIN_READING_MM <= reading_mm <= MAX_READING_MM):
+    if reading_mm < MIN_READING_MM:
+        # A tape has no reading at or before its zero. A face there means the
+        # line of numbers was misread, and a negative millimetre value is a
+        # wrong reading rather than a low-confidence one: measured on
+        # `20261124_140444`, where tesseract 5.4.0 extrapolated -175.2 mm at a
+        # clip standing beside the printed 30. "Always give the reading" is a
+        # promise about a reading that exists, not licence to report one that
+        # cannot.
+        return _refused(
+            "the clip sits at or before the tape's zero, so the printed numbers "
+            'were misread',
+            'reading',
+            clip=clip,
+            label=label,
+            numbers=numbers,
+        )
+    if reading_mm > MAX_READING_MM:
         caveats.append(
             'the reading is outside the range a tape measures, so the scale is '
             'probably misread'

@@ -85,9 +85,23 @@ MIN_SIGNAL = 0.45
 # How much of the blade's breadth a clip has to displace to count as a clip on
 # the breadth signal alone.
 MIN_BREADTH_DROP = 0.5
+# The clip grips the blade, so its body shows *outside* the blade's long edges,
+# where a printed mark or a tick never does. The outer band starts this share of
+# the blade's width from its centre line and is sampled out to this reach.
+OUTER_START_SHARE = 0.62
+OUTER_REACH_SHARE = 1.35
+
+# A clip is one object, so the signals that see it sit in the same place. A lone
+# signal is a mark, a shadow or a tick: printed numbers darken a white blade as
+# deeply as a clip does, and on the field photos they outscored it. A run has to
+# be seen by at least this many signals to be a clip at all, and the agreeing
+# signals are scored together.
+MIN_SIGNALS = 2
+AGREEMENT_BONUS = 0.18
+CLUSTER_GAP_SHARE = 0.2
 
 # The signals a run can be seen in, named in the order they are tried.
-SIGNALS = ('dark', 'bright', 'colour', 'breadth')
+SIGNALS = ('dark', 'bright', 'colour', 'breadth', 'overhang')
 
 
 def _level(gray: np.ndarray) -> float:
@@ -221,24 +235,52 @@ def _profile(gray: np.ndarray, saturation: np.ndarray, band: dict, length: float
     across = np.array(band['across'])
     width = band['width']
     columns = max(200, min(1600, int(round(length))))
-    rows = max(9, int(round(width * 1.1)))
     us = np.linspace(-length / 2.0, length / 2.0, columns)
-    vs = np.linspace(-0.55 * width, 0.55 * width, rows)
-    uu, vv = np.meshgrid(us, vs)
-    xs = centre[0] + uu * axis[0] + vv * across[0]
-    ys = centre[1] + uu * axis[1] + vv * across[1]
-    height, frame_width = gray.shape
-    ix = np.clip(np.rint(xs).astype(int), 0, frame_width - 1)
-    iy = np.clip(np.rint(ys).astype(int), 0, height - 1)
-    tone = gray[iy, ix]
-    colours = saturation[iy, ix]
-    blade = float(np.median(tone))
-    tolerance = max(8.0, 0.18 * float(np.percentile(tone, 95) - np.percentile(tone, 5)))
+
+    def sample(vs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        uu, vv = np.meshgrid(us, vs)
+        xs = centre[0] + uu * axis[0] + vv * across[0]
+        ys = centre[1] + uu * axis[1] + vv * across[1]
+        height, frame_width = gray.shape
+        ix = np.clip(np.rint(xs).astype(int), 0, frame_width - 1)
+        iy = np.clip(np.rint(ys).astype(int), 0, height - 1)
+        return gray[iy, ix], saturation[iy, ix]
+
+    # The blade's own band keeps the sampling it always had, so the signals that
+    # read the blade are unchanged; the ground beyond each edge is sampled
+    # separately, because it is a different thing and needs its own baseline.
+    inside_vs = np.linspace(
+        -0.55 * width, 0.55 * width, max(9, int(round(width * 1.1)))
+    )
+    tone, colours = sample(inside_vs)
+    # The blade's tone and its tolerance come from its own middle rows, which
+    # are blade by construction. The sampled window's edges can hold ground, and
+    # a tolerance widened by ground then counts a pale clip as blade — measured
+    # on the field set, where a white clip's body sat inside a 29-level tolerance
+    # and left no breadth drop at all.
+    core = np.abs(inside_vs) <= 0.4 * width
+    core_tone = tone[core] if core.any() else tone
+    blade = float(np.median(core_tone))
+    tolerance = max(6.0, 3.0 * float(np.median(np.abs(core_tone - blade))))
+    outer_rows = max(5, int(round(0.7 * width)))
+    top_tone, top_colours = sample(
+        np.linspace(-OUTER_REACH_SHARE * width, -OUTER_START_SHARE * width, outer_rows)
+    )
+    bottom_tone, bottom_colours = sample(
+        np.linspace(OUTER_START_SHARE * width, OUTER_REACH_SHARE * width, outer_rows)
+    )
     return {
         'us': us,
         'brightness': np.median(tone, axis=0),
         'saturation': colours.mean(axis=0),
         'breadth': (np.abs(tone - blade) < tolerance).sum(axis=0).astype(float),
+        # Percentiles, not the median: a clip overhangs a few millimetres of a
+        # 20 mm blade, so on a wide outer band it can be a fifth of the rows and
+        # the median would still be ground.
+        'outer_top': np.percentile(top_tone, 80, axis=0),
+        'outer_bottom': np.percentile(bottom_tone, 80, axis=0),
+        'outer_top_colour': np.percentile(top_colours, 80, axis=0),
+        'outer_bottom_colour': np.percentile(bottom_colours, 80, axis=0),
     }
 
 
@@ -284,11 +326,29 @@ def _departures(profile: dict) -> dict[str, np.ndarray]:
     base_breadth = _baseline(breadth)
     brightness_scale = _spread(brightness)
     saturation_scale = max(0.05, _spread(saturation))
+    # The ground beyond each long edge is its own baseline: a clip overhanging
+    # one side must not be averaged away by the untouched ground on the other.
+    # A cyan clip seen edge-on can leave only its rim outside the blade, so the
+    # overhang is read in colour as well as brightness: the crew's clips are
+    # cyan, and a cyan rim against soil is unmistakable where its brightness is
+    # the same as the ground's.
+    overhang = np.zeros_like(brightness)
+    for side in ('outer_top', 'outer_bottom'):
+        values = profile[side]
+        depart = np.abs(values - _baseline(values)) / _spread(values)
+        overhang = np.maximum(overhang, depart)
+    for side in ('outer_top_colour', 'outer_bottom_colour'):
+        values = profile[side]
+        base = _baseline(values)
+        scale = max(0.05, _spread(values))
+        depart = (values - base) / scale
+        overhang = np.maximum(overhang, depart)
     return {
         'dark': (base_brightness - brightness) / brightness_scale,
         'bright': (brightness - base_brightness) / brightness_scale,
         'colour': (saturation - base_saturation) / saturation_scale,
         'breadth': (base_breadth - breadth) / np.maximum(1.0, base_breadth),
+        'overhang': overhang,
     }
 
 
@@ -333,6 +393,53 @@ def _candidates(profile: dict, width: float) -> list[dict]:
     return found
 
 
+def _clusters(runs: list[dict], width: float) -> list[dict]:
+    """Runs that see the same object, grouped and scored together.
+
+    A clip is one object, so two signals are independent evidence of it only if
+    they sit in the same place. A run near another run's span is the same clip
+    seen another way; runs far apart are a mark and a shadow, and neither on its
+    own is the crew's clip. Groups with fewer than `MIN_SIGNALS` methods are
+    dropped, which is what keeps a printed number from being reported as one.
+    """
+    gap = max(2, int(round(CLUSTER_GAP_SHARE * width)))
+    groups: list[dict] = []
+    for run in runs:
+        target = None
+        for group in groups:
+            if run['method'] in group['methods']:
+                continue
+            if (
+                run['start'] <= group['stop'] + gap
+                and run['stop'] >= group['start'] - gap
+            ):
+                target = group
+                break
+        if target is None:
+            groups.append(
+                {
+                    'start': run['start'],
+                    'stop': run['stop'],
+                    'methods': {run['method']},
+                    'run': run,
+                    'runs': [run],
+                }
+            )
+            continue
+        target['start'] = min(target['start'], run['start'])
+        target['stop'] = max(target['stop'], run['stop'])
+        target['methods'].add(run['method'])
+        target['runs'].append(run)
+        if run['score'] > target['run']['score']:
+            target['run'] = run
+    for group in groups:
+        group['score'] = group['run']['score'] + AGREEMENT_BONUS * (
+            len(group['methods']) - 1
+        )
+    groups.sort(key=lambda group: group['score'], reverse=True)
+    return [group for group in groups if len(group['methods']) >= MIN_SIGNALS]
+
+
 def _grade(
     gray: np.ndarray, saturation: np.ndarray, mask: np.ndarray, band: dict
 ) -> tuple[dict, list[dict], float] | None:
@@ -370,6 +477,14 @@ def find_clip(
     # find its own band from the largest bright patch, and that patch was wrong
     # on the field set often enough that the clip was then looked for on a kerb.
     # One locator, used by both stages, is the point of phase 1.
+    #
+    # The clip is located by what it *displaces*: a clamp grips the blade, so it
+    # interrupts the blade's tone across its whole width and shows its body
+    # beyond the blade's long edges, where a printed number or a tick never does.
+    # Those two facts are separate signals (`breadth`, `overhang`) and a run has
+    # to be seen by at least two of them, because on the field photos a printed
+    # number darkens a white blade more deeply than the clip does and outscored
+    # it on the single `dark` signal.
     blade = band if band is not None else tape_band.find_band(rgb, work_edge=work_edge)
     if not blade.get('found'):
         return {
@@ -396,7 +511,14 @@ def find_clip(
         'width': float(blade['width_px']) / scale,
     }
     length = band['length']
-    runs = _candidates(_profile(gray, saturation, band, length), band['width'])
+    # A clip at the blade's end is still a clip: on `20261124_140444` the clamp
+    # holds the tape's start and only its rim falls inside the tracked blade, so
+    # a search that stopped at the blade's ends could never see it. The search
+    # runs a little past each end, while the reported band stays the blade's own.
+    margin = min(1.5 * band['width'], 0.12 * length)
+    runs = _candidates(
+        _profile(gray, saturation, band, length + 2.0 * margin), band['width']
+    )
     if not runs:
         return {
             'found': False,
@@ -405,13 +527,16 @@ def find_clip(
             'band': blade['band'],
         }
 
-    best = runs[0]
-    agreeing = [
-        run
-        for run in runs[1:]
-        if run['method'] != best['method']
-        and min(run['stop'], best['stop']) >= max(run['start'], best['start'])
-    ]
+    groups = _clusters(runs, band['width'])
+    if not groups:
+        return {
+            'found': False,
+            'reason': 'the blade was found but nothing interrupts it',
+            'stage': 'clip',
+            'band': blade['band'],
+        }
+    best = groups[0]['run']
+    agreeing = [run for run in groups[0]['runs'] if run is not best]
 
     def at(u: float) -> tuple[float, float]:
         return (

@@ -293,6 +293,17 @@ class ReaderTests(SimpleTestCase):
         self.assertFalse(result['low_confidence'])
         self.assertIsNone(result['confidence_note'])
 
+    def test_a_face_before_the_tape_zero_is_refused(self):
+        # 5.4.0 extrapolated -175.2 mm at a clip standing beside the printed 30
+        # on `20261124_140444`. A tape cannot read at or below its zero, so that
+        # is a misread line of numbers, not a reading to hand the crew.
+        clip = clip_result()
+        clip['faces'] = [[face[0] + 3000.0, face[1]] for face in clip['faces']]
+        result = tape_reader.read(ladder_photo(), clip=clip, ocr=ladder_ocr())
+        self.assertFalse(result['usable'])
+        self.assertEqual(result['stage'], 'reading')
+        self.assertIn('zero', result['reason'])
+
     def test_a_blank_frame_is_refused(self):
         blank = np.zeros((400, 400, 3), dtype=np.uint8)
         result = tape_reader.read(blank)
