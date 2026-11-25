@@ -169,21 +169,37 @@ python manage.py migrate --noinput
 
 Set the **health check path** to `/healthz`.
 
-### The two probes, and why they are separate
+### The probes, and why they are separate
 
 | Path | Purpose | Point what at it |
 |---|---|---|
 | `/healthz` | Liveness. Touches no external dependency. | **The platform's health check.** |
 | `/healthz/engine` | Dependency probe for the FastAPI engine. `200` healthy, `503` unreachable/unhealthy. | **Your monitor.** |
+| `/healthz/tape` | Dependency probe for the tape reader's OCR engine. `200` tesseract runs, `503` this host has no binary. | **After any host change.** |
 
 `/healthz/engine` exists because the engine runs on a host you have no log,
 metric or restart access to — the backend is the only vantage point you have on
 it.
 
-**Do not point the platform's health check at `/healthz/engine`.** A non-200
-there makes the platform tear down and restart the container, so an engine
-outage would be converted into a restart loop of a service that was still
-healthy enough to be useful.
+**Do not point the platform's health check at `/healthz/engine` or
+`/healthz/tape`.** A non-200 there makes the platform tear down and restart the
+container, so a dependency outage would be converted into a restart loop of a
+service that was still healthy enough to be useful.
+
+`/healthz/tape` exists because the tape reader's OCR comes from the `tesseract`
+binary, which the `Dockerfile` installs and `requirements.txt` cannot: the
+`pytesseract` wheel is only a wrapper. A host built as a plain Python service
+therefore answers every tape photo with "too few printed numbers were readable",
+and a deployment mistake is chased as a batch of bad photographs.
+
+```json
+{
+  "ok": false,
+  "engine": "tesseract",
+  "error": "TesseractNotFoundError",
+  "hint": "Install tesseract-ocr on this host, or deploy it from the Dockerfile, which already does."
+}
+```
 
 Sample response:
 

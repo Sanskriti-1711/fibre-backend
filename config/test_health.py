@@ -61,6 +61,51 @@ class LivenessProbeTests(SimpleTestCase):
         get.assert_not_called()
 
 
+class TapeProbeTests(SimpleTestCase):
+    """The OCR probe: a host without the binary must say so, and stay alive."""
+
+    def _probe(self, ready, detail):
+        with mock.patch(
+            'supervision.tape_digits.ocr_availability', return_value=(ready, detail)
+        ):
+            return self.client.get('/healthz/tape')
+
+    def test_a_host_with_tesseract_reports_its_version(self):
+        response = self._probe(True, '5.3.3')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(), {'ok': True, 'engine': 'tesseract', 'version': '5.3.3'}
+        )
+
+    def test_a_host_without_tesseract_is_a_503_that_names_it(self):
+        # Measured after a server switch: without the binary every blade is
+        # refused for "too few printed numbers", which blames the photograph.
+        response = self._probe(
+            False,
+            "TesseractNotFoundError: tesseract is not installed or it's not in "
+            'your PATH. See README file for more information.',
+        )
+
+        self.assertEqual(response.status_code, 503)
+        body = response.json()
+        self.assertFalse(body['ok'])
+        self.assertEqual(body['error'], 'TesseractNotFoundError')
+        # The raw exception is not echoed: this endpoint is unauthenticated and
+        # its text can carry the host's filesystem paths.
+        self.assertNotIn('README', response.content.decode())
+        self.assertIn('Dockerfile', body['hint'])
+
+    def test_liveness_still_answers_when_the_ocr_engine_is_missing(self):
+        with mock.patch(
+            'supervision.tape_digits.ocr_availability',
+            return_value=(False, 'TesseractNotFoundError: not installed'),
+        ):
+            response = self.client.get('/healthz')
+
+        self.assertEqual(response.status_code, 200)
+
+
 class EngineProbeTests(SimpleTestCase):
     def setUp(self):
         patcher = mock.patch.object(health, 'FTTH_ENGINE_URL', 'https://engine.example.test')

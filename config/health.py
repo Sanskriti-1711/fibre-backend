@@ -12,6 +12,11 @@ Two probes, two jobs. Keep them apart:
     engine is unreachable, times out, or reports itself unhealthy, so a
     monitor can alert on it.
 
+``/healthz/tape``
+    Dependency probe for the tape reader's OCR engine. Answers 503 when this
+    host cannot run tesseract, which is the difference between a blade the
+    reader refuses and one it could never have read.
+
 Do NOT point the platform's health check at ``/healthz/engine``. An engine
 outage would then look like a dead container and trigger a restart loop,
 turning a degraded dependency into an outage of the service that was still
@@ -45,6 +50,40 @@ ENGINE_PROBE_TIMEOUT = 15
 def healthz(request):
     """Liveness probe. Deliberately touches no external dependency."""
     return JsonResponse({'status': 'ok'})
+
+
+def tape_health(request):
+    """Report whether this host can run the tape reader's OCR engine.
+
+    ``200`` tesseract runs here, with its version.
+    ``503`` it does not, which is what a host built as a plain Python service
+    looks like: the ``pytesseract`` wrapper comes from ``requirements.txt`` but
+    the binary only comes from the ``Dockerfile``. Without this probe that host
+    answers every tape photo with "too few printed numbers were readable", and
+    a field problem that is really a deployment problem is chased as 30 bad
+    photographs (measured after a server switch).
+
+    Deliberately trimmed like the engine probe: this endpoint is
+    unauthenticated, so the exception's message and any path in it are not
+    returned, only the error's class name.
+    """
+    from supervision.tape_digits import ocr_availability
+
+    ready, detail = ocr_availability()
+    if ready:
+        return JsonResponse({'ok': True, 'engine': 'tesseract', 'version': detail})
+    return JsonResponse(
+        {
+            'ok': False,
+            'engine': 'tesseract',
+            'error': detail.split(':', 1)[0].strip(),
+            'hint': (
+                'Install tesseract-ocr on this host, or deploy it from the '
+                'Dockerfile, which already does.'
+            ),
+        },
+        status=503,
+    )
 
 
 def engine_health(request):

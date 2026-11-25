@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.urls import include, path, re_path
 
-from config.health import engine_health, healthz
+from config.health import engine_health, healthz, tape_health
 from config.media import serve_media
 
 urlpatterns = [
@@ -11,6 +11,10 @@ urlpatterns = [
     # Readiness — dependency probe for the pipeline engine. Point monitoring
     # here, never the platform's health check. See config/health.py.
     path('healthz/engine', engine_health),
+    # Readiness — dependency probe for the tape reader's OCR engine. A host
+    # without the tesseract binary refuses every blade, so say so here instead
+    # of letting it read as a bad photograph. See config/health.py.
+    path('healthz/tape', tape_health),
     path('api/users/', include('users.urls')),
     path('api/', include('projects.api.urls')),
     path('api/', include('supervision.urls')),
