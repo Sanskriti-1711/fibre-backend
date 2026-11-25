@@ -45,6 +45,8 @@ Env: none. Tesseract needs no key.
 
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 from PIL import Image
 
@@ -213,7 +215,33 @@ def _nearest_label(anchors: list[dict], position: float) -> dict:
     return min(anchors, key=lambda anchor: abs(anchor['x_px'] - position))
 
 
+# One reading at a time per process.
+#
+# Measured 2026-11-25: a single read of a 12 MP frame peaks at 251 MB of
+# working set -- the PIL decode, the band search's pyramids and the rectified
+# strip -- on an instance whose limit is 512 MB and which already holds Django
+# and its worker. Two reads in flight is what the platform killed at 14:02,
+# 15:29 and 15:31 (`server_failed: {"oomKilled": {"memoryLimit": "512Mi"}}`),
+# and because the kill lands mid-request the page sees a 502 rather than a
+# refusal. Reads queue here instead. The host has 0.1 CPU, so two reads never
+# finished sooner than one after another, and the health probe keeps its own
+# threads.
+_READ_LOCK = threading.Lock()
+
+
 def read(
+    rgb: np.ndarray, clip: dict | None = None, ocr=None
+) -> dict:
+    """The tape reading at the clip's reference face, or a refusal.
+
+    The public entry point, and one read per process at a time: see
+    ``_READ_LOCK`` for the measurement behind that.
+    """
+    with _READ_LOCK:
+        return _read(rgb, clip=clip, ocr=ocr)
+
+
+def _read(
     rgb: np.ndarray, clip: dict | None = None, ocr=None
 ) -> dict:
     """The tape reading at the clip's reference face, or a refusal.
@@ -365,6 +393,22 @@ def read(
     )
 
     numbers = tape_digits.read_labels(strip, lattice, ocr=ocr)
+    if (not numbers or not numbers.get('usable')) and ocr is None:
+        # Policy, changed with the crew 2026-11-25: the tape is recognised
+        # however its frame is held. The cells above are cut on the lattice, and
+        # on a portrait frame the straight warp bends the printed numbers until
+        # a cell holds half a glyph -- `82041bb5` read nothing from any cell
+        # while its strip plainly showed 46-53 and 120-130. Whole-strip word
+        # boxes read those numbers where the cells cannot, in either
+        # orientation, and the same checks (one line, consistent steps, a scale
+        # the tick pitch explains) still have to pass before it is a reading.
+        fallback = tape_digits.read_labels_from_words(strip, lattice)
+        if fallback and (
+            fallback.get('usable')
+            or len(fallback.get('anchors') or [])
+            > len((numbers or {}).get('anchors') or [])
+        ):
+            numbers = fallback
     if not numbers or not numbers.get('usable'):
         return _refused(
             (numbers or {}).get('reason') or 'the printed numbers did not set a scale',

@@ -296,8 +296,26 @@ CORS failures, because the host's error page carries no CORS header. The
 `Dockerfile` therefore pins the layout rather than accepting a default:
 
 ```
---workers 2 --worker-class gthread --threads 4 --preload --max-requests 800
+--workers 1 --worker-class gthread --threads 4 --preload --max-requests 800
 ```
+
+**The worker count is 1 because of memory, not concurrency.** A tape read of a
+12 MP frame peaks at **251 MB of working set** (measured with
+`tmp/mem_probe.py`, 2026-11-25: PIL decode, band pyramids and the rectified
+strip in one interpreter). Two such workers plus the preloaded Django master do
+not fit in 512 MB, and the platform's event log says so plainly — five
+`server_failed` events in one day, all of them OOM:
+
+```
+2026-11-25T15:31:44Z  {"evicted": false, "oomKilled": {"memoryLimit": "512Mi"}}
+2026-11-25T15:29:09Z  {"evicted": false, "oomKilled": {"memoryLimit": "512Mi"}}
+```
+
+Those kills land mid-request, which is why a long tape read returned `502`
+instead of a refusal. `tape_reader._READ_LOCK` serialises reads inside the
+single worker as well, so the 251 MB above is the process's peak rather than one
+of several. Threads stay at 4: they are what keeps the probe answered (see the
+next paragraph), and they cost no memory until used.
 
 **Threads are the substance, not extra workers.** `hashlib` releases the GIL for
 the duration of the PBKDF2 hash, so a thread in the same worker can answer the

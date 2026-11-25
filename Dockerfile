@@ -63,4 +63,4 @@ EXPOSE 8000
 # by gunicorn and surfaced as a 502 to the page, no matter what the call itself
 # allowed. The budget here must stay ABOVE the longest blocking call; raise it
 # with them or the mismatch comes back. 1300 = 1200 + a margin for the reply.
-CMD ["sh", "-c", "python manage.py migrate --noinput && exec gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 2 --worker-class gthread --threads 4 --preload --max-requests 800 --max-requests-jitter 100 --timeout 1300 --graceful-timeout 30 --access-logfile - --error-logfile -"]
+CMD ["sh", "-c", "python manage.py migrate --noinput && exec gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 1 --worker-class gthread --threads 4 --preload --max-requests 800 --max-requests-jitter 100 --timeout 1300 --graceful-timeout 30 --access-logfile - --error-logfile -"]

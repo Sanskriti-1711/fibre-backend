@@ -859,6 +859,180 @@ def read_labels(
     return refusal
 
 
+# Whole-strip OCR, for the photos the per-label cells cannot serve. On a
+# portrait frame the blade runs the frame's height and the straight warp bends
+# the printed numbers, so a cell cut on the lattice holds half a glyph or none
+# (`82041bb5`, 2026-11-25: every cell read empty while the strip itself showed
+# 46-53 and 120-130). One pass over the whole strip reads those numbers where
+# the cells do not.
+#
+# Sparse text, not a single block: the strip is mostly blank blade with a number
+# row across a fraction of its height. Measured on `20261124_140444`, `--psm 6`
+# found no numbers at all and `--psm 11` found the 1-5 run that sets a scale.
+WORD_OCR_CONFIG = '--oem 1 --psm 11 -c tessedit_char_whitelist=0123456789'
+
+# A word box tesseract is less than half sure of is blade texture, not a print.
+WORD_MIN_CONFIDENCE = 0.45
+
+# Printed divisions on these blades run from 1 to a few hundred. A larger
+# number is two labels fused into one word box.
+WORD_MAX_VALUE = 500
+
+# The same floor the cell reader uses (`MIN_ANCHORS`). Two numbers set a line,
+# and it is the tick-pitch check inside `_calibrate` that makes a two-number
+# line trustworthy rather than the count: on `IMG_20261125_171355` the whole
+# strip OCRs only 5 and 6, 158 px apart, and that pair gives 0.466 mm per tick
+# on a blade whose marks are 7.36 px apart -- a 0.5 mm-tick blade printing
+# centimetres, which is exactly what the pitch is there to confirm. Rows that
+# pass the count but not the pitch are refused by that check (7.35 mm per tick
+# on `20261124_141314`, 11.24 on `IMG_20261125_171322`).
+WORD_MIN_ANCHORS = 2
+
+# Text lines read per strip: the number row is rarely the only thing on the
+# blade, and a second line is a second opinion for the cost of no subprocess.
+MAX_WORD_LINES = 4
+
+# Words whose centres sit within this share of the median glyph height are on
+# one row. Wider and two printed rows merge; narrower and one row splits in two
+# at the first digit with a different height.
+WORD_ROW_SHARE = 0.6
+
+
+def _word_lines(page) -> list[list[dict]]:
+    """Numeric words on one strip, grouped into the rows they sit on.
+
+    The rows are found from the boxes' own y, not from tesseract's line ids.
+    Sparse text is what reads these strips, and it gives most words a line of
+    their own: on `20261124_140444` the block/line grouping split a 7-number and
+    an 11-number row into single-word "lines", so nothing ever reached the fit
+    and the fallback silently returned nothing at all.
+
+    The grouping matters because a blade prints more than one row of digits: on
+    the same strip there is a 28-30 row and, below it, the 1-9 run that steps
+    with the ticks. Fitting them together tilts the scale; fitting the rows
+    apart keeps the one whose steps the tick pitch can explain.
+    """
+    words = _word_boxes(page)
+    if not words:
+        return []
+    heights = sorted(word['bottom'] - word['top'] for word in words)
+    tolerance = max(8.0, heights[len(heights) // 2] * WORD_ROW_SHARE)
+    ordered = sorted(words, key=lambda word: word['centre_y'])
+    rows: list[list[dict]] = [[ordered[0]]]
+    for word in ordered[1:]:
+        if abs(word['centre_y'] - rows[-1][-1]['centre_y']) <= tolerance:
+            rows[-1].append(word)
+        else:
+            rows.append([word])
+    for row in rows:
+        row.sort(key=lambda word: word['x_px'])
+    return sorted(rows, key=len, reverse=True)[:MAX_WORD_LINES]
+
+
+def _word_boxes(page) -> list[dict]:
+    """Every digit tesseract is confident about on one strip, with its box."""
+    import pytesseract
+
+    data = pytesseract.image_to_data(
+        page, config=WORD_OCR_CONFIG, output_type=pytesseract.Output.DICT
+    )
+    words: list[dict] = []
+    for index, raw in enumerate(data.get('text') or []):
+        text = str(raw).strip()
+        if not text.isdigit():
+            continue
+        try:
+            confidence = float(data['conf'][index]) / 100.0
+        except (TypeError, ValueError):
+            continue
+        if confidence < WORD_MIN_CONFIDENCE:
+            continue
+        value = int(text)
+        if not 1 <= value <= WORD_MAX_VALUE:
+            continue
+        top = int(data['top'][index])
+        bottom = top + int(data['height'][index])
+        words.append(
+            {
+                'value': value,
+                'confidence': confidence,
+                'x_px': float(data['left'][index]) + float(data['width'][index]) / 2.0,
+                'top': top,
+                'bottom': bottom,
+                'centre_y': (top + bottom) / 2.0,
+            }
+        )
+    return words
+
+
+def read_labels_from_words(strip, lattice: dict | None, page_ocr=None) -> dict | None:
+    """Set the scale from whole-strip OCR word boxes, or say why it could not.
+
+    This is the fallback for a strip whose lattice-aligned cells read nothing.
+    It is deliberately weaker than ``read_labels``: a word box is a whole label
+    with no lattice position, so an anchor's x is the box's centre rather than
+    the mark it is printed over, and a box clipped at the strip's end moves its
+    centre. That is why everything ``_calibrate`` checks still applies -- one
+    line, consistent steps, and a scale the tick pitch can explain -- and why a
+    line that fails any of it is dropped rather than averaged in.
+
+    Both orientations are read, because the warp's direction is arbitrary: the
+    strip of a portrait frame comes out of ``_rectify`` running either way, and
+    tesseract reads upright digits only. Anchors from a flipped page are mapped
+    back onto the strip's own x, so everything downstream is unchanged.
+
+    Returns None when there is no lattice pitch to check a scale against, which
+    is not a refusal: the caller still has the cell reader's answer to report.
+    """
+    if strip is None:
+        return None
+    pitch_px = float((lattice or {}).get('pitch') or 0.0)
+    if not np.isfinite(pitch_px) or pitch_px < 2.0:
+        return None
+    width, height = strip.size
+    refusal = None
+    for flip in (False, True):
+        page = strip if not flip else strip.rotate(180, expand=True)
+        try:
+            lines = page_ocr(page) if page_ocr is not None else _word_lines(page)
+        except Exception:  # noqa: BLE001 - OCR failing is one answer: no line
+            continue
+        for words in lines:
+            if len(words) < WORD_MIN_ANCHORS:
+                continue
+            anchors = []
+            for word in words:
+                x_px = width - word['x_px'] if flip else word['x_px']
+                anchors.append(
+                    {
+                        'value': word['value'],
+                        'x_px': x_px,
+                        'text': str(word['value']),
+                        'confidence': word['confidence'],
+                    }
+                )
+            anchors.sort(key=lambda anchor: anchor['x_px'])
+            top = min(height - word['bottom'] for word in words) if flip else min(
+                word['top'] for word in words
+            )
+            bottom = max(height - word['top'] for word in words) if flip else max(
+                word['bottom'] for word in words
+            )
+            trimmed = _trim_outliers(anchors, pitch_px)
+            if (
+                len(trimmed) < max(WORD_MIN_ANCHORS, MIN_ANCHORS)
+                or len(trimmed) < len(anchors) * MIN_AGREEING_SHARE
+            ):
+                current = _refused('the numbers on the blade disagree about their spacing', anchors)
+            else:
+                current = _calibrate(trimmed, pitch_px, (top, bottom, False), width)
+                if current.get('usable'):
+                    return current
+            if refusal is None or len(current['anchors']) > len(refusal['anchors']):
+                refusal = current
+    return refusal
+
+
 def _no_span(reason: str) -> dict:
     """A span that could not be measured, with the reason it failed."""
     return {
