@@ -47,6 +47,11 @@ from supervision.tape_ticks import MIN_INK_OFFSET, MIN_LADDER_SCORE, MIN_LADDER_
 # every label is a subprocess on the free host.
 MAX_CELLS = 14
 
+# Cells OCR'd per read across every printed line tried. A second line is a
+# second opinion, and trying each row of each edge band unbounded took the field
+# read from 4.2 s to 8.5 s on the free host; two lines' worth is the budget.
+MAX_OCR_CELLS = 2 * MAX_CELLS
+
 # Cells are upscaled to this height before OCR. A printed digit on a rectified
 # strip is often 12-20 px tall, which tesseract reads poorly without help.
 CELL_UPSCALE_HEIGHT = 56
@@ -782,8 +787,15 @@ def read_labels(
     # row and its divisions: only one of them steps evenly along the blade.
     plans.sort(key=lambda plan: len(plan[1]), reverse=True)
     refusal: dict | None = None
+    spent = 0
     for band, boxes, tight in plans:
-        anchors = _read_boxes(strip, pixels.shape[1], boxes, tight, read, stretch)
+        budget = MAX_OCR_CELLS - spent
+        if budget < MIN_ANCHORS:
+            break
+        spent += min(budget, len(boxes))
+        anchors = _read_boxes(
+            strip, pixels.shape[1], boxes[:budget], tight, read, stretch
+        )
         if len(anchors) < MIN_ANCHORS:
             current = _refused(
                 'too few printed numbers were readable to set a scale', anchors
