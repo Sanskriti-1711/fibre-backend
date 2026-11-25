@@ -219,6 +219,29 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
             'readings': cm_readings(120, 130, 140, 150, 160, 170),
         }
 
+    def clip(self, millimetres=380.0, low=False, stage=None, reason=None):
+        """What ``tape_reader`` answers for this photo, as the endpoint sees it.
+
+        The capture path takes its number from this reader since 2026-11-25, so
+        the endpoint tests stand in for it here instead of for the old span
+        reader.
+        """
+        usable = stage is None
+        return {
+            'usable': usable,
+            'reason': reason,
+            'stage': stage,
+            'reading_mm': millimetres if usable else None,
+            'unit': 'cm',
+            'reference_face': [820.0, 272.0] if usable else None,
+            'label': {'value': 39, 'text': '39', 'x_px': 719.5} if usable else None,
+            'divisions_to_face': 1.0 if usable else None,
+            'confidence': ('low' if low else 'high') if usable else None,
+            'low_confidence': bool(low),
+            'confidence_note': 'the marks on this blade are too faint' if low else None,
+            'clip': {'blade_confirmed': True, 'tape_angle_deg': 12.0},
+        }
+
     def test_a_tape_photo_fills_the_depth_field_as_an_editable_draft(self):
         # The app fills the field from the response, but the reading is also
         # kept in field_measurements so reopening the span still shows it --
@@ -230,7 +253,7 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
         self.feature.save(update_fields=['field_schema', 'field_measurements'])
 
         with mock.patch('supervision.tape_measure.ocr_available', return_value=True), mock.patch(
-            'supervision.tape_measure.read_tape', return_value=self.read()
+            'supervision.views.tape_reader.read_bytes', return_value=self.clip(380.0)
         ):
             response = self.post(
                 photo_id=str(self.photo.id), element_type='trench', dimension='depth'
@@ -239,7 +262,7 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
         self.assertEqual(response.status_code, 200, response.content[:300])
         body = response.json()
         self.assertEqual(body['measurement']['key'], 'actual_depth_mm')
-        self.assertEqual(body['measurement']['value'], 500)
+        self.assertEqual(body['measurement']['value'], 380)
         self.assertEqual(body['photo_id'], str(self.photo.id))
         self.assertIn('tape reads', body['notes'].lower())
 
@@ -248,7 +271,7 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
             self.feature.field_measurements,
             {
                 'surface_type': 'Asphalt',
-                'DEPTH_MM': {'value': 500, 'unit': 'mm'},
+                'DEPTH_MM': {'value': 380, 'unit': 'mm'},
             },
         )
 
@@ -256,7 +279,7 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
         # The panel on the evidence is what the app and the review page show, so
         # a read has to refresh it -- the upload-time copy predates the reading.
         with mock.patch('supervision.tape_measure.ocr_available', return_value=True), mock.patch(
-            'supervision.tape_measure.read_tape', return_value=self.read()
+            'supervision.views.tape_reader.read_bytes', return_value=self.clip(380.0)
         ), mock.patch('supervision.tape_framing.check_photo', return_value=None):
             response = self.post(
                 photo_id=str(self.photo.id), element_type='trench', dimension='depth'
@@ -282,7 +305,7 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
         }
 
         with mock.patch('supervision.tape_measure.ocr_available', return_value=True), mock.patch(
-            'supervision.tape_measure.read_tape', return_value=self.read()
+            'supervision.views.tape_reader.read_bytes', return_value=self.clip(380.0)
         ), mock.patch(
             'supervision.views.tape_framing.check_photo', return_value=framing_miss
         ):
@@ -292,13 +315,16 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
 
         self.assertEqual(response.status_code, 200, response.content[:300])
         body = response.json()
-        self.assertEqual(body['measurement']['value'], 500)
+        self.assertEqual(body['measurement']['value'], 380)
         self.assertTrue(body['framing']['ok'])
         self.assertEqual(body['framing']['caveat'], framing_miss['message'])
 
     def test_a_tape_that_cannot_be_read_returns_no_measurement(self):
         with mock.patch('supervision.tape_measure.ocr_available', return_value=True), mock.patch(
-            'supervision.tape_measure.read_tape', return_value=None
+            'supervision.views.tape_reader.read_bytes',
+            return_value=self.clip(
+                stage='numbers', reason='too few printed numbers were readable to set a scale'
+            ),
         ):
             response = self.post(
                 photo_id=str(self.photo.id), element_type='trench', dimension='depth'
@@ -310,9 +336,9 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
         self.assertTrue(response.json()['notes'])
 
     def test_the_endpoint_returns_the_clip_reading_at_its_reference_face(self):
-        # The clip decides which millimetre is meant; the span read above is a
-        # different number (the distance between two printed labels), so the
-        # clip reading travels beside it and never becomes the form value.
+        # Reversed deliberately 2026-11-25: the clip reading is now the form
+        # value. Before, it travelled beside a span taken between printed
+        # labels, and that span is the one that read 22 cm for a 200 mm tape.
         clip = {
             'usable': True,
             'reason': None,
@@ -328,8 +354,6 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
         with mock.patch(
             'supervision.tape_measure.ocr_available', return_value=True
         ), mock.patch(
-            'supervision.tape_measure.read_tape', return_value=self.read()
-        ), mock.patch(
             'supervision.views.tape_reader.read_bytes', return_value=clip
         ):
             response = self.post(
@@ -343,8 +367,10 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
         self.assertEqual(body['clip']['reference_face'], [820.0, 272.0])
         self.assertTrue(body['clip']['blade_confirmed'])
         self.assertIn('380 mm', body['notes'])
-        # The span reading is untouched by the clip reading.
-        self.assertEqual(body['measurement']['value'], 500)
+        # One reader, one number: the measurement is the clip's own reading.
+        self.assertEqual(body['measurement']['value'], 380)
+        self.assertEqual(body['readings'][0]['value'], 380.0)
+        self.assertEqual(body['readings'][0]['unit'], 'mm')
 
     def test_an_unconfirmed_blade_comes_back_as_a_refusal_not_a_reading(self):
         refusal = {
@@ -445,71 +471,54 @@ class FeatureTapeMeasurementEndpointTests(LocalEvidenceMixin, TestCase):
 
         self.assertIn(response.status_code, (401, 403))
 
-    def test_the_cloud_engine_answers_when_the_local_one_comes_up_short(self):
-        cloud = {
-            'engine': 'google-vision',
-            'unit': 'cm',
-            'agreement': 1,
-            'bounds': None,
-            'readings': cm_readings(10, 30),
-        }
-
-        with mock.patch(
-            'supervision.tape_measure.ocr_available', return_value=True
-        ), mock.patch('supervision.tape_measure.read_tape', return_value=None), mock.patch(
-            'supervision.tape_cloud.configured', return_value=True
-        ), mock.patch('supervision.tape_cloud.read_tape', return_value=cloud):
-            response = self.post(
-                photo_id=str(self.photo.id), element_type='trench', dimension='depth'
-            )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()['engine'], 'google-vision')
-        self.assertEqual(response.json()['measurement']['value'], 200)
-
-    def test_the_vision_model_answers_when_the_local_one_comes_up_short(self):
-        vision = {
-            'engine': 'vision-model',
-            'unit': 'cm',
-            'agreement': 1,
-            'bounds': None,
-            'readings': cm_readings(10, 30),
-        }
-
+    def test_the_paid_engines_do_not_override_the_clip_reader(self):
+        # Reversed deliberately 2026-11-25. These two engines used to answer when
+        # the span reader came up short, and their numbers went straight into the
+        # form with no blade or ladder check: on the field photos that path
+        # produced 22/23 cm for a 200 mm tape. The capture value now comes from
+        # `tape_reader` only, so neither engine is consulted for it.
         with mock.patch(
             'supervision.tape_measure.ocr_available', return_value=True
         ), mock.patch(
-            'supervision.tape_measure.read_tape', return_value=None
+            'supervision.views.tape_reader.read_bytes',
+            return_value=self.clip(stage='numbers', reason='no scale'),
+        ), mock.patch(
+            'supervision.tape_cloud.configured', return_value=True
+        ), mock.patch(
+            'supervision.tape_cloud.read_tape', side_effect=AssertionError('cloud consulted')
         ), mock.patch(
             'supervision.tape_vision.configured', return_value=True
         ), mock.patch(
-            'supervision.tape_vision.read_tape', return_value=vision
-        ), mock.patch('supervision.tape_cloud.configured', return_value=False):
+            'supervision.tape_vision.read_tape', side_effect=AssertionError('vision consulted')
+        ):
             response = self.post(
                 photo_id=str(self.photo.id), element_type='trench', dimension='depth'
             )
 
         self.assertEqual(response.status_code, 200, response.content[:300])
-        self.assertEqual(response.json()['engine'], 'vision-model')
-        self.assertEqual(response.json()['measurement']['value'], 200)
+        self.assertIsNone(response.json()['measurement'])
+        self.assertEqual(response.json()['engine'], 'tape_reader')
 
-    def test_a_glare_blown_photo_says_what_to_change(self):
-        def unreadable(photo, diagnostics=None, **_kwargs):
-            if diagnostics is not None:
-                diagnostics.update({'glare': 0.4, 'sharpness': 80.0})
-            return None
-
+    def test_a_photo_the_reader_cannot_read_says_where_it_stopped(self):
+        # Reversed deliberately 2026-11-25. This used to read the retake reasons
+        # out of the span reader's diagnostics ("the photo shows glare"); that
+        # reader is off this path, so the refusal names the reader's own stage
+        # and reason instead of a quality measure nobody computed.
         with mock.patch(
             'supervision.tape_measure.ocr_available', return_value=True
         ), mock.patch(
-            'supervision.tape_measure.read_tape', side_effect=unreadable
+            'supervision.views.tape_reader.read_bytes',
+            return_value=self.clip(
+                stage='numbers', reason='too few printed numbers were readable to set a scale'
+            ),
         ), mock.patch('supervision.tape_cloud.configured', return_value=False):
             response = self.post(
                 photo_id=str(self.photo.id), element_type='trench', dimension='depth'
             )
 
-        self.assertIsNone(response.json()['measurement'])
-        self.assertIn('glare', response.json()['notes'].lower())
+        body = response.json()
+        self.assertIsNone(body['measurement'])
+        self.assertIn('too few printed numbers', body['notes'])
 
 
 class GluedNumberSplitTests(SimpleTestCase):

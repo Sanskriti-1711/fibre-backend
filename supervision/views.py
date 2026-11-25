@@ -88,6 +88,26 @@ def _clip_summary(result: dict) -> dict:
     return summary
 
 
+def _clip_readings(clip: dict) -> list[dict]:
+    """The clip reading as the one mark on the blade that it is.
+
+    A clip reading is a point, not a span between two printed numbers, so this
+    is a single entry and it is in millimetres whatever unit the blade prints.
+    It exists so the response and the stamped panel can say what number the span
+    was taken from, and where.
+    """
+    if not clip.get('usable') or clip.get('reading_mm') is None:
+        return []
+    return [
+        {
+            'value': round(float(clip['reading_mm']), 1),
+            'unit': 'mm',
+            'x': 1.0,
+            'confidence': 0.5 if clip.get('low_confidence') else 0.9,
+        }
+    ]
+
+
 def _can_edit_feature_photos(request, feature) -> bool:
     """The engineer assigned to this feature's scope, or a planner/admin.
 
@@ -598,17 +618,17 @@ class FeatureTapeMeasurementView(APIView):
             if dimension_spec
             else 'measurement',
         )
-        read = tape_measure.read_tape(photo, diagnostics)
-        if read is None and tape_vision.configured():
-            # The model reads blades tesseract cannot, but it is a paid call per
-            # photo: only after the free engine came up short.
-            read = tape_vision.read_tape(photo)
-        if read is None and tape_cloud.configured():
-            # Only after the free local engine comes up short: that is what keeps
-            # a few hundred photos a month inside Cloud Vision's free tier.
-            read = tape_cloud.read_tape(photo)
-        if read is None:
-            reasons = tape_measure.retake_reasons(diagnostics)
+        # Policy, changed with the crew 2026-11-25: the capture path takes its
+        # number from the same ``tape_reader`` the live overlay shows, so what the
+        # shutter saves and what the viewfinder displayed cannot disagree. The
+        # span-between-printed-numbers reader and the paid model fallbacks are no
+        # longer consulted for this value: measured on the six field photos with
+        # a recorded span, that path returned confident numbers on three and all
+        # three were wrong (22/23 cm for a 200 mm span, 2/9 cm for 110 mm, 9/10 cm
+        # for 240 mm), with nothing in the response marking them. Both engines
+        # remain available to the other callers that ask for them directly.
+        measurement, note = tape_measure.measure_clip(element_type, dimension, clip)
+        if measurement is None:
             if framing and not framing['ok']:
                 # The framing verdict is the one instruction the engineer can act
                 # on with the camera in hand, so it replaces the generic note.
@@ -618,11 +638,7 @@ class FeatureTapeMeasurementView(APIView):
                     'No tape numbers could be read. Lay the blade along the dimension, '
                     'keep two printed numbers in the frame and avoid glare.'
                 )
-            if reasons:
-                # 'Nothing could be read' gives the engineer nothing to change;
-                # naming the glare or the focus does.
-                note = f'{note} The photo shows {" and ".join(reasons)}.'
-            if not clip['usable'] and clip.get('reason'):
+            if clip.get('reason'):
                 # A second, independent diagnosis of the same photo: the blade
                 # may be there and the numbers missing, or the clip missing with
                 # the ladder fine. The app can show it next to the reshoot hint.
@@ -631,43 +647,23 @@ class FeatureTapeMeasurementView(APIView):
                 {
                     'measurement': None,
                     'readings': [],
-                    'unit': 'cm',
+                    'unit': 'mm',
                     'notes': note,
                     'clip': clip,
                     'photo_id': str(photo.id),
-                    'engine': 'tesseract',
+                    'engine': 'tape_reader',
                     'span': diagnostics.get('span'),
                     'framing': framing,
                     'diagnostics': diagnostics,
                 }
             )
 
-        measurement, note = tape_measure.measure(
-            element_type, dimension, read['readings'], read['unit']
-        )
-        bounds = read.get('bounds')
-        if bounds and bounds.get('clipped'):
-            # The numbers past the edge are the far side of the trench or duct,
-            # not part of what was asked for: say so rather than silently
-            # shortening the tape.
-            note = (
-                f"{note} Stopped at the {element_type} edge visible in the photo "
-                f"({bounds['clipped']} number(s) past it ignored)."
-            )
-        if int(read.get('agreement') or 1) >= 2:
-            note = (
-                f"{note} Confirmed by {int(read['agreement'])} independent reads of "
-                'the blade.'
-            )
-        # The rectified blade gives the object's two edges in millimetres on the
-        # same scale as the printed numbers, which is an independent check on
-        # the reading rather than another guess at it.
-        span = diagnostics.get('span')
-        if span and span.get('usable'):
-            note = (
-                f"{note} From the blade's edges: {span['span_mm']:.0f} mm "
-                'wall to wall.'
-            )
+        # One point on the blade, in millimetres: a clip reading is not a span
+        # between two printed numbers, so `bounds` and `span` have no meaning on
+        # this path and are reported empty rather than left over from another
+        # reader's diagnostics.
+        readings = _clip_readings(clip)
+        span = None
         if framing and not framing['ok']:
             # The framing pass is a heuristic on the picture; the read is
             # evidence from the blade itself. When numbers were actually read, a
@@ -683,14 +679,8 @@ class FeatureTapeMeasurementView(APIView):
                 'verdict': 'readable',
                 'caveat': framing.get('message'),
             }
-        if clip['usable']:
-            # Named as a position on the blade, not as the span: the clip says
-            # which millimetre is meant, while the span above is the distance
-            # between two printed numbers. Different numbers, both real.
-            note = (
-                f"{note} The clip's reference face sits at {clip['reading_mm']:.0f} mm "
-                'on the blade.'
-            )
+        # The clip's own note is already in `note` above: `measure_clip` writes
+        # the face the number was taken at, so there is no second sentence here.
         # Keep the reading as an editable draft in the form's own storage: the
         # app fills the field from the response, but a dropped response or a
         # reopened span must still show what the blade said. Merge the one key
@@ -715,20 +705,20 @@ class FeatureTapeMeasurementView(APIView):
                 photo,
                 {
                     'measurement': measurement,
-                    'readings': read['readings'],
-                    'unit': read['unit'],
+                    'readings': readings,
+                    'unit': 'mm',
                 },
             )
         return Response(
             {
                 'measurement': measurement,
-                'readings': read['readings'],
-                'unit': read['unit'],
+                'readings': readings,
+                'unit': 'mm',
                 'notes': note,
                 'clip': clip,
                 'photo_id': str(photo.id),
-                'engine': read['engine'],
-                'bounds': bounds,
+                'engine': 'tape_reader',
+                'bounds': None,
                 'span': span,
                 'framing': framing,
                 'diagnostics': diagnostics,

@@ -1137,6 +1137,63 @@ def read_tape(photo, diagnostics: dict | None = None) -> dict | None:
     return read_tape_bytes(data, diagnostics)
 
 
+def measure_clip(
+    element_type: str, dimension: str, reading: dict | None
+) -> tuple[dict | None, str]:
+    """(proposed reading, note) from the clip reader's reference-face reading.
+
+    The capture path uses this one. ``measure`` above takes the distance between
+    the outermost printed numbers, which is a different number from the one the
+    clip marks — and on the six field photos with a recorded span it produced a
+    confident value on three, all three wrong. The viewfinder already shows the
+    clip reader's answer, so the saved draft now comes from that same answer and
+    a capture can no longer disagree with the overlay.
+
+    A low-confidence reading is still a reading: it is returned, with a
+    confidence of 0.5 and the reader's own caveat in the note.
+    """
+    spec = dimension_spec(element_type, dimension)
+    if spec is None:
+        return None, 'That dimension does not belong to this element.'
+    if not reading or not reading.get('usable') or reading.get('reading_mm') is None:
+        return None, (reading or {}).get('reason') or 'the tape could not be read'
+
+    millimetres = float(reading['reading_mm'])
+    value = round(millimetres / 1000.0, 2) if spec['unit'] == 'm' else round(millimetres)
+    low = bool(reading.get('low_confidence'))
+    label = (reading.get('label') or {}).get('value')
+
+    place = "at the clip's reference face"
+    if label is not None and reading.get('divisions_to_face') is not None:
+        place = (
+            f"at the clip's reference face, {reading['divisions_to_face']:g} div "
+            f'past the printed {label}'
+        )
+    note = f'Tape reads {millimetres:g} mm {place}: {value} {spec["unit"]}. '
+    if low:
+        # The crew asked for the number even when the blade could not be fully
+        # confirmed; saying which check stayed weak is what keeps it usable.
+        note += f'Best effort — {reading.get("confidence_note")}. '
+    if not (spec['min_mm'] <= millimetres <= spec['max_mm']):
+        note += (
+            f'That is outside the {spec["min_mm"]:.0f}–{spec["max_mm"]:.0f} mm '
+            f'range for {spec["label"].lower()} — check the photo for a misread '
+            'digit, then correct it before saving.'
+        )
+    else:
+        note += 'Filled as a tape reading for you to confirm before saving.'
+    return (
+        {
+            'key': spec['key'],
+            'label': spec['label'],
+            'value': value,
+            'unit': spec['unit'],
+            'confidence': 0.5 if low else 0.9,
+        },
+        note,
+    )
+
+
 def measure(
     element_type: str, dimension: str, readings: list[dict], unit: str = 'cm'
 ) -> tuple[dict | None, str]:
