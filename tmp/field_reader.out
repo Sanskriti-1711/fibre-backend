@@ -1,0 +1,26 @@
+24 photos (9 phone, 15 whatsapp)
+[1/24] phone 20261124_140332.jpg.jpeg             3.4s usable=False stage=marks    mm=None confirmed=True the marks on the blade are not even enough to measure from
+[2/24] phone 20261124_140357_1.jpg.jpeg           2.9s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[3/24] phone 20261124_140444.jpg.jpeg             2.0s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[4/24] phone 20261124_140529.jpg.jpeg             3.5s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[5/24] phone 20261124_140554.jpg.jpeg             2.3s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[6/24] phone 20261124_140609.jpg.jpeg             3.2s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[7/24] phone 20261124_141141.jpg.jpeg             2.8s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[8/24] phone 20261124_141141_1.jpg.jpeg           2.3s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[9/24] phone 20261124_141314.jpg.jpeg             2.1s usable=False stage=marks    mm=None confirmed=True the marks on the blade are not even enough to measure from
+[10/24] whats WhatsApp Image 2026-11-24 at 08.38   1.7s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[11/24] whats WhatsApp Image 2026-11-24 at 08.38   1.9s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[12/24] whats WhatsApp Image 2026-11-24 at 08.38   1.6s usable=False stage=numbers  mm=None confirmed=True no printed numbers could be told apart from the marks
+[13/24] whats WhatsApp Image 2026-11-24 at 08.38   1.9s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[14/24] whats WhatsApp Image 2026-11-24 at 08.38   2.5s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[15/24] whats WhatsApp Image 2026-11-24 at 08.38   1.9s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[16/24] whats WhatsApp Image 2026-11-24 at 08.38   1.8s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[17/24] whats WhatsApp Image 2026-11-24 at 08.38   1.7s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[18/24] whats WhatsApp Image 2026-11-24 at 08.38   1.8s usable=False stage=numbers  mm=None confirmed=True too few printed numbers were readable to set a scale
+[19/24] whats WhatsApp Image 2026-11-24 at 08.38   1.6s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[20/24] whats WhatsApp Image 2026-11-24 at 08.38   1.8s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[21/24] whats WhatsApp Image 2026-11-24 at 08.38   1.7s usable=False stage=clip     mm=None confirmed=None the bright band could not be followed along its length
+[22/24] whats WhatsApp Image 2026-11-24 at 08.38   2.1s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+[23/24] whats WhatsApp Image 2026-11-24 at 08.38   1.7s usable=False stage=numbers  mm=None confirmed=True too few printed numbers were readable to set a scale
+[24/24] whats WhatsApp Image 2026-11-24 at 08.38   1.7s usable=False stage=blade    mm=None confirmed=False the blade was not confirmed by a second working resolution, 
+counts: {"marks": 2, "blade": 18, "numbers": 3, "clip": 1}

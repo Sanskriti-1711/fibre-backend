@@ -92,6 +92,12 @@ MIN_BAND_HEIGHT = 8
 # full-width run.
 MAX_ROW_INK = 0.85
 
+# A row counts as printed when it carries this share of the band's densest row.
+# The blade's own hatching and a couple of specks leave ink in every row, so
+# "any ink at all" makes the whole band one printed run and hides the blank
+# blade between two lines of numbers.
+ROW_INK_FLOOR = 0.3
+
 # The share of anchors that must survive outlier trimming. If more than a
 # quarter of them are off the line, the numbers are not one printed ladder and
 # the scale they imply is not the blade's.
@@ -217,16 +223,19 @@ def _digit_bands(ink: np.ndarray, positions: list[int]) -> list[tuple[int, int, 
     return bands
 
 
-def _printed_rows(shares: np.ndarray) -> tuple[int, int] | None:
-    """The rows of a band that carry printing, as a half-open range.
+def _printed_row_runs(shares: np.ndarray) -> list[tuple[int, int]]:
+    """Every run of rows that carries printing, in the band's own rows.
 
-    A warped strip has its own border in the frame — a row or two of ink from
-    edge to edge — and a blurred blade edge can leave a nearly-empty row stuck to
-    it. Neither is printing, so the run carrying the most ink wins rather than
-    the widest span: a line of numbers is tall and dense, a blade edge is one
-    thin row.
+    Densest first, because a line of numbers is tall and dense while a blade
+    edge is one thin row. A row is printed when its ink clears `ROW_INK_FLOOR`
+    of the densest row: the hatching between two printed lines leaves a speck in
+    every row, and counting those would join the lines into one run.
     """
-    printed = (shares > 0.0) & (shares < MAX_ROW_INK)
+    shares = np.asarray(shares, dtype=float)
+    if shares.size == 0 or not np.isfinite(shares).all() or shares.max() <= 0.0:
+        return []
+    floor = float(shares.max()) * ROW_INK_FLOOR
+    printed = (shares >= floor) & (shares < MAX_ROW_INK)
     runs: list[tuple[int, int]] = []
     start = None
     for row, on in enumerate(printed):
@@ -236,11 +245,49 @@ def _printed_rows(shares: np.ndarray) -> tuple[int, int] | None:
             runs.append((start, row))
             start = None
     if start is not None:
-        runs.append((start, len(printed)))
+        runs.append((start, int(printed.size)))
+    runs.sort(key=lambda run: float(np.sum(shares[run[0] : run[1]])), reverse=True)
+    return runs
+
+
+def _printed_rows(shares: np.ndarray) -> tuple[int, int] | None:
+    """The rows of a band that carry printing, as a half-open range.
+
+    A warped strip has its own border in the frame — a row or two of ink from
+    edge to edge — and a blurred blade edge can leave a nearly-empty row stuck to
+    it. Neither is printing, so the run carrying the most ink wins rather than
+    the widest span.
+    """
+    runs = _printed_row_runs(shares)
     if not runs:
         return None
-    best = max(runs, key=lambda run: float(np.sum(shares[run[0] : run[1]])))
-    return int(best[0]), int(best[1])
+    return int(runs[0][0]), int(runs[0][1])
+
+
+def _printed_line_bands(
+    ink: np.ndarray, band: tuple[int, int]
+) -> list[tuple[int, int]]:
+    """Candidate single printed lines inside one band, densest first.
+
+    A survey tape prints more than one line: a repeating units row beside its
+    divisions. The two lines do not meet at the strip's middle, so `_digit_bands`
+    halving the strip puts one line's numbers across the cut — the cell holds the
+    lower half of a number, tesseract answers a stray single digit, and those
+    single-digit anchors are what disagreed about their spacing on the crew's
+    `20261124_141314`. Each run of printed rows is offered as its own band, with
+    the densest run repeated last so a blade whose printing is one tall line is
+    read exactly as before.
+    """
+    start, stop = band
+    if stop - start < MIN_BAND_HEIGHT:
+        return []
+    shares = ink[start:stop].mean(axis=1)
+    rows = [
+        (start + run[0], start + run[1])
+        for run in _printed_row_runs(shares)
+        if run[1] - run[0] >= MIN_BAND_HEIGHT
+    ]
+    return rows
 
 
 def _widest_ink_run(ink: np.ndarray, rows: tuple[int, int], gap: int) -> int:
@@ -275,9 +322,16 @@ def _widest_ink_run(ink: np.ndarray, rows: tuple[int, int], gap: int) -> int:
 
 
 def _label_boxes(
-    ink: np.ndarray, positions: list[int], pitch_px: float, band: tuple[int, int]
+    ink: np.ndarray,
+    positions: list[int],
+    pitch_px: float,
+    band: tuple[int, int],
+    rows: tuple[int, int] | None = None,
 ) -> tuple[list[dict], tuple[int, int]]:
     """Boxes around the printed numbers, and the rows they occupy.
+
+    ``rows`` is one printed line of a band, already chosen by `_row_bands`; the
+    band's own rows are used when it is not given.
 
     The numbers are found by their own ink instead of by a fixed slice of the
     ladder. A printed number spans several marks, so slicing per mark cuts it;
@@ -292,12 +346,17 @@ def _label_boxes(
     start, stop = band
     if stop - start < MIN_BAND_HEIGHT or not positions:
         return [], (start, stop)
-    shares = ink[start:stop].mean(axis=1)
-    printed = _printed_rows(shares)
-    if printed is None:
-        return [], (start, stop)
-    tight = (start + printed[0], start + printed[1])
+    if rows is None:
+        shares = ink[start:stop].mean(axis=1)
+        printed = _printed_rows(shares)
+        if printed is None:
+            return [], (start, stop)
+        tight = (start + printed[0], start + printed[1])
+    else:
+        tight = (max(start, rows[0]), min(stop, rows[1]))
     height = tight[1] - tight[0]
+    if height < MIN_BAND_HEIGHT:
+        return [], tight
     occupied = ink[tight[0] : tight[1]].any(axis=0)
 
     gap = max(2, int(round(height * LABEL_GAP_SHARE)))
@@ -614,6 +673,41 @@ def _background_profile(pixels: np.ndarray) -> np.ndarray:
     return np.median(windows, axis=1)[:width]
 
 
+def _read_boxes(
+    strip,
+    width: int,
+    boxes: list[dict],
+    tight: tuple[int, int],
+    read,
+    stretch: float,
+) -> list[dict]:
+    """OCR one printed line's cells into anchors, keeping only sure digits."""
+    start, stop = tight
+    anchors: list[dict] = []
+    for box in boxes:
+        pad = max(2, int(round((box['right'] - box['left']) * CELL_PAD_SHARE)))
+        left = max(0, box['left'] - pad)
+        right = min(width, box['right'] + pad)
+        if right - left < 4:
+            continue
+        cell = _cell_image(strip, (left, start, right, stop), stretch)
+        text, confidence = read(
+            cell, {'index': box['index'], 'x_px': int(round(box['centre']))}
+        )
+        if not text or not str(text).isdigit() or confidence < MIN_LABEL_CONFIDENCE:
+            continue
+        anchors.append(
+            {
+                'index': box['index'],
+                'x_px': round(float(box['centre']), 1),
+                'text': str(text),
+                'value': int(text),
+                'confidence': round(float(confidence), 2),
+            }
+        )
+    return anchors
+
+
 def read_labels(
     strip, lattice: dict | None, ocr=None, stretch: float = 1.0
 ) -> dict | None:
@@ -653,21 +747,24 @@ def read_labels(
     if pixels.ndim != 2 or pixels.shape[1] < 40:
         return None
     ink = pixels < (_background_profile(pixels)[None, :] - MIN_INK_OFFSET)
-    best: tuple[tuple[int, int, bool], list[dict], tuple[int, int]] | None = None
+    plans: list[tuple[tuple[int, int, bool], list[dict], tuple[int, int]]] = []
     widest = 0
     for candidate in _digit_bands(ink, positions):
-        found, tight = _label_boxes(ink, positions, pitch_px, (candidate[0], candidate[1]))
-        widest = max(
-            widest,
-            _widest_ink_run(
-                ink,
-                tight,
-                max(2, int(round((tight[1] - tight[0]) * LABEL_GAP_SHARE))),
-            ),
-        )
-        if found and (best is None or len(found) > len(best[1])):
-            best = (candidate, found, tight)
-    if best is None:
+        for rows in _printed_line_bands(ink, (candidate[0], candidate[1])):
+            found, tight = _label_boxes(
+                ink, positions, pitch_px, (candidate[0], candidate[1]), rows
+            )
+            widest = max(
+                widest,
+                _widest_ink_run(
+                    ink,
+                    tight,
+                    max(2, int(round((tight[1] - tight[0]) * LABEL_GAP_SHARE))),
+                ),
+            )
+            if found:
+                plans.append((candidate, found, tight))
+    if not plans:
         # Ink across nine tenths of the strip is the blade's ladder, not a line
         # of numbers: the band was never separated from the marks, so no box
         # could be formed. Saying so is the difference between "re-aim the
@@ -678,41 +775,40 @@ def read_labels(
                 'be told apart from them'
             )
         return _refused('no printed numbers could be told apart from the marks')
-    band, boxes, tight = best
-    start, stop = tight
-    _from_bottom = band[2]
 
     read = ocr or _default_ocr
-    anchors: list[dict] = []
-    for box in boxes:
-        pad = max(2, int(round((box['right'] - box['left']) * CELL_PAD_SHARE)))
-        left = max(0, box['left'] - pad)
-        right = min(pixels.shape[1], box['right'] + pad)
-        if right - left < 4:
-            continue
-        cell = _cell_image(strip, (left, start, right, stop), stretch)
-        text, confidence = read(
-            cell, {'index': box['index'], 'x_px': int(round(box['centre']))}
-        )
-        if not text or not str(text).isdigit() or confidence < MIN_LABEL_CONFIDENCE:
-            continue
-        anchors.append(
-            {
-                'index': box['index'],
-                'x_px': round(float(box['centre']), 1),
-                'text': str(text),
-                'value': int(text),
-                'confidence': round(float(confidence), 2),
-            }
-        )
-
-    if len(anchors) < MIN_ANCHORS:
-        return _refused('too few printed numbers were readable to set a scale', anchors)
-
-    trimmed = _trim_outliers(anchors, pitch_px)
-    if len(trimmed) < MIN_ANCHORS or len(trimmed) < len(anchors) * MIN_AGREEING_SHARE:
-        return _refused('the numbers on the blade disagree about their spacing', anchors)
-    return _calibrate(trimmed, pitch_px, band, pixels.shape[1])
+    # The row whose numbers earn a scale is the blade's line of numbers. Trying
+    # them in turn, densest first, is what lets one strip carry a repeating units
+    # row and its divisions: only one of them steps evenly along the blade.
+    plans.sort(key=lambda plan: len(plan[1]), reverse=True)
+    refusal: dict | None = None
+    for band, boxes, tight in plans:
+        anchors = _read_boxes(strip, pixels.shape[1], boxes, tight, read, stretch)
+        if len(anchors) < MIN_ANCHORS:
+            current = _refused(
+                'too few printed numbers were readable to set a scale', anchors
+            )
+        else:
+            trimmed = _trim_outliers(anchors, pitch_px)
+            if (
+                len(trimmed) < MIN_ANCHORS
+                or len(trimmed) < len(anchors) * MIN_AGREEING_SHARE
+            ):
+                current = _refused(
+                    'the numbers on the blade disagree about their spacing', anchors
+                )
+            else:
+                current = _calibrate(
+                    trimmed,
+                    pitch_px,
+                    (tight[0], tight[1], band[2]),
+                    pixels.shape[1],
+                )
+                if current.get('usable'):
+                    return current
+        if refusal is None or len(current['anchors']) > len(refusal['anchors']):
+            refusal = current
+    return refusal
 
 
 def _no_span(reason: str) -> dict:

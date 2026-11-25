@@ -41,6 +41,31 @@ def _strip(width=1200, height=90, pitch=12.0, every=10, upside_down=False, ink=T
     return Image.fromarray(canvas)
 
 
+def _two_row_strip(height=120, width=1200, pitch=12.0, every=10):
+    """A blade printing two lines of numbers, as a survey tape does.
+
+    The divisions sit above the units row, and the fine hatching of the blade
+    runs between them: the gap is not blank, so a row is printed or not by how
+    much ink it carries, not by whether it carries any.
+    """
+    canvas = np.full((height, width), 215, dtype=np.uint8)
+    x, index = 20.0, 0
+    while x < width - 4:
+        major = index % 10 == 0
+        length = 40 if major else 22
+        left = int(round(x))
+        canvas[height - length :, left : left + 2] = 40
+        if every and index % every == 0:
+            # Divisions: a wide, two-stroke label. Units: one narrower glyph.
+            canvas[height - 100 : height - 84, max(0, left - 8) : left + 8] = 35
+            canvas[height - 78 : height - 62, max(0, left - 4) : left + 4] = 35
+        x += pitch
+        index += 1
+    # The hatch between the rows: a speck in every row, the width of one glyph.
+    canvas[height - 84 : height - 78, 50:52] = 120
+    return Image.fromarray(canvas)
+
+
 class FakeOCR:
     """Returns the table's text per mark, and records what it was handed."""
 
@@ -237,6 +262,36 @@ class DigitLabelTests(SimpleTestCase):
         self.assertLessEqual(
             shaded_labels, {anchor['index'] for anchor in scale['anchors']}
         )
+
+    def test_two_printed_rows_are_read_one_row_at_a_time(self):
+        # A survey tape prints its divisions and a units row, and the hatching
+        # between them keeps a speck of ink in every row. The band used to be
+        # read whole, which stacked both lines into one cell: tesseract answered
+        # a stray single digit and the anchors disagreed (`20261124_141314`).
+        strip = _two_row_strip()
+        lattice = _lattice(strip)
+
+        scale = tape_digits.read_labels(
+            strip,
+            lattice,
+            ocr=FakeOCR({index: str(10 + index) for index in range(0, 120, 10)}),
+        )
+
+        self.assertTrue(scale['usable'], scale)
+        # One printed line, not the two stacked: the divisions are 16 rows tall.
+        rows = scale['band']['rows']
+        self.assertLessEqual(rows[1] - rows[0], 18, scale['band'])
+        self.assertAlmostEqual(scale['mm_per_px'], 10.0 / 12.0, delta=0.01)
+
+    def test_the_hatch_between_two_rows_does_not_join_them(self):
+        shares = np.array(
+            [0.0, 0.0, 0.5, 0.5, 0.5, 0.0, 0.0, 0.02, 0.4, 0.4, 0.4, 0.0]
+        )
+
+        runs = tape_digits._printed_row_runs(shares)
+
+        self.assertEqual(runs[0], (2, 5))
+        self.assertEqual(runs[1], (8, 11))
 
     def test_a_blade_without_printed_numbers_gets_no_regions(self):
         strip = _strip(pitch=12.0, every=10, ink=False)
