@@ -29,10 +29,14 @@ printed division from the nearest number it can actually read is refused,
 because counting past a whole division means the number it started from is a
 guess about which division the clip covers.
 
-A reading is refused outright on a blade ``tape_band`` did not confirm (two
-working resolutions disagreeing means the "blade" may be a kerb or a trench
-edge), and refused when the ladder or the numbers do not earn a scale. A
-confident wrong millimetre value in a measurement record is worse than no value.
+Policy, changed with the crew on 2026-11-25: the printed numbers are the final
+authority. A blade carrying numbers that step along it earns a millimetre
+reading even when the locator could not confirm the blade, the marks are too
+faint to check the scale, or the clip sits more than one division from the
+nearest number. Those come back with ``confidence='low'`` and a
+``confidence_note`` naming what is weak, so the field sees the number and knows
+what it is worth. A refusal is kept only for a photo with nothing to read: no
+blade, no clip, or numbers that set no scale at all.
 
 Env: none. Tesseract needs no key.
 """
@@ -80,6 +84,9 @@ def _refused(reason: str, stage: str, **extra) -> dict:
         'label': None,
         'divisions_to_face': None,
         'mm_per_px': None,
+        'confidence': None,
+        'low_confidence': False,
+        'confidence_note': None,
         **extra,
     }
 
@@ -249,10 +256,17 @@ def read(
         # prints 24+ marks at 0.70 periodicity is not a trench edge either. That
         # second opinion is what `20261124_141314` has: a genuine tape whose
         # locator only ever reports `confirmed=None`.
-        if not blade.get('confirmed') and not _ladder_evidence(lattice):
+        # Policy, changed with the crew 2026-11-25: an unconfirmed blade is not
+        # refused here any more. The printed numbers are the final authority, so
+        # the run goes on to the clip and the numbers, and a reading taken on a
+        # weak or unconfirmed blade is marked low-confidence instead. Refused
+        # here only when the strip has no ladder at all: a caption or a smooth
+        # bar repeats nothing, and sending the engineer to find a clip on one
+        # would be the wrong instruction.
+        if not blade.get('confirmed') and not _ladder_evidence(lattice) and problem == 'absent':
             return _refused(
-                'no tape found: the blade was not confirmed by a second working '
-                'resolution, so no reading is taken from it',
+                'no tape found: this blade carries no tick ladder, so there is '
+                'nothing printed to measure from',
                 'blade',
                 blade=blade,
             )
@@ -286,13 +300,13 @@ def read(
     # confident-looking band that is not the tape (`20261124_140332` returns a
     # band at -33 degrees where the tape runs at +12), and a millimetre value
     # measured on that would be a number taken off a trench edge.
-    if not clip.get('blade_confirmed'):
-        return _refused(
-            'the blade was not confirmed by a second working resolution, so no '
-            'reading is taken from it',
-            'blade',
-            clip=clip,
-        )
+    # Policy, changed with the crew 2026-11-25: an unconfirmed blade is no
+    # longer a refusal. The locator can return a confident-looking band that is
+    # not the tape (`20261124_140332` returns a band at -33 degrees where the
+    # tape runs at +12), so confirmation still matters -- but a blade whose
+    # printed numbers step along it is a tape whatever the two resolutions made
+    # of it. The reading goes out marked low-confidence instead of withheld.
+    blade_unconfirmed = not clip.get('blade_confirmed')
 
     band = clip.get('band') or {}
     if not band.get('centre') or not band.get('length_px'):
@@ -354,22 +368,37 @@ def read(
         return _refused('the printed numbers do not repeat at one division', 'numbers', clip=clip)
 
     counted = abs(reference_value - float(label['value'])) / division
+    caveats: list[str] = []
+    if blade_unconfirmed:
+        caveats.append(
+            'the blade was not confirmed by a second working resolution, so the '
+            'number rests on its printed numbers alone'
+        )
+    if problem is not None:
+        caveats.append(
+            'the marks on this blade are too faint or uneven to check the scale, '
+            'which is taken from the printed numbers'
+        )
     if counted > 1.0 + DIVISION_TOLERANCE:
-        return _refused(
+        # Policy, changed with the crew 2026-11-25: the reading is given even
+        # when the clip runs past the division the count started from, rather
+        # than refused. That count is a best effort, and the caveat says so.
+        caveats.append(
             'the clip is more than one printed division from the nearest readable '
-            'number, so the count to its face would be a guess',
-            'reading',
-            clip=clip,
-            label=label,
-            divisions_to_face=round(float(counted), 2),
+            'number, so the count to its face is a best effort'
         )
 
     unit_mm = 10.0 if numbers.get('unit') == 'cm' else 1.0
     reading_mm = reference_value * unit_mm
-    if not np.isfinite(reading_mm) or not (MIN_READING_MM <= reading_mm <= MAX_READING_MM):
+    if not np.isfinite(reading_mm):
         return _refused(
-            'the reading that face implies is outside what a tape measures', 'reading',
+            'the reading that face implies is not a number', 'reading',
             clip=clip, label=label,
+        )
+    if not (MIN_READING_MM <= reading_mm <= MAX_READING_MM):
+        caveats.append(
+            'the reading is outside the range a tape measures, so the scale is '
+            'probably misread'
         )
 
     return {
@@ -391,7 +420,10 @@ def read(
         'division_units': round(division, 3),
         'mm_per_px': numbers.get('mm_per_px'),
         'mm_per_tick': numbers.get('mm_per_tick'),
-        'blade_confirmed': True,
+        'blade_confirmed': not blade_unconfirmed,
+        'confidence': 'low' if caveats else 'high',
+        'low_confidence': bool(caveats),
+        'confidence_note': '; '.join(caveats) if caveats else None,
         'lattice_note': lattice_note,
         'tape_angle_deg': clip.get('tape_angle_deg'),
         'clip': clip,

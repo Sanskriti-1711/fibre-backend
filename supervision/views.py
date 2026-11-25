@@ -43,6 +43,12 @@ CLIP_FIELDS = (
     'reference_face',
     'label',
     'divisions_to_face',
+    # A reading the numbers earned while a check stayed weak goes out anyway,
+    # marked low-confidence with the reason: the crew asked for the number even
+    # when the blade could not be fully confirmed.
+    'confidence',
+    'low_confidence',
+    'confidence_note',
 )
 
 

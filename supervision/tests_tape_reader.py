@@ -215,7 +215,11 @@ class ReaderTests(SimpleTestCase):
 
         self.assertFalse(result['usable'])
         self.assertEqual(result['stage'], 'blade')
-        self.assertIn('second working resolution', result['reason'])
+        # Reversed deliberately 2026-11-25: with no ladder the reader no longer
+        # talks about resolution agreement, it says the thing the engineer can
+        # act on -- there is nothing printed here to measure from.
+        self.assertIn('no tape found', result['reason'])
+        self.assertIn('no tick ladder', result['reason'])
 
     def test_a_photo_without_a_clip_is_refused(self):
         # The detector's own answer for a blade with nothing interrupting it,
@@ -233,16 +237,31 @@ class ReaderTests(SimpleTestCase):
         self.assertFalse(result['usable'])
         self.assertEqual(result['stage'], 'clip')
 
-    def test_a_face_more_than_one_division_from_a_number_is_refused(self):
-        # Nothing readable within one division of the clip: counting past that
-        # would be guessing which division the clip covers.
+    def test_a_face_more_than_one_division_away_reads_at_low_confidence(self):
+        # Reversed deliberately 2026-11-25. This used to be a refusal on the
+        # `reading` stage: counting past a division was treated as a guess about
+        # which division the clip covers. The crew asked for the reading even
+        # when the span runs past what the blade can account for, so the number
+        # is returned and the caveat says the count is a best effort.
         result = tape_reader.read(
             ladder_photo(), clip=clip_result(), ocr=ladder_ocr(readable_to=500.0)
         )
-        self.assertFalse(result['usable'])
-        self.assertEqual(result['stage'], 'reading')
-        self.assertIn('division', result['reason'])
+        self.assertTrue(result['usable'], result.get('reason'))
+        self.assertIsNotNone(result['reading_mm'])
+        self.assertEqual(result['confidence'], 'low')
+        self.assertTrue(result['low_confidence'])
+        self.assertIn('division', result['confidence_note'])
         self.assertGreater(result['divisions_to_face'], 1.0)
+
+    def test_a_reading_that_passes_every_check_is_not_flagged(self):
+        # The caveat has to mean something: a reading on a confirmed blade with
+        # the clip inside one division carries no note at all.
+        result = tape_reader.read(
+            ladder_photo(), clip=clip_result(), ocr=ladder_ocr()
+        )
+        self.assertEqual(result['confidence'], 'high')
+        self.assertFalse(result['low_confidence'])
+        self.assertIsNone(result['confidence_note'])
 
     def test_a_blank_frame_is_refused(self):
         blank = np.zeros((400, 400, 3), dtype=np.uint8)
