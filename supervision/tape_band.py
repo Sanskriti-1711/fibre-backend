@@ -529,6 +529,60 @@ def _band_from_fit(track: dict, fit: dict, band: dict) -> dict:
     }
 
 
+def _rejected(reason: str, band: dict | None) -> dict:
+    """A band that failed a check, with whatever geometry it did establish.
+
+    The geometry is carried out because every check below is a *shape*
+    judgement, and the crew's rule (2026-11-25) is that the printed numbers are
+    the final authority. A blade the frame edge cut short is still a blade
+    carrying a ruler, and the only way to know whether it is printed is to
+    rectify what was tracked and read it. Nothing here calls the band a tape:
+    ``find_band`` still answers ``found: False`` and the reason is unchanged.
+    """
+    return {'ok': False, 'reason': reason, 'candidate': band}
+
+
+def _candidate_from_track(band: dict, track: dict) -> dict | None:
+    """Geometry for a track that never fitted a line: the stations it held.
+
+    Used for the "too short to be a tape" answer, where the walk followed the
+    band but over fewer than five of its widths. The span comes from the
+    stations themselves and the seed's centre/axis/across are kept, moved to
+    the middle of that span.
+    """
+    centres = track['centres']
+    widths = track['widths']
+    valid = np.isfinite(centres) & np.isfinite(widths) & track['frame']
+    if int(valid.sum()) < 8:
+        return None
+    us = track['us'][valid]
+    low, high = np.percentile(us, [2, 98])
+    length = float(high - low)
+    if length <= 0.0:
+        return None
+    width = float(np.median(widths[valid]))
+    if not np.isfinite(width) or width <= 0.0:
+        width = float(band['width'])
+    centre = np.asarray(band['centre'], dtype=float) + np.asarray(
+        band['axis'], dtype=float
+    ) * float(np.median(us))
+    return {**band, 'centre': centre, 'length': length, 'width': width}
+
+
+def _publish_band(band: dict, to_original: float) -> dict:
+    """A tracked band in the original photo's pixels, in `find_band`'s shape."""
+    return {
+        'centre': [
+            round(float(band['centre'][0]) * to_original, 1),
+            round(float(band['centre'][1]) * to_original, 1),
+        ],
+        'axis': [round(float(band['axis'][0]), 4), round(float(band['axis'][1]), 4)],
+        'across': [round(float(band['across'][0]), 4), round(float(band['across'][1]), 4)],
+        'width_px': round(float(band['width']) * to_original, 1),
+        'length_px': round(float(band['length']) * to_original, 1),
+    }
+
+
 def _grade(seed: dict, gray: np.ndarray) -> dict:
     """Track one seed to convergence and say whether it is a tape."""
     band = dict(seed)
@@ -545,20 +599,20 @@ def _grade(seed: dict, gray: np.ndarray) -> dict:
         track = _walk(gray, band)
         fit = _fit(track)
     if not fit['ok']:
-        return {'ok': False, 'reason': fit['reason']}
+        return _rejected(fit['reason'], _candidate_from_track(band, track))
     graded = _band_from_fit(track, fit, band)
     graded['periodicity'] = _periodicity(track, fit)
     if graded['coverage'] < MIN_COVERAGE:
-        return {'ok': False, 'reason': 'the bright band breaks up along its length '
-                                       '(held %.0f%% of its stations)'
-                                       % (100.0 * graded['coverage'])}
+        return _rejected('the bright band breaks up along its length '
+                         '(held %.0f%% of its stations)'
+                         % (100.0 * graded['coverage']), graded)
     if graded['support'] < MIN_SUPPORT:
-        return {'ok': False, 'reason': 'the bright band is too short to be a tape '
-                                       '(%.0f%% of the span looked at)'
-                                       % (100.0 * graded['support'])}
+        return _rejected('the bright band is too short to be a tape '
+                         '(%.0f%% of the span looked at)'
+                         % (100.0 * graded['support']), graded)
     if graded['width_spread'] > MAX_WIDTH_SPREAD:
-        return {'ok': False, 'reason': 'the bright band changes width along its '
-                                       'length (%.2f)' % graded['width_spread']}
+        return _rejected('the bright band changes width along its '
+                         'length (%.2f)' % graded['width_spread'], graded)
     # Wobble has to be judged against the pixels it is measured in: half a pixel
     # of tracking noise on a 12 px blade reads as a curve in blade-widths, and a
     # synthetic straight blade came back "curving" by 1.5 px that way.
@@ -566,17 +620,17 @@ def _grade(seed: dict, gray: np.ndarray) -> dict:
     # field set every refusal that was left was 3-7 px of drift — a bend, not a
     # lost track. Several pixels of drift is the tape; a frame's worth is not.
     if graded['bend'] > MAX_BEND and graded['bend'] * graded['width'] > 7.0:
-        return {'ok': False, 'reason': 'the bright band curves (%.2f of its width, '
-                                       '%.1f px)'
-                                       % (graded['bend'],
-                                          graded['bend'] * graded['width'])}
+        return _rejected('the bright band curves (%.2f of its width, '
+                         '%.1f px)'
+                         % (graded['bend'],
+                            graded['bend'] * graded['width']), graded)
     # A blade is long and thin, but a close-up of one is only a handful of times
     # longer than it is wide: the synthetic blade is 700 by 110, and the widening
     # measures it about 10% over, so a 5x gate refused the real blade and let a
     # 31 px margin of it win. Three and a half times still rejects the round
     # bright things — a pipe end, a bucket, a paved patch.
     if graded['length'] < 3.5 * graded['width']:
-        return {'ok': False, 'reason': 'the bright band is not long enough to be a tape'}
+        return _rejected('the bright band is not long enough to be a tape', graded)
     graded['ok'] = True
     # Among bands that all hold together, the tape is the most elongated one: it
     # crosses the frame while staying one blade wide, where a pipe or a trench
@@ -651,6 +705,7 @@ def _find_at(rgb: np.ndarray, work_edge: int) -> dict:
 
     graded: list[dict] = []
     refusals: list[str] = []
+    failed: list[dict] = []
     for seed in seeds:
         if seed['width'] < MIN_WIDTH_PX or seed['length'] < 20.0:
             continue
@@ -658,13 +713,23 @@ def _find_at(rgb: np.ndarray, work_edge: int) -> dict:
         if result.get('ok'):
             graded.append(result)
         else:
+            failed.append(result)
             refusals.append(result.get('reason') or 'a candidate band was rejected')
 
     if not graded:
+        # The rejected bands' geometry, longest first: a caller that reads the
+        # printed numbers needs something to rectify, and a shape rejection is
+        # not a statement that the blade is not printed (see `_rejected`).
+        best = max(
+            (item['candidate'] for item in failed if item.get('candidate')),
+            key=lambda band: float(band['length']),
+            default=None,
+        )
         return {
             'found': False,
             'reason': refusals[0] if refusals else 'no band survived the check',
             'seeds': len(seeds),
+            'candidate': _publish_band(best, to_original) if best is not None else None,
         }
 
     whole = [
@@ -791,10 +856,14 @@ def find_band(rgb: np.ndarray, work_edge: int = WORK_EDGE) -> dict:
             best = max([best] + agreeing, key=lambda result: result['width_px'])
         return best
     reasons = [result['reason'] for result in attempts if result.get('reason')]
+    candidates = [result['candidate'] for result in attempts if result.get('candidate')]
     return {
         'found': False,
         'reason': reasons[0] if reasons else 'no band was found',
         'attempts': reasons,
+        'candidate': max(
+            candidates, key=lambda band: float(band['length_px']), default=None
+        ),
     }
 
 

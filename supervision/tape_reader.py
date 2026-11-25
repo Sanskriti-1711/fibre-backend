@@ -9,7 +9,9 @@ tick pitch, and the clip only decides which point on that ladder is reported.
 Three stages feed it, each already refusing rather than guessing:
 
 * ``tape_band`` finds the blade and says whether a second working resolution
-  agreed about it (``confirmed``).
+  agreed about it (``confirmed``). When it refuses the blade on shape alone it
+  still hands back the geometry the walk established, so a blade the frame cut
+  short can be read rather than dismissed before OCR.
 * ``tape_clip`` finds the clip and returns its two faces.
 * ``tape_ticks`` fits the ladder, ``tape_digits`` turns printed numbers into
   millimetres per pixel.
@@ -167,8 +169,13 @@ def _rectify(rgb: np.ndarray, band: dict) -> tuple[Image.Image, float]:
     length = max(1.0, float(band['length_px']))
     width = max(1.0, float(band['width_px']))
 
-    scale = min(1.0, STRIP_MAX_WIDTH / length)
-    columns = max(64, int(round(length * scale)))
+    columns = max(120, int(round(length * min(1.0, STRIP_MAX_WIDTH / length))))
+    # The strip is measured in its own pixels, so the scale is its real
+    # resampling factor rather than the shrink alone: a blade the frame edge cut
+    # short is resampled *up* to the floor instead of refused for being short.
+    # The ladder needs a strip wide enough to fit in, which is a resolution
+    # answer, not a reading answer.
+    scale = columns / length
     rows = int(round(min(STRIP_MAX_HEIGHT, max(STRIP_MIN_HEIGHT, width))))
 
     us = np.linspace(-length / 2.0, length / 2.0, columns)
@@ -222,6 +229,7 @@ def read(
     strip = None
     scale = 1.0
     lattice = None
+    blade_partial = False
     if clip is None:
         # The tape is decided before the clip is looked for. A photo of a
         # caption, or of a length of metal, has no clip on it either, so "no
@@ -233,11 +241,32 @@ def read(
         # works at, and the clip is looked for on the same frame either way.
         blade = tape_band.find_band(rgb, work_edge=tape_clip.WORK_EDGE)
         if not blade.get('found'):
-            return _refused(
-                'no tape found: %s' % (blade.get('reason') or 'no blade was found'),
-                'blade',
-                blade=blade,
-            )
+            # Policy, changed with the crew 2026-11-25: the printed numbers are
+            # the final authority, so a blade the locator rejects on *shape* is
+            # still read. Span TR-000010 (2026-11-25, field photo) answered "the
+            # bright band is too short to be a tape" because the blade ran out
+            # of the top of the frame -- before OCR ran. The screen then said
+            # "no tape numbers could be read" about a photo whose numbers were
+            # never looked at. The geometry the walk did establish is rectified
+            # and read here; the numbers still have to set a scale, and the
+            # reading is marked low-confidence.
+            candidate = blade.get('candidate')
+            if not candidate:
+                return _refused(
+                    'no tape found: %s' % (blade.get('reason') or 'no blade was found'),
+                    'blade',
+                    blade=blade,
+                )
+            blade_partial = True
+            blade = {
+                'found': True,
+                'reason': None,
+                'confirmed': False,
+                'confirmed_by': None,
+                'rejected': blade.get('reason'),
+                **candidate,
+                'band': candidate,
+            }
         # A band the locator believes in is still not a tape until it carries a
         # ladder: a caption has letters where the marks should be, and a pipe has
         # nothing at all. This is checked before the clip so the answer arrives
@@ -369,7 +398,12 @@ def read(
 
     counted = abs(reference_value - float(label['value'])) / division
     caveats: list[str] = []
-    if blade_unconfirmed:
+    if blade_partial:
+        caveats.append(
+            'only part of the blade could be located in the frame, so the '
+            'reading is a best effort'
+        )
+    elif blade_unconfirmed:
         caveats.append(
             'the blade was not confirmed by a second working resolution, so the '
             'number rests on its printed numbers alone'
